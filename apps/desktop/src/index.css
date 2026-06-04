@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    background: #0f0f0f;
+    color: #e8e8e8;
+    font-family: "Inter", system-ui, sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #1a1a1a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
+  }
+}
+
+@layer components {
+  .btn-top {
+    @apply px-2.5 h-7 rounded text-xs font-medium bg-studio-active text-studio-text-dim hover:text-studio-text hover:bg-studio-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed border border-studio-border;
+  }
+  .btn-top-accent {
+    @apply bg-studio-accent-dim text-studio-accent hover:bg-studio-accent hover:text-white border-studio-accent;
+  }
+}
+
+@layer utilities {
+  .text-xxs {
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  .drag {
+    -webkit-app-region: drag;
+  }
+}

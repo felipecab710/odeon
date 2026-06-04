@@ -1,0 +1,18 @@
+{
+  "name": "odeon",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.0.0",
+  "workspaces": [
+    "apps/desktop",
+    "packages/shared"
+  ],
+  "scripts": {
+    "desktop": "pnpm --filter desktop dev",
+    "api": "cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000",
+    "dev": "pnpm api & pnpm desktop"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

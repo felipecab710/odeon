@@ -1,0 +1,33 @@
+[package]
+name = "odeon-desktop"
+version = "0.1.0"
+description = "Odeon — AI-native reference mixing workbench"
+authors = ["Odeon"]
+edition = "2021"
+
+[lib]
+name = "odeon_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "odeon-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri                   = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-shell      = "2"
+tauri-plugin-dialog     = "2"
+tauri-plugin-fs         = "2"
+serde                   = { version = "1", features = ["derive"] }
+serde_json              = "1"
+tokio                   = { version = "1", features = ["full"] }
+log                     = "0.4"
+
+[profile.release]
+opt-level   = 3
+lto         = true
+codegen-units = 1
+strip       = true
