@@ -9,13 +9,13 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .audio.analysis import analyze_track
+from .audio.analysis import analyze_track, quick_analyze
 from .audio.compare import generate_mix_moves
 from .db.repository import init_db, load_project, save_project
 from .models import (
@@ -89,7 +89,30 @@ def health():
 # ─────────────────────────────────────────────
 
 @app.post("/projects", response_model=OdeonProject)
-def create_project(name: str = "Untitled Project"):
+def create_project(name: str = "Untitled Project", folder_path: Optional[str] = None):
+    """
+    Create a new project.  If folder_path is given the project folder is placed
+    inside it; otherwise it defaults to ~/Music/Odeon Projects/.
+
+    Folder structure (mirrors Ardour):
+        {folder_path}/{name}/
+            {name}.odeon          ← JSON session file (human-readable)
+            {name}.odeon.bak      ← written on every subsequent save
+            audio/                ← uploaded source files
+            stems/                ← Demucs-separated stems
+            export/               ← rendered bounces
+            analysis/             ← per-track analysis JSON cache
+            peaks/                ← waveform peak files (future)
+    """
+    from pathlib import Path as _Path
+
+    base = _Path(folder_path) if folder_path else (_Path.home() / "Music" / "Odeon Projects")
+    project_dir = base / name
+
+    # Create every sub-directory up front
+    for sub in ("audio", "stems", "export", "analysis", "peaks"):
+        (project_dir / sub).mkdir(parents=True, exist_ok=True)
+
     now = _now()
     project = OdeonProject(
         id=_uid(),
@@ -98,14 +121,31 @@ def create_project(name: str = "Untitled Project"):
         updated_at=now,
         sample_rate=44100,
         status=ProjectStatus.empty,
+        folder_path=str(project_dir),
     )
     save_project(project)
+    _write_session_file(project)
     return project
+
+
+@app.get("/projects", response_model=List[OdeonProject])
+def list_projects_endpoint():
+    """Return all saved projects, newest first."""
+    from .db.repository import list_projects
+    projects = list_projects()
+    projects.sort(key=lambda p: p.updated_at, reverse=True)
+    return projects
 
 
 @app.get("/projects/{project_id}", response_model=OdeonProject)
 def get_project(project_id: str):
     return _get_or_404(project_id)
+
+
+@app.delete("/projects/{project_id}", status_code=204)
+def delete_project_endpoint(project_id: str):
+    from .db.repository import delete_project
+    delete_project(project_id)
 
 
 @app.get("/projects/{project_id}/tracks", response_model=List[OdeonTrack])
@@ -126,7 +166,7 @@ def get_mix_moves(project_id: str):
 async def upload_reference(project_id: str, file: UploadFile = File(...)):
     project = _get_or_404(project_id)
 
-    dest = UPLOADS_DIR / project_id
+    dest = Path(project.folder_path) / "audio" if project.folder_path else UPLOADS_DIR / project_id
     dest.mkdir(parents=True, exist_ok=True)
     file_path = dest / _safe_name(file.filename or "reference.wav")
 
@@ -142,58 +182,21 @@ async def upload_reference(project_id: str, file: UploadFile = File(...)):
         stem_type=StemType.full_mix,
         file_path=str(file_path),
         color="#4A90D9",
-        analysis_status=AnalysisStatus.analyzing,
+        analysis_status=AnalysisStatus.pending,
     )
     project.tracks.append(ref_track)
     project.reference_track_id = track_id
     project.status = ProjectStatus.reference_uploaded
     project.updated_at = _now()
-    save_project(project)
 
-    # Analyze reference full mix
+    # Fast waveform-only pass so the track renders immediately
     try:
-        analysis = analyze_track(str(file_path))
-        ref_track.analysis = analysis
-        ref_track.analysis_status = AnalysisStatus.complete
-        if analysis.tempo:
-            project.bpm = analysis.tempo
-        if analysis.sample_rate:
-            project.sample_rate = analysis.sample_rate
+        ref_track.analysis = quick_analyze(str(file_path))
     except Exception as exc:
-        logger.error("Analysis failed for reference: %s", exc)
-        ref_track.analysis_status = AnalysisStatus.failed
+        logger.warning("Quick-analyze failed for reference: %s", exc)
 
-    # Attempt stem separation
-    stem_out_dir = STEMS_DIR / project_id / "reference"
-    separator = get_separator()
-    if separator.is_available():
-        logger.info("Attempting stem separation with %s", separator.__class__.__name__)
-        sep_result = separator.separate(str(file_path), str(stem_out_dir))
-        if sep_result.success:
-            _STEM_COLORS = {
-                "drums": "#E84C3D",
-                "bass": "#F39C12",
-                "vocals": "#2ECC71",
-                "other": "#9B59B6",
-            }
-            for stem in sep_result.stems:
-                stem_track = OdeonTrack(
-                    id=_uid(),
-                    project_id=project_id,
-                    name=stem.name,
-                    role=TrackRole.reference_stem,
-                    stem_type=StemType(stem.stem_type),
-                    file_path=stem.file_path,
-                    color=_STEM_COLORS.get(stem.stem_type, "#888888"),
-                    analysis_status=AnalysisStatus.pending,
-                )
-                project.tracks.append(stem_track)
-            project.status = ProjectStatus.stems_separated
-    else:
-        logger.info("Stem separation unavailable: %s", separator.__class__.__name__)
-
-    project.updated_at = _now()
     save_project(project)
+    _write_session_file(project)
     return project
 
 
@@ -216,7 +219,7 @@ _USER_STEM_COLOR = {
 async def upload_user_stems(project_id: str, files: List[UploadFile] = File(...)):
     project = _get_or_404(project_id)
 
-    dest = UPLOADS_DIR / project_id / "user"
+    dest = Path(project.folder_path) / "audio" if project.folder_path else UPLOADS_DIR / project_id / "user"
     dest.mkdir(parents=True, exist_ok=True)
 
     for file in files:
@@ -233,20 +236,20 @@ async def upload_user_stems(project_id: str, files: List[UploadFile] = File(...)
             stem_type=stem_type,
             file_path=str(file_path),
             color=_USER_STEM_COLOR.get(stem_type.value, "#5D6D7E"),
-            analysis_status=AnalysisStatus.analyzing,
+            analysis_status=AnalysisStatus.pending,
         )
+        # Fast waveform-only pass
         try:
-            track.analysis = analyze_track(str(file_path))
-            track.analysis_status = AnalysisStatus.complete
+            track.analysis = quick_analyze(str(file_path))
         except Exception as exc:
-            logger.error("Analysis failed for user stem %s: %s", file.filename, exc)
-            track.analysis_status = AnalysisStatus.failed
+            logger.warning("Quick-analyze failed for stem %s: %s", file.filename, exc)
 
         project.tracks.append(track)
 
     project.status = ProjectStatus.user_stems_imported
     project.updated_at = _now()
     save_project(project)
+    _write_session_file(project)
     return project
 
 
@@ -271,6 +274,87 @@ def analyze_project(project_id: str):
     project.status = ProjectStatus.analyzed
     project.updated_at = _now()
     save_project(project)
+    return project
+
+
+# ─────────────────────────────────────────────
+#  Per-track analyze (full analysis + stems for reference)
+# ─────────────────────────────────────────────
+
+_STEM_COLORS = {
+    "drums": "#E84C3D",
+    "bass": "#F39C12",
+    "vocals": "#2ECC71",
+    "other": "#9B59B6",
+}
+
+
+@app.post("/projects/{project_id}/tracks/{track_id}/analyze", response_model=OdeonProject)
+def analyze_single_track(project_id: str, track_id: str):
+    """
+    Full analysis for one track.
+    For reference_full_mix tracks: also separates stems (Demucs) and
+    adds them to the project. Existing reference stems are replaced.
+    """
+    project = _get_or_404(project_id)
+    track = next((t for t in project.tracks if t.id == track_id), None)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"Track {track_id} not found in project {project_id}")
+
+    # Full analysis
+    track.analysis_status = AnalysisStatus.analyzing
+    try:
+        track.analysis = analyze_track(track.file_path)
+        track.analysis_status = AnalysisStatus.complete
+        if track.analysis.tempo and not project.bpm:
+            project.bpm = track.analysis.tempo
+        if track.analysis.sample_rate:
+            project.sample_rate = track.analysis.sample_rate
+    except Exception as exc:
+        logger.error("Full analysis failed for track %s: %s", track_id, exc)
+        track.analysis_status = AnalysisStatus.failed
+        project.updated_at = _now()
+        save_project(project)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Stem separation — only for reference full-mix tracks
+    if track.role == TrackRole.reference_full_mix:
+        stem_out_dir = (
+            Path(project.folder_path) / "stems"
+            if project.folder_path
+            else STEMS_DIR / project_id / "reference"
+        )
+        separator = get_separator()
+        if separator.is_available():
+            logger.info("Separating stems for reference track %s", track_id)
+            sep_result = separator.separate(track.file_path, str(stem_out_dir))
+            if sep_result.success:
+                # Remove any previous reference stems so we don't accumulate duplicates
+                project.tracks = [t for t in project.tracks if t.role != TrackRole.reference_stem]
+                for stem in sep_result.stems:
+                    stem_track = OdeonTrack(
+                        id=_uid(),
+                        project_id=project_id,
+                        name=stem.name,
+                        role=TrackRole.reference_stem,
+                        stem_type=StemType(stem.stem_type),
+                        file_path=stem.file_path,
+                        color=_STEM_COLORS.get(stem.stem_type, "#888888"),
+                        analysis_status=AnalysisStatus.pending,
+                    )
+                    # Quick waveform for each stem too
+                    try:
+                        stem_track.analysis = quick_analyze(stem.file_path)
+                    except Exception:
+                        pass
+                    project.tracks.append(stem_track)
+                project.status = ProjectStatus.stems_separated
+        else:
+            logger.info("Stem separator unavailable — skipping for track %s", track_id)
+
+    project.updated_at = _now()
+    save_project(project)
+    _write_session_file(project)
     return project
 
 
@@ -384,6 +468,21 @@ def _now() -> str:
 
 def _safe_name(filename: str) -> str:
     return Path(filename).name.replace(" ", "_")
+
+
+def _write_session_file(project: OdeonProject) -> None:
+    """Write / overwrite the human-readable {name}.odeon JSON session file."""
+    if not project.folder_path:
+        return
+    folder = Path(project.folder_path)
+    session_file = folder / f"{project.name}.odeon"
+    # Rotate backup before overwriting
+    if session_file.exists():
+        session_file.replace(folder / f"{project.name}.odeon.bak")
+    try:
+        session_file.write_text(project.model_dump_json(indent=2))
+    except Exception as exc:
+        logger.warning("Could not write session file: %s", exc)
 
 
 def _guess_stem_type(filename: str) -> StemType:

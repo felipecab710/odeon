@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
@@ -260,6 +260,34 @@ async fn engine_seek(
 }
 
 #[tauri::command]
+async fn engine_set_loop(
+    enabled: bool,
+    start_seconds: f64,
+    end_seconds: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setLoop",
+        json!({ "enabled": enabled, "startSeconds": start_seconds, "endSeconds": end_seconds }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_save_session(engine: State<'_, SharedEngine>) -> Result<Value, String> {
+    rpc_call(&engine, "saveSession", json!({})).await
+}
+
+#[tauri::command]
+async fn engine_analyze(
+    track_id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "analyze", json!({ "trackId": track_id })).await
+}
+
+#[tauri::command]
 async fn engine_get_transport_state(
     engine: State<'_, SharedEngine>,
 ) -> Result<Value, String> {
@@ -352,6 +380,20 @@ async fn engine_dispose_project(
 // ─────────────────────────────────────────────
 //  App entry point
 // ─────────────────────────────────────────────
+//  Utility commands
+// ─────────────────────────────────────────────
+
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("--reveal")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -365,10 +407,39 @@ pub fn run() {
         .setup(move |app| {
             // Start the odeon-engine sidecar
             if let Err(e) = start_engine(app.handle(), engine_state.clone()) {
-                // Non-fatal: engine may not be built yet during frontend development
                 log::warn!("Could not start odeon-engine sidecar: {}. Playback unavailable.", e);
                 app.emit("engine:unavailable", e).ok();
             }
+
+            // Forward OS-level file drag-and-drop events to the frontend.
+            // Tauri intercepts these before they reach the WebView, so the HTML5
+            // drag API never fires — we re-emit them as custom events instead.
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    match event {
+                        WindowEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. }) => {
+                            let strs: Vec<String> = paths
+                                .iter()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .collect();
+                            handle.emit("file-drop:hover", strs).ok();
+                        }
+                        WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                            let strs: Vec<String> = paths
+                                .iter()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .collect();
+                            handle.emit("file-drop:dropped", strs).ok();
+                        }
+                        WindowEvent::DragDrop(tauri::DragDropEvent::Leave) => {
+                            handle.emit("file-drop:cancel", ()).ok();
+                        }
+                        _ => {}
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -381,6 +452,9 @@ pub fn run() {
             engine_play,
             engine_stop,
             engine_seek,
+            engine_set_loop,
+            engine_save_session,
+            engine_analyze,
             engine_get_transport_state,
             engine_set_track_volume,
             engine_set_track_pan,
@@ -389,6 +463,7 @@ pub fn run() {
             engine_get_track_meters,
             engine_render_mix,
             engine_dispose_project,
+            reveal_in_finder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

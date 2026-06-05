@@ -84,6 +84,8 @@ export interface TrackAnalysis {
   tempo: number | null;
   section_energy: SectionEnergy[] | null;
   warnings: string[];
+  waveform_peaks: number[] | null;   // ~600 normalised 0..1 peak values
+  waveform_rms:   number[] | null;   // ~600 normalised 0..1 RMS values
 }
 
 export interface SectionEnergy {
@@ -160,7 +162,7 @@ export interface OdeonTrack {
 export interface OdeonProject {
   id: string;
   name: string;
-  created_at: string;       // ISO-8601
+  created_at: string;
   updated_at: string;
   bpm: number | null;
   sample_rate: number;
@@ -169,6 +171,9 @@ export interface OdeonProject {
   tracks: OdeonTrack[];
   mix_moves: MixMove[];
   report_path: string | null;
+  folder_path: string | null;
+  time_signature_numerator:   number | null;
+  time_signature_denominator: number | null;
 }
 
 // ─────────────────────────────────────────────

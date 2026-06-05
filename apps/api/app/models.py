@@ -111,6 +111,9 @@ class TrackAnalysis(BaseModel):
     tempo: Optional[float] = None
     section_energy: Optional[List[SectionEnergy]] = None
     warnings: List[str] = Field(default_factory=list)
+    # Waveform display data — downsampled peak + RMS envelopes (~600 points each)
+    waveform_peaks: Optional[List[float]] = None   # max abs per chunk, 0..1
+    waveform_rms: Optional[List[float]] = None     # RMS per chunk, 0..1
 
 
 # ─────────────────────────────────────────────
@@ -189,6 +192,7 @@ class OdeonProject(BaseModel):
     tracks: List[OdeonTrack] = Field(default_factory=list)
     mix_moves: List[MixMove] = Field(default_factory=list)
     report_path: Optional[str] = None
+    folder_path: Optional[str] = None   # absolute path to the project folder on disk
 
 
 # ─────────────────────────────────────────────

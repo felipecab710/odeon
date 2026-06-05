@@ -27,8 +27,17 @@ async function request<T>(
 export const apiClient = {
   health: () => request<{ status: string }>("GET", "/health"),
 
-  createProject: (name: string) =>
-    request<OdeonProject>("POST", `/projects?name=${encodeURIComponent(name)}`),
+  createProject: (name: string, folderPath?: string) =>
+    request<OdeonProject>(
+      "POST",
+      `/projects?name=${encodeURIComponent(name)}${folderPath ? `&folder_path=${encodeURIComponent(folderPath)}` : ""}`
+    ),
+
+  listProjects: () =>
+    request<OdeonProject[]>("GET", "/projects"),
+
+  deleteProject: (id: string) =>
+    request<void>("DELETE", `/projects/${id}`),
 
   getProject: (id: string) =>
     request<OdeonProject>("GET", `/projects/${id}`),
@@ -47,6 +56,9 @@ export const apiClient = {
 
   analyzeProject: (projectId: string) =>
     request<OdeonProject>("POST", `/projects/${projectId}/analyze`),
+
+  analyzeTrack: (projectId: string, trackId: string) =>
+    request<OdeonProject>("POST", `/projects/${projectId}/tracks/${trackId}/analyze`),
 
   compareProject: (
     projectId: string,

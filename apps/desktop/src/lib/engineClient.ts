@@ -57,6 +57,13 @@ export const engineClient = {
   stop: () => _invoke("engine_stop"),
   seek: (timeSeconds: number) => _invoke("engine_seek", { timeSeconds }),
 
+  setLoop: (enabled: boolean, startSeconds: number, endSeconds: number) =>
+    _invoke("engine_set_loop", { enabled, startSeconds, endSeconds }),
+
+  saveSession: () => _invoke("engine_save_session"),
+
+  analyze: (trackId: string) => _invoke("engine_analyze", { trackId }),
+
   getTransportState: () => _invoke("engine_get_transport_state"),
 
   setTrackVolume: (trackId: string, volumeDb: number) =>

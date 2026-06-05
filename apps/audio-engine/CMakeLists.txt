@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
-project(odeon_engine VERSION 0.1.0 LANGUAGES CXX)
+project(odeon_engine VERSION 0.1.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ──────────────────────────────────────────────
@@ -21,10 +21,12 @@ juce_add_console_app(odeon_engine
     VERSION      "0.1.0"
 )
 
+target_compile_features(odeon_engine PRIVATE cxx_std_20)
+
 target_sources(odeon_engine
     PRIVATE
         src/main.cpp
-        src/EngineHost.cpp
+        src/OdeonSession.cpp
 )
 
 target_compile_definitions(odeon_engine

@@ -86,10 +86,10 @@ class DemucsStemSeparator(StemSeparator):
 
         cmd = [
             "demucs",
-            "--model", self.model,
+            "-n", self.model,
             "--out", str(out_path),
             "--filename", "{stem}.wav",
-            "--jobs", "2",
+            "-j", "2",
             str(input_path),
         ]
 
@@ -121,9 +121,9 @@ class DemucsStemSeparator(StemSeparator):
                 separator_used="demucs",
             )
 
-        # Demucs writes to: <out_path>/<model>/<track_name>/<stem>.wav
-        track_name = input_path.stem
-        stem_dir = out_path / self.model / track_name
+        # Demucs with --filename {stem}.wav writes directly to:
+        #   <out_path>/<model>/<stem>.wav  (no track-name subdirectory)
+        stem_dir = out_path / self.model
 
         stems: list[StemResult] = []
         for stem_type in self.STEM_TYPES:

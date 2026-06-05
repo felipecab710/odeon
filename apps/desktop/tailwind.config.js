@@ -19,6 +19,7 @@ export default {
           text:    "#E8E8E8",
           "text-dim": "#9A9A9A",
           "text-faint": "#5A5A5A",
+          muted: "#7A7A7A",
           meter:   "#2ECC71",
           "meter-warn": "#F39C12",
           "meter-clip": "#E84C3D",
@@ -42,6 +43,27 @@ export default {
       fontFamily: {
         mono: ["'JetBrains Mono'", "'Fira Code'", "monospace"],
         sans: ["Inter", "system-ui", "sans-serif"],
+      },
+      keyframes: {
+        "progress-bar": {
+          "0%":   { transform: "translateX(-100%)" },
+          "50%":  { transform: "translateX(0%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        shimmer: {
+          "0%":   { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        scan: {
+          "0%":   { transform: "translateX(-120%)" },
+          "50%":  { transform: "translateX(160%)" },
+          "100%": { transform: "translateX(160%)" },
+        },
+      },
+      animation: {
+        "progress-bar": "progress-bar 1.4s ease-in-out infinite",
+        shimmer: "shimmer 1.6s ease-in-out infinite",
+        scan: "scan 1.4s ease-in-out infinite",
       },
     },
   },
