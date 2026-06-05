@@ -121,14 +121,26 @@ class DemucsStemSeparator(StemSeparator):
                 separator_used="demucs",
             )
 
-        # Demucs with --filename {stem}.wav writes directly to:
-        #   <out_path>/<model>/<stem>.wav  (no track-name subdirectory)
+        # Demucs with --filename {stem}.wav writes to:
+        #   <out_path>/<model>/<stem>.wav
+        # Older defaults use <out_path>/<model>/<track_name>/<stem>.wav
         stem_dir = out_path / self.model
+        track_subdirs = [d for d in stem_dir.iterdir() if d.is_dir()] if stem_dir.is_dir() else []
+
+        def resolve_stem_file(stem_type: str) -> Optional[Path]:
+            flat = stem_dir / f"{stem_type}.wav"
+            if flat.exists():
+                return flat
+            for sub in track_subdirs:
+                nested = sub / f"{stem_type}.wav"
+                if nested.exists():
+                    return nested
+            return None
 
         stems: list[StemResult] = []
         for stem_type in self.STEM_TYPES:
-            stem_file = stem_dir / f"{stem_type}.wav"
-            if stem_file.exists():
+            stem_file = resolve_stem_file(stem_type)
+            if stem_file is not None:
                 stems.append(
                     StemResult(
                         stem_type=stem_type,
@@ -137,7 +149,7 @@ class DemucsStemSeparator(StemSeparator):
                     )
                 )
             else:
-                logger.warning("Expected stem not found: %s", stem_file)
+                logger.warning("Expected stem not found for %s under %s", stem_type, stem_dir)
 
         if not stems:
             return StemSeparationResult(

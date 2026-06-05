@@ -25,6 +25,8 @@
 
 #include "OdeonDomain.h"
 #include "OdeonRoute.h"
+#include "OdeonEngineBehaviour.h"
+#include "PlaybackEngineConfig.h"
 
 namespace odeon {
 
@@ -73,6 +75,11 @@ public:
     // ── AI native seam ────────────────────────────────────────────────────────
     std::string analyze(const std::string& trackId);
 
+    // ── Playback engine ─────────────────────────────────────────────────────
+    std::string listAudioDevices();
+    std::string getPlaybackEngineSettings();
+    std::string setPlaybackEngineSettings(const juce::var& params);
+
     // Pump-friendly: lets the host run the message loop between calls.
     bool hasActiveSession() const { return edit_ != nullptr; }
     bool isDeviceReady() const {
@@ -97,6 +104,11 @@ private:
     float linearToDb(float linear) const noexcept;
     float dbToLinear(float db) const noexcept;
 
+    void syncBehaviourConfig();
+    void applyDiskCacheSize();
+    std::string serializePlaybackSettings() const;
+    std::string serializeDeviceList() const;
+
     EventCallback onEvent_;
 
     std::unique_ptr<te::Engine> engine_;
@@ -112,6 +124,9 @@ private:
     std::thread       meterThread_;
     std::atomic<bool> meterRunning_{false};
     bool              deviceReady_ = false;
+
+    PlaybackEngineSettings playbackSettings_;
+    PlaybackEngineConfig   behaviourConfig_;
 
     static constexpr int kSchemaVersion = 1;
 };

@@ -13,148 +13,72 @@
  *   9.  [–– full width]
  *  10.  [–– full width]  (Comments)
  */
-import { useRef, useCallback, useState, useEffect } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo } from "react";
+import { rafThrottle } from "../../lib/rafThrottle";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { useProjectStore } from "../../stores/projectStore";
 import { useEngineStore } from "../../stores/engineStore";
+import { useTrackGroupStore } from "../../stores/trackGroupStore";
 import { engineClient } from "../../lib/engineClient";
-import { webAudioEngine, ardourDbToPos, ardourPosToDb } from "../../lib/webAudioEngine";
+import { webAudioEngine } from "../../lib/webAudioEngine";
+import { MixerGroupStrip, MIXER_GROUP_ROW_H } from "./MixerGroupStrip";
+import {
+  ProToolsMeterCanvas, ProToolsMeterScale, ProToolsFaderScale, MeterPeakReadout,
+} from "./ProToolsMeterPanel";
+import { faderDbToPos, faderPosToDb, PT_FADER_MARKS } from "../../lib/proToolsFaderScale";
+import { TRACK_STRIPE_COLOR } from "../../lib/timelineUtils";
+import { onLayoutResize } from "../../lib/windowShell";
 import type { OdeonTrack } from "@odeon/shared";
 
 // ── Figma geometry (node 377:373) ─────────────────────────────────────────────
 const STRIP_W      = 106;   // total channel strip width
+const MASTER_W     = STRIP_W + 16;
 const FADER_AREA_H = 255;   // fader + meter area height (exact from Figma)
+const MIXER_TOOLBAR_H = 26;
+const DEFAULT_MIXER_H = FADER_AREA_H + 300;
+const MIN_MIXER_H = MIXER_TOOLBAR_H + 280;
 const BTN_H        =  14;   // standard button height
 const BTN_HALF     =  50;   // half-width button (each side)
 const BTN_GAP      =   2;   // gap between paired buttons / rows
-const METER_W      =   7;   // each VU bar width
-// Fader/meter absolute positions inside the FADER_AREA (from Figma)
-const FADER_X      = 11;    // fader groove left
-const FADER_W      = 27;    // fader groove width
-const METER_L_X    = 55;    // L meter bar left
-const METER_R_X    = 63;    // R meter bar left
-const SCALE_X      = 73;    // scale labels left
+// Fader/meter layout — Pro Tools order: fader scale | fader | meter scale | meters
+const FADER_SCALE_X =  2;
+const FADER_X         = 17;   // fader groove left
+const FADER_W         = 20;   // fader groove width
+const METER_SCALE_X   = 39;   // dBFS scale (between fader and meters)
+const METER_X         = 58;   // stereo meter canvas left
+const METER_PANEL_H   = FADER_AREA_H - 14;
 
-// ── Figma colours ─────────────────────────────────────────────────────────────
-const FIG_STRIP     = "#2d2b2b";   // strip background
-const FIG_TOP       = "#3e3b3b";   // top panel background
+// ── Figma colours — neutral grey containers only (R≈G≈B, no warm tint) ─────
+const FIG_STRIP     = "#2a2a2a";   // strip background
+const FIG_TOP       = "#333333";   // top panel background
 const FIG_BTN       = "#4f4d4d";   // button inactive bg
 const FIG_BTN_BDR   = "#000000";   // button border
 const FIG_DISK_ACT  = "#b06000";   // Disk active orange
 const FIG_SOLO_ACT  = "#1e8a46";   // Solo active green
 const FIG_MUTE_ACT  = "#b87800";   // Mute active amber
 const FIG_GAIN_BG   = "#101010";   // gain readout box bg
-const FIG_CLIP_BG   = "#ff0000";   // clip readout bg (red)
-const FIG_WARN_BG   = "#880000";   // peak warning bg
-const FIG_GROOVE    = "#1d1d1d";   // fader groove bg
-const FIG_METER_DARK = "#5c0c13";  // unlit meter segment (dark red – from Figma)
+const FIG_GROOVE    = "#1a1a1a";   // fader groove bg
 const FIG_DIVIDER   = "#1a1a1a";   // divider line colour
+const MIXER_BG      = "#1e1e1e";   // outer mixer + scroll container
+const MASTER_STRIP  = "#262626";   // master strip (neutral grey, not blue-tinted)
+const MASTER_TOP    = "#303030";
 
-// ── Track colour palette ──────────────────────────────────────────────────────
-const STEM_COLORS: Record<string, string> = {
-  drums: "#C0392B", bass: "#D35400", vocals: "#8E44AD",
-  music: "#27AE60", other: "#2980B9", fx: "#16A085",
-  full_mix: "#E67E22", unknown: "#7F8C8D",
-};
-const ROLE_COLORS: Record<string, string> = {
-  reference_full_mix: "#E67E22", reference_stem: "#4A90D9",
-  user_stem: "#2ECC71", analysis: "#9B59B6",
-};
-function trackColor(t: OdeonTrack) {
-  return STEM_COLORS[t.stem_type] ?? ROLE_COLORS[t.role] ?? "#888";
-}
-
-// ── VU meter geometry (IEC 268-18 dBFS) ──────────────────────────────────────
-const SEGS     = 60;
-const DB_FLOOR = -50;
-const DB_CEIL  =  +3;
-const DB_RANGE = DB_CEIL - DB_FLOOR;  // 53 dB
-
-function segColor(db: number): { lit: string; dark: string } {
-  if (db >=  +1)  return { lit: "#ff2020", dark: FIG_METER_DARK };
-  if (db >= -0.5) return { lit: "#ff5500", dark: FIG_METER_DARK };
-  if (db >=  -3)  return { lit: "#ffaa00", dark: FIG_METER_DARK };
-  if (db >= -10)  return { lit: "#ccdd00", dark: FIG_METER_DARK };
-  if (db >= -20)  return { lit: "#44dd44", dark: FIG_METER_DARK };
-  return                  { lit: "#22aa33", dark: FIG_METER_DARK };
-}
-
-// Figma scale marks (format: "+3", "+0", "-3", "-5" …)
-const SCALE_MARKS = [3, 0, -3, -5, -10, -15, -18, -20, -25, -30, -40, -50] as const;
-
-// ── VUBar ─────────────────────────────────────────────────────────────────────
-function VUBar({ db, peakDb }: { db: number; peakDb: number }) {
-  return (
-    <div className="relative" style={{ width: METER_W, height: "100%", border: "1px solid #000" }}>
-      <div className="absolute inset-0 flex flex-col-reverse" style={{ gap: "1px" }}>
-        {Array.from({ length: SEGS }, (_, i) => {
-          const segDb = DB_FLOOR + (i / SEGS) * DB_RANGE;
-          const lit   = db >= segDb;
-          const { lit: c, dark } = segColor(segDb);
-          return (
-            <div key={i} style={{
-              flex: 1,
-              background: lit ? c : dark,
-              boxShadow: lit && segDb >= -3 ? `0 0 2px ${c}66` : undefined,
-            }} />
-          );
-        })}
-      </div>
-      {/* Peak hold line */}
-      {peakDb > DB_FLOOR && (
-        <div className="absolute inset-x-0 pointer-events-none" style={{
-          bottom: `${Math.max(0, Math.min(100, ((peakDb - DB_FLOOR) / DB_RANGE) * 100))}%`,
-          height: 2, background: segColor(peakDb).lit,
-        }} />
-      )}
-    </div>
-  );
-}
-
-// ── dBFS scale labels (Figma: right of meters, white text, +3/+0 red) ─────────
-function DbfsScale() {
-  return (
-    <div className="relative" style={{ width: 30, height: "100%" }}>
-      {SCALE_MARKS.map((mark) => {
-        const pct = ((mark - DB_FLOOR) / DB_RANGE) * 100;
-        const isHot = mark >= 0;
-        return (
-          <div key={mark} className="absolute pointer-events-none flex items-center gap-0.5" style={{
-            bottom: `${pct}%`, transform: "translateY(50%)", left: 1,
-          }}>
-            <div style={{ width: 3, height: 1, background: isHot ? "#ff4444" : "#555", flexShrink: 0 }} />
-            <span style={{
-              fontSize: 7.5, lineHeight: 1, fontFamily: "'Inter', monospace", fontWeight: 600,
-              color: isHot ? "#ff4444" : "#eaeaea", whiteSpace: "nowrap",
-            }}>
-              {mark >= 0 ? `+${mark}` : mark}
-            </span>
-          </div>
-        );
-      })}
-      <div className="absolute" style={{ bottom: -11, left: 4 }}>
-        <span style={{ fontSize: 6, color: "#777", fontFamily: "monospace", fontWeight: 300 }}>dBFS</span>
-      </div>
-    </div>
-  );
-}
-
-// ── Vertical fader (inside fader+meter absolute container) ───────────────────
+// ── Vertical fader (Pro Tools–style thin track + metallic cap) ───────────────
 function FaderInner({ valueDb, onChange }: { valueDb: number; onChange: (db: number) => void }) {
   const trackRef  = useRef<HTMLDivElement>(null);
   const dragging  = useRef(false);
   const [showTip, setShowTip] = useState(false);
 
-  const pos      = ardourDbToPos(Math.max(-60, Math.min(6, valueDb)));
-  const unityPct = ardourDbToPos(0) * 100;
+  const pos      = faderDbToPos(Math.max(-60, Math.min(12, valueDb)));
+  const unityPct = faderDbToPos(0) * 100;
 
   const updateFromY = useCallback((clientY: number) => {
     const rect = trackRef.current?.getBoundingClientRect();
     if (!rect) return;
     const raw  = 1 - Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-    const uPos = ardourDbToPos(0);
+    const uPos = faderDbToPos(0);
     const snap = Math.abs(raw - uPos) < 0.02 ? uPos : raw;
-    onChange(Math.round(Math.max(-60, Math.min(6, ardourPosToDb(snap))) * 10) / 10);
+    onChange(Math.round(Math.max(-60, Math.min(12, faderPosToDb(snap))) * 10) / 10);
   }, [onChange]);
 
   useEffect(() => {
@@ -173,37 +97,56 @@ function FaderInner({ valueDb, onChange }: { valueDb: number; onChange: (db: num
       className="relative cursor-ns-resize select-none"
       style={{ width: "100%", height: "100%" }}
     >
-      {/* Groove */}
+      {/* Groove well */}
       <div className="absolute" style={{
-        left: 4, right: 4, top: 0, bottom: 0,
+        left: 3, right: 3, top: 0, bottom: 0,
         background: FIG_GROOVE,
-        borderRadius: 4,
-        boxShadow: "inset 0px 4px 4px rgba(0,0,0,0.25)",
+        borderRadius: 3,
+        boxShadow: "inset 0 2px 6px rgba(0,0,0,0.5)",
       }} />
+      {/* Thin centre track line (Pro Tools) */}
+      <div className="absolute pointer-events-none" style={{
+        left: "50%", transform: "translateX(-50%)",
+        width: 1, top: 4, bottom: 4,
+        background: "#000",
+      }} />
+      {/* Fader scale tick marks (aligned to Pro Tools gain marks) */}
+      {PT_FADER_MARKS.map((mark) => (
+        <div
+          key={mark.label}
+          className="absolute pointer-events-none"
+          style={{
+            left: 0, width: mark.label === "0" ? 6 : 4,
+            top: `${mark.topFrac * 100}%`,
+            transform: "translateY(-50%)",
+            height: 1,
+            background: mark.label === "0" ? "#666" : "#3a3a3a",
+          }}
+        />
+      ))}
       {/* Unity notch */}
       <div className="absolute pointer-events-none" style={{
         left: 2, right: 2, height: 1,
         bottom: `${unityPct}%`,
-        background: "#3a3a3a",
+        background: "#555",
       }} />
-      {/* Fill below handle */}
-      <div className="absolute" style={{
-        left: 4, right: 4, bottom: 0,
-        height: `${pos * 100}%`,
-        borderRadius: "0 0 4px 4px",
-        background: "linear-gradient(180deg,#343434 0%,#3a3a3a 100%)",
-        borderTop: "1px solid #434343",
-      }} />
-      {/* Handle — wide rectangular block */}
+      {/* Handle — brushed-metal cap with centre groove */}
       <div className="absolute pointer-events-none" style={{
-        left: 1, right: 1,
+        left: 2, right: 2,
         bottom: `${pos * 100}%`,
         transform: "translateY(50%)",
-        height: 11, borderRadius: 3,
-        background: "linear-gradient(180deg,#d4d4d4 0%,#a8a8a8 40%,#8c8c8c 60%,#c0c0c0 100%)",
-        boxShadow: "0 2px 3px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.2)",
-        border: "1px solid #555",
-      }} />
+        height: 14, borderRadius: 2,
+        background: "linear-gradient(180deg,#e8e8e8 0%,#b0b0b0 25%,#909090 50%,#a8a8a8 75%,#d0d0d0 100%)",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.9), inset 0 1px 0 rgba(255,255,255,0.35)",
+        border: "1px solid #666",
+      }}>
+        <div style={{
+          position: "absolute", left: 3, right: 3, top: "50%",
+          transform: "translateY(-50%)",
+          height: 2, borderRadius: 1,
+          background: "linear-gradient(180deg,#555 0%,#333 100%)",
+        }} />
+      </div>
       {showTip && (
         <div className="absolute pointer-events-none z-50" style={{
           bottom: `${pos * 100}%`, left: "calc(100% + 4px)",
@@ -219,75 +162,133 @@ function FaderInner({ valueDb, onChange }: { valueDb: number; onChange: (db: num
   );
 }
 
-// ── Panner — Ardour butterfly (green ▼ + angled L/R wings) ────────────────────
+// ── Panner — horizontal FaderInner-style slider ───────────────────────────────
 function ArdourPanner({ trackId, pan }: { trackId: string; pan: number }) {
   const { setTrackState } = useEngineStore();
-  const pct     = (pan + 1) / 2;
-  const trackRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
+  const trackRef  = useRef<HTMLDivElement>(null);
+  const dragging  = useRef(false);
+  const [showTip, setShowTip] = useState(false);
 
-  const updateFromX = useCallback((clientX: number) => {
-    const rect = trackRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const raw     = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const v       = Math.round((raw * 2 - 1) * 100) / 100;
+  const pct = (pan + 1) / 2; // 0 = full L, 0.5 = center, 1 = full R
+
+  const applyPan = useCallback((v: number) => {
     const snapped = Math.abs(v) < 0.04 ? 0 : v;
     setTrackState(trackId, { pan: snapped });
     webAudioEngine.setPan(trackId, snapped);
     engineClient.setTrackPan(trackId, snapped);
   }, [trackId, setTrackState]);
 
+  const updateFromX = useCallback((clientX: number) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const raw = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const snapped = Math.abs(raw - 0.5) < 0.02 ? 0.5 : raw;
+    applyPan(Math.round((snapped * 2 - 1) * 100) / 100);
+  }, [applyPan]);
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => { if (dragging.current) updateFromX(e.clientX); };
-    const onUp   = () => { dragging.current = false; };
+    const onUp   = () => { dragging.current = false; setShowTip(false); };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup",   onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [updateFromX]);
 
+  const panLabel =
+    pan < -0.02 ? `L${Math.abs(Math.round(pan * 100))}`
+    : pan > 0.02 ? `R${Math.round(pan * 100)}`
+    : "C";
+
   return (
-    <div style={{ height: 52, position: "relative", background: "#0a0a0a", borderBottom: `1px solid ${FIG_DIVIDER}` }}>
-      {/* Triangle slide track */}
+    <div style={{
+      padding: "6px 8px 4px",
+      borderBottom: `1px solid ${FIG_DIVIDER}`,
+      background: FIG_TOP,
+    }}>
       <div
         ref={trackRef}
-        onMouseDown={(e) => { e.stopPropagation(); dragging.current = true; updateFromX(e.clientX); }}
-        onDoubleClick={() => { setTrackState(trackId, { pan: 0 }); webAudioEngine.setPan(trackId, 0); }}
-        className="absolute cursor-ew-resize"
-        style={{ left: 0, right: 0, top: 0, height: 14, zIndex: 2, background: "#0a0a0a" }}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dragging.current = true;
+          setShowTip(true);
+          updateFromX(e.clientX);
+        }}
+        onDoubleClick={(e) => { e.stopPropagation(); applyPan(0); }}
+        className="relative cursor-ew-resize select-none"
+        style={{ height: 18, width: "100%" }}
       >
+        {/* Groove — same as FaderInner */}
+        <div className="absolute" style={{
+          left: 0, right: 0, top: 2, bottom: 2,
+          background: FIG_GROOVE,
+          borderRadius: 4,
+          boxShadow: "inset 0px 2px 4px rgba(0,0,0,0.35)",
+        }} />
+
+        {/* Centre notch */}
         <div className="absolute pointer-events-none" style={{
-          left: `${pct * 100}%`, top: 2, transform: "translateX(-50%)",
-        }}>
-          <div style={{
-            width: 0, height: 0,
-            borderLeft: "5px solid transparent", borderRight: "5px solid transparent",
-            borderTop: "10px solid #2ecc71",
-            filter: "drop-shadow(0 0 2px #2ecc71aa)",
+          top: 1, bottom: 1, width: 1, left: "50%",
+          transform: "translateX(-50%)",
+          background: "#3a3a3a",
+        }} />
+
+        {/* Fill from centre → handle */}
+        {pct >= 0.5 ? (
+          <div className="absolute" style={{
+            top: 2, bottom: 2,
+            left: "50%",
+            width: `${(pct - 0.5) * 100}%`,
+            borderRadius: "0 4px 4px 0",
+            background: "linear-gradient(180deg,#343434 0%,#3a3a3a 100%)",
+            borderLeft: "1px solid #434343",
           }} />
-        </div>
+        ) : (
+          <div className="absolute" style={{
+            top: 2, bottom: 2,
+            right: "50%",
+            width: `${(0.5 - pct) * 100}%`,
+            borderRadius: "4px 0 0 4px",
+            background: "linear-gradient(180deg,#343434 0%,#3a3a3a 100%)",
+            borderRight: "1px solid #434343",
+          }} />
+        )}
+
+        {/* Handle — FaderInner block, rotated to horizontal */}
+        <div className="absolute pointer-events-none" style={{
+          top: 0, bottom: 0,
+          left: `${pct * 100}%`,
+          transform: "translateX(-50%)",
+          width: 11, borderRadius: 3,
+          background: "linear-gradient(180deg,#d4d4d4 0%,#a8a8a8 40%,#8c8c8c 60%,#c0c0c0 100%)",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.2)",
+          border: "1px solid #555",
+        }} />
+
+        {showTip && (
+          <div className="absolute pointer-events-none z-50" style={{
+            left: `${pct * 100}%`, top: -18,
+            transform: "translateX(-50%)",
+            background: "#111", border: "1px solid #333", borderRadius: 3,
+            padding: "1px 5px", fontSize: 9, fontFamily: "monospace", color: "#ddd",
+            whiteSpace: "nowrap",
+          }}>
+            {panLabel}
+          </div>
+        )}
       </div>
-      {/* Butterfly wings: wide at top, taper to center at bottom */}
-      <div className="absolute" style={{ left: 2, right: 2, top: 14, bottom: 4, display: "flex", gap: 2 }}>
-        <div style={{
-          flex: 1, background: "#18396e",
-          clipPath: "polygon(0 0, 100% 0, 55% 100%, 0 100%)",
-          display: "flex", alignItems: "flex-start", paddingTop: 3, paddingLeft: 4,
-        }}>
-          <span style={{ fontSize: 9, fontWeight: 900, color: "#5a9ee8", fontFamily: "monospace", lineHeight: 1 }}>L</span>
-        </div>
-        <div style={{
-          flex: 1, background: "#18396e",
-          clipPath: "polygon(0 0, 100% 0, 100% 100%, 45% 100%)",
-          display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
-          paddingTop: 3, paddingRight: 4,
-        }}>
-          <span style={{ fontSize: 9, fontWeight: 900, color: "#5a9ee8", fontFamily: "monospace", lineHeight: 1 }}>R</span>
-        </div>
-      </div>
-      <div className="absolute" style={{ bottom: 0, left: 0, right: 0, textAlign: "center" }}>
-        <span style={{ fontSize: 7, color: "#444", fontFamily: "monospace" }}>
-          {pan < -0.02 ? `L${Math.abs(Math.round(pan * 100))}` : pan > 0.02 ? `R${Math.round(pan * 100)}` : "C"}
-        </span>
+
+      {/* L · C · R labels */}
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginTop: 3, padding: "0 1px",
+      }}>
+        <span style={{ fontSize: 7, color: "#555", fontFamily: "monospace", fontWeight: 600 }}>L</span>
+        <span style={{
+          fontSize: 7, fontFamily: "monospace", fontWeight: 600,
+          color: panLabel === "C" ? "#888" : "#aaa",
+        }}>{panLabel}</span>
+        <span style={{ fontSize: 7, color: "#555", fontFamily: "monospace", fontWeight: 600 }}>R</span>
       </div>
     </div>
   );
@@ -331,24 +332,52 @@ function Btn({ label, active = false, activeColor = "#444", onClick, height = BT
 
 // ── Channel strip ─────────────────────────────────────────────────────────────
 function ChannelStrip({ track }: { track: OdeonTrack }) {
-  const { trackStates, setTrackState, resetClip } = useEngineStore();
-  const state       = trackStates[track.id];
-  const volumeDb    = state?.volumeDb   ?? track.volume_db ?? 0;
-  const pan         = state?.pan        ?? track.pan       ?? 0;
-  const muted       = state?.muted      ?? track.muted     ?? false;
-  const soloed      = state?.soloed     ?? track.soloed    ?? false;
-  const leftDb      = state?.leftMeterDb  ?? -90;
-  const rightDb     = state?.rightMeterDb ?? -90;
-  const peakLeftDb  = state?.peakLeftDb   ?? -90;
-  const peakRightDb = state?.peakRightDb  ?? -90;
-  const clipping    = state?.clipping     ?? false;
-  const color       = trackColor(track);
-  const peakDb      = Math.max(peakLeftDb, peakRightDb);
-
-  const handleMute      = (e: React.MouseEvent) => { e.stopPropagation(); const n = !muted;  setTrackState(track.id, { muted: n });  webAudioEngine.setMute(track.id, n);  engineClient.muteTrack(track.id, n); };
-  const handleSolo      = (e: React.MouseEvent) => { e.stopPropagation(); const n = !soloed; setTrackState(track.id, { soloed: n }); webAudioEngine.setSolo(track.id, n);  engineClient.soloTrack(track.id, n); };
-  const handleVolume    = (db: number) => { setTrackState(track.id, { volumeDb: db }); webAudioEngine.setVolume(track.id, db); engineClient.setTrackVolume(track.id, db); };
+  const setTrackState = useEngineStore((s) => s.setTrackState);
+  const resetClip     = useEngineStore((s) => s.resetClip);
+  const trackGroup    = useTrackGroupStore((s) => s.groups.find((g) => g.trackIds.includes(track.id)) ?? null);
+  const applyGroupedMute = useTrackGroupStore((s) => s.applyGroupedMute);
+  const applyGroupedSolo = useTrackGroupStore((s) => s.applyGroupedSolo);
+  const applyGroupedGain = useTrackGroupStore((s) => s.applyGroupedGain);
+  const openEditDialog   = useTrackGroupStore((s) => s.openEditDialog);
+  const volumeDb      = useEngineStore((s) => s.trackStates[track.id]?.volumeDb   ?? track.volume_db ?? 0);
+  const pan           = useEngineStore((s) => s.trackStates[track.id]?.pan        ?? track.pan       ?? 0);
+  const muted         = useEngineStore((s) => s.trackStates[track.id]?.muted      ?? track.muted     ?? false);
+  const soloed        = useEngineStore((s) => s.trackStates[track.id]?.soloed     ?? track.soloed    ?? false);
+  const meterPost     = useEngineStore((s) => s.trackStates[track.id]?.meterPost  ?? false);
+  const handleMute = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const n = !muted;
+    setTrackState(track.id, { muted: n });
+    webAudioEngine.setMute(track.id, n);
+    engineClient.muteTrack(track.id, n);
+    applyGroupedMute(track.id, n);
+  };
+  const handleSolo = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const n = !soloed;
+    setTrackState(track.id, { soloed: n });
+    webAudioEngine.setSolo(track.id, n);
+    engineClient.soloTrack(track.id, n);
+    applyGroupedSolo(track.id, n);
+  };
+  const handleVolume = (db: number) => {
+    const prev = volumeDb;
+    setTrackState(track.id, { volumeDb: db });
+    webAudioEngine.setVolume(track.id, db);
+    engineClient.setTrackVolume(track.id, db);
+    applyGroupedGain(track.id, db, prev);
+  };
+  const handleGroup = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (trackGroup) openEditDialog(trackGroup.id);
+  };
   const handleResetClip = () => { resetClip(track.id); webAudioEngine.resetClip(track.id); };
+  const handleMeterPost = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const n = !meterPost;
+    setTrackState(track.id, { meterPost: n });
+    webAudioEngine.setMeterPost(track.id, n);
+  };
 
   const P = "2px";  // row padding
   const G = "1px";  // row gap
@@ -367,7 +396,7 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
         {/* ── TOP PANEL: track name + panner + routing space ── */}
         <div style={{
           background: FIG_TOP,
-          borderLeft: `3px solid ${color}`,
+          borderLeft: `3px solid ${TRACK_STRIPE_COLOR}`,
           borderBottom: `1px solid ${FIG_DIVIDER}`,
           display: "flex",
           flexDirection: "column",
@@ -442,21 +471,7 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
           }}>
             {volumeDb >= 0 ? "+" : ""}{volumeDb.toFixed(1)}
           </div>
-          {/* Peak readout — red on clip/hot */}
-          <div
-            onClick={handleResetClip}
-            style={{
-              flex: 1, height: BTN_H,
-              background: clipping ? FIG_CLIP_BG : peakDb >= -3 ? FIG_WARN_BG : FIG_GAIN_BG,
-              border: `1px solid ${FIG_BTN_BDR}`,
-              borderRadius: 4,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 10, fontWeight: 600, fontFamily: "'Inter', monospace", color: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            {peakDb > -90 ? (peakDb >= 0 ? "+" : "") + peakDb.toFixed(1) : "-∞"}
-          </div>
+          <MeterPeakReadout trackId={track.id} onResetClip={handleResetClip} />
         </div>
 
         {/* ── Fader + Meter area (255px, absolute positioned) ── */}
@@ -467,23 +482,10 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
           background: FIG_STRIP,
           borderTop: `1px solid ${FIG_DIVIDER}`,
         }}>
-          {/* Clip LED row (top of meter area) */}
-          <div
-            onClick={handleResetClip}
-            title="Clip — click to reset"
-            style={{
-              position: "absolute",
-              left: METER_L_X,
-              top: 2,
-              width: METER_W * 2 + 1,
-              height: 6,
-              background: clipping ? "#ff2020" : "#200000",
-              border: "1px solid #000",
-              borderRadius: 1,
-              cursor: "pointer",
-              boxShadow: clipping ? "0 0 4px #ff2020aa" : undefined,
-            }}
-          />
+          {/* Fader gain scale — 12, 6, 0, 5 … ∞ */}
+          <div style={{ position: "absolute", left: FADER_SCALE_X, top: 4 }}>
+            <ProToolsFaderScale height={FADER_AREA_H - 8} />
+          </div>
 
           {/* Fader groove */}
           <div style={{
@@ -494,46 +496,31 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
             <FaderInner valueDb={volumeDb} onChange={handleVolume} />
           </div>
 
-          {/* L meter bar */}
-          <div style={{
-            position: "absolute",
-            left: METER_L_X, top: 10,
-            width: METER_W,
-            height: FADER_AREA_H - 14,
-          }}>
-            <VUBar db={leftDb} peakDb={peakLeftDb} />
+          {/* Meter scale (dBFS) — 0 at top, 60 at bottom */}
+          <div style={{ position: "absolute", left: METER_SCALE_X, top: 10 }}>
+            <ProToolsMeterScale height={METER_PANEL_H} />
           </div>
 
-          {/* R meter bar */}
-          <div style={{
-            position: "absolute",
-            left: METER_R_X, top: 10,
-            width: METER_W,
-            height: FADER_AREA_H - 14,
-          }}>
-            <VUBar db={rightDb} peakDb={peakRightDb} />
-          </div>
-
-          {/* dBFS scale labels */}
-          <div style={{
-            position: "absolute",
-            left: SCALE_X, top: 10,
-            width: STRIP_W - SCALE_X,
-            height: FADER_AREA_H - 14,
-          }}>
-            <DbfsScale />
+          {/* Stereo peak meters */}
+          <div style={{ position: "absolute", left: METER_X, top: 10 }}>
+            <ProToolsMeterCanvas trackId={track.id} height={METER_PANEL_H} />
           </div>
         </div>
 
         {/* ── Row: M | Post ── */}
         <div style={{ display: "flex", gap: BTN_GAP, padding: P, paddingTop: BTN_GAP }}>
           <Btn label="M" />
-          <Btn label="Post" />
+          <Btn label="Post" active={meterPost} activeColor="#1a6a8a" onClick={handleMeterPost} />
         </div>
 
         {/* ── Row: Grp | RTA ── */}
         <div style={{ display: "flex", gap: BTN_GAP, padding: P, paddingTop: G }}>
-          <Btn label="Grp" />
+          <Btn
+            label={trackGroup?.name?.[0] ?? "Grp"}
+            active={!!trackGroup}
+            activeColor={trackGroup?.color ?? "#444"}
+            onClick={handleGroup}
+          />
           <Btn label="RTA" />
         </div>
 
@@ -554,20 +541,18 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
 
 // ── Master strip ──────────────────────────────────────────────────────────────
 function MasterStrip() {
-  const { masterMeter, resetClip } = useEngineStore();
+  const resetClip    = useEngineStore((s) => s.resetClip);
   const [vol, setVol] = useState(0);
 
   const handleMasterVol = (db: number) => { setVol(db); webAudioEngine.setMasterVolume(db); };
   const handleResetClip = () => { resetClip("__master__"); webAudioEngine.resetClip("__master__"); };
-
-  const masterPeak = Math.max(masterMeter.leftDb, masterMeter.rightDb);
   const P = "2px";
   const G = "1px";
 
   return (
     <div style={{
       width: STRIP_W + 16,
-      background: "#1a1c21",
+      background: MASTER_STRIP,
       borderLeft: `1px solid #3a3a3a`,
       display: "flex",
       flexDirection: "column",
@@ -575,8 +560,8 @@ function MasterStrip() {
     }}>
       {/* Top panel */}
       <div style={{
-        background: "#222428",
-        borderLeft: "3px solid #4A90D9",
+        background: MASTER_TOP,
+        borderLeft: `3px solid ${TRACK_STRIPE_COLOR}`,
         borderBottom: `1px solid ${FIG_DIVIDER}`,
         display: "flex",
         flexDirection: "column",
@@ -618,46 +603,27 @@ function MasterStrip() {
         }}>
           {vol >= 0 ? "+" : ""}{vol.toFixed(1)}
         </div>
-        <div
-          onClick={handleResetClip}
-          style={{
-            flex: 1, height: BTN_H,
-            background: masterMeter.clipping ? FIG_CLIP_BG : masterPeak >= -3 ? FIG_WARN_BG : FIG_GAIN_BG,
-            border: `1px solid ${FIG_BTN_BDR}`, borderRadius: 4,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 10, fontWeight: 600, fontFamily: "monospace", color: "#fff",
-            cursor: "pointer",
-          }}
-        >
-          {masterPeak > -90 ? (masterPeak >= 0 ? "+" : "") + masterPeak.toFixed(1) : "-∞"}
-        </div>
+        <MeterPeakReadout trackId="__master__" onResetClip={handleResetClip} />
       </div>
 
       {/* Fader + Meter */}
-      <div style={{ height: FADER_AREA_H, position: "relative", flexShrink: 0, background: "#1a1c21", borderTop: `1px solid ${FIG_DIVIDER}` }}>
-        <div onClick={handleResetClip} title="Clip — click to reset" style={{
-          position: "absolute", left: METER_L_X, top: 2,
-          width: METER_W * 2 + 1, height: 6,
-          background: masterMeter.clipping ? "#ff2020" : "#200000",
-          border: "1px solid #000", borderRadius: 1, cursor: "pointer",
-          boxShadow: masterMeter.clipping ? "0 0 4px #ff2020aa" : undefined,
-        }} />
+      <div style={{ height: FADER_AREA_H, position: "relative", flexShrink: 0, background: MASTER_STRIP, borderTop: `1px solid ${FIG_DIVIDER}` }}>
+        <div style={{ position: "absolute", left: FADER_SCALE_X, top: 4 }}>
+          <ProToolsFaderScale height={FADER_AREA_H - 8} />
+        </div>
         <div style={{ position: "absolute", left: FADER_X, top: 4, width: FADER_W, height: FADER_AREA_H - 8 }}>
           <FaderInner valueDb={vol} onChange={handleMasterVol} />
         </div>
-        <div style={{ position: "absolute", left: METER_L_X, top: 10, width: METER_W, height: FADER_AREA_H - 14 }}>
-          <VUBar db={masterMeter.leftDb} peakDb={masterMeter.peakLeftDb} />
+        <div style={{ position: "absolute", left: METER_SCALE_X, top: 10 }}>
+          <ProToolsMeterScale height={METER_PANEL_H} />
         </div>
-        <div style={{ position: "absolute", left: METER_R_X, top: 10, width: METER_W, height: FADER_AREA_H - 14 }}>
-          <VUBar db={masterMeter.rightDb} peakDb={masterMeter.peakRightDb} />
-        </div>
-        <div style={{ position: "absolute", left: SCALE_X, top: 10, width: STRIP_W + 16 - SCALE_X, height: FADER_AREA_H - 14 }}>
-          <DbfsScale />
+        <div style={{ position: "absolute", left: METER_X, top: 10 }}>
+          <ProToolsMeterCanvas trackId="__master__" height={METER_PANEL_H} />
         </div>
       </div>
 
       <div style={{ display: "flex", gap: BTN_GAP, padding: P, paddingTop: BTN_GAP }}>
-        <Btn label="M" /><Btn label="Post" />
+        <Btn label="M" /><Btn label="Post" active activeColor="#1a6a8a" />
       </div>
       <div style={{ display: "flex", gap: BTN_GAP, padding: P, paddingTop: G }}>
         <Btn label="Grp" /><Btn label="RTA" />
@@ -672,24 +638,103 @@ function MasterStrip() {
   );
 }
 
+function maxMixerHeight() {
+  return Math.max(MIN_MIXER_H, Math.floor(window.innerHeight * 0.75));
+}
+
 // ── Mixer panel ───────────────────────────────────────────────────────────────
 export function Mixer() {
   const { project } = useProjectStore();
   const [collapsed, setCollapsed] = useState(false);
+  const [mixerHeight, setMixerHeight] = useState(DEFAULT_MIXER_H);
+  const isResizingRef = useRef(false);
+  const resizeStartY = useRef(0);
+  const resizeStartH = useRef(DEFAULT_MIXER_H);
+  const groupScrollRef = useRef<HTMLDivElement>(null);
+  const channelsScrollRef = useRef<HTMLDivElement>(null);
+  const scrollSyncLock = useRef(false);
 
-  if (!project || project.tracks.length === 0) return null;
+  const tracks = project?.tracks ?? [];
+  const mixerColumns = useMemo(
+    () => tracks.map((t, i) => ({
+      id: t.id,
+      left: i * STRIP_W,
+      width: STRIP_W,
+    })),
+    [tracks],
+  );
+  const channelsScrollWidth = tracks.length * STRIP_W;
+  const [groupStripWidth, setGroupStripWidth] = useState(channelsScrollWidth);
 
-  const OPEN_H = FADER_AREA_H + 300;
+  useEffect(() => {
+    setGroupStripWidth((w) => Math.max(channelsScrollWidth, w));
+  }, [channelsScrollWidth]);
+
+  useEffect(() => {
+    const el = groupScrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      setGroupStripWidth(Math.max(channelsScrollWidth, el.clientWidth));
+    };
+    return onLayoutResize(el, measure);
+  }, [channelsScrollWidth, collapsed]);
+
+  const syncScroll = useCallback((source: HTMLDivElement, target: HTMLDivElement | null) => {
+    if (!target || scrollSyncLock.current) return;
+    scrollSyncLock.current = true;
+    target.scrollLeft = source.scrollLeft;
+    requestAnimationFrame(() => { scrollSyncLock.current = false; });
+  }, []);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isResizingRef.current = true;
+    resizeStartY.current = e.clientY;
+    resizeStartH.current = mixerHeight;
+
+    const onMove = rafThrottle((ev: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const delta = resizeStartY.current - ev.clientY;
+      const next = Math.max(MIN_MIXER_H, Math.min(maxMixerHeight(), resizeStartH.current + delta));
+      setMixerHeight(next);
+    });
+
+    const onUp = () => {
+      isResizingRef.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [mixerHeight]);
+
+  if (!project || tracks.length === 0) return null;
 
   return (
-    <div className="flex flex-col border-t flex-shrink-0" style={{
+    <div className="relative flex flex-col border-t flex-shrink-0" style={{
       borderColor: "#111",
-      background: "#222",
-      height: collapsed ? 26 : OPEN_H,
-      transition: "height 0.15s ease",
+      background: MIXER_BG,
+      height: collapsed ? MIXER_TOOLBAR_H : mixerHeight,
     }}>
+      {/* Top-edge resize handle */}
+      {!collapsed && (
+        <div
+          className="absolute left-0 right-0 z-30 flex items-center justify-center group"
+          style={{ top: -3, height: 6, cursor: "ns-resize" }}
+          onMouseDown={handleResizeMouseDown}
+          title="Drag to resize mixer"
+        >
+          <div
+            className="rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+            style={{ width: 48, height: 3, background: "#555" }}
+          />
+        </div>
+      )}
+
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-3 border-b flex-shrink-0" style={{ height: 26, borderColor: "#111", background: "#1a1a1a" }}>
+      <div className="flex items-center gap-3 px-3 border-b flex-shrink-0" style={{ height: MIXER_TOOLBAR_H, borderColor: "#111", background: "#1a1a1a" }}>
         <button
           onClick={() => setCollapsed(c => !c)}
           style={{ fontSize: 9, fontFamily: "monospace", color: "#555", cursor: "pointer", background: "none", border: "none" }}
@@ -712,21 +757,46 @@ export function Mixer() {
       </div>
 
       {!collapsed && (
-        <div className="flex flex-1 overflow-hidden">
-          {/* Channel strips */}
-          <div className="flex overflow-x-auto overflow-y-hidden" style={{ background: "#222" }}>
-            {project.tracks.map((t) => <ChannelStrip key={t.id} track={t} />)}
-            {/* Add slot */}
-            <div style={{
-              width: 50, flexShrink: 0,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              borderRight: `1px solid ${FIG_DIVIDER}`,
-            }}>
-              <span style={{ fontSize: 8, color: "#2e2e2e", writingMode: "vertical-rl" }}>+ add</span>
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Full-width black group gutter — edge to edge above channels + master */}
+          <div
+            className="flex flex-shrink-0 w-full"
+            style={{
+              height: MIXER_GROUP_ROW_H,
+              background: "#000",
+              borderBottom: "1px solid #2a2a2a",
+              boxShadow: "0 1px 0 #3a3a3a",
+            }}
+          >
+            <div
+              ref={groupScrollRef}
+              className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden"
+              onScroll={(e) => syncScroll(e.currentTarget, channelsScrollRef.current)}
+            >
+              <MixerGroupStrip columns={mixerColumns} width={groupStripWidth} />
             </div>
+            <div
+              style={{
+                width: MASTER_W,
+                flexShrink: 0,
+                background: "#000",
+                borderLeft: "1px solid #3a3a3a",
+              }}
+            />
           </div>
-          {/* Pinned master */}
-          <MasterStrip />
+
+          {/* Channel strips + pinned master */}
+          <div className="flex flex-1 overflow-hidden min-h-0">
+            <div
+              ref={channelsScrollRef}
+              className="flex flex-1 overflow-x-auto overflow-y-hidden min-w-0"
+              style={{ background: MIXER_BG }}
+              onScroll={(e) => syncScroll(e.currentTarget, groupScrollRef.current)}
+            >
+              {project.tracks.map((t) => <ChannelStrip key={t.id} track={t} />)}
+            </div>
+            <MasterStrip />
+          </div>
         </div>
       )}
     </div>

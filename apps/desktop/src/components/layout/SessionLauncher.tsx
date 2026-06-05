@@ -79,7 +79,7 @@ export function SessionLauncher({ onOpen }: Props) {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-studio-bg overflow-hidden">
+    <div className="flex flex-col h-full w-full bg-studio-bg overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-8 pt-10 pb-6">
         <div className="w-9 h-9 rounded-lg bg-studio-accent flex items-center justify-center flex-shrink-0">

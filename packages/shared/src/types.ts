@@ -84,8 +84,13 @@ export interface TrackAnalysis {
   tempo: number | null;
   section_energy: SectionEnergy[] | null;
   warnings: string[];
-  waveform_peaks: number[] | null;   // ~600 normalised 0..1 peak values
-  waveform_rms:   number[] | null;   // ~600 normalised 0..1 RMS values
+  waveform_peaks: number[] | null;   // mono summary (back-compat)
+  waveform_rms:   number[] | null;
+  waveform_peaks_l: number[] | null;  // Pro Tools stereo L
+  waveform_peaks_r: number[] | null;  // Pro Tools stereo R
+  waveform_rms_l:   number[] | null;
+  waveform_rms_r:   number[] | null;
+  waveform_cache_path: string | null;
 }
 
 export interface SectionEnergy {
@@ -159,6 +164,28 @@ export interface OdeonTrack {
   analysis: TrackAnalysis | null;
 }
 
+/** Pro Tools–style track/bus group (persisted on project). */
+export interface TrackGroupSharing {
+  gain: boolean;
+  gain_relative: boolean;
+  muting: boolean;
+  soloing: boolean;
+  record_enable: boolean;
+  selection: boolean;
+  active_state: boolean;
+  color: boolean;
+  monitoring: boolean;
+}
+
+export interface TrackBusGroup {
+  id: string;
+  name: string;
+  color: string;
+  active: boolean;
+  track_ids: string[];
+  sharing: TrackGroupSharing;
+}
+
 export interface OdeonProject {
   id: string;
   name: string;
@@ -170,6 +197,7 @@ export interface OdeonProject {
   reference_track_id: string | null;
   tracks: OdeonTrack[];
   mix_moves: MixMove[];
+  track_groups: TrackBusGroup[];
   report_path: string | null;
   folder_path: string | null;
   time_signature_numerator:   number | null;

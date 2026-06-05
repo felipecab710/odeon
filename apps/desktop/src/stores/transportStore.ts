@@ -5,12 +5,21 @@ import { create } from "zustand";
 import { engineClient } from "../lib/engineClient";
 import { webAudioEngine } from "../lib/webAudioEngine";
 import { useEngineStore } from "./engineStore";
+import type { Timebase } from "../lib/timeFormat";
 
 export type ABMode = "reference" | "my-mix" | "matched-preview";
 
 interface TransportState {
   isPlaying: boolean;
+  /** Playhead — advances during playback */
   positionSeconds: number;
+  /** Edit cursor — follows mouse on timeline, independent of playhead */
+  cursorSeconds: number;
+  /** Track under the edit cursor (for per-lane dB readout) */
+  cursorTrackId: string | null;
+  /** Main counter display format */
+  mainTimebase: Timebase;
+  showSubCounter: boolean;
   bpm: number;
   isLoopEnabled: boolean;
   abMode: ABMode;
@@ -19,10 +28,15 @@ interface TransportState {
 
   // Actions
   play: () => Promise<void>;
+  pause: () => Promise<void>;
   stop: () => Promise<void>;
+  togglePlayPause: () => Promise<void>;
   seek: (timeSeconds: number) => Promise<void>;
   setIsPlaying: (v: boolean) => void;
   setPosition: (s: number) => void;
+  setCursor: (s: number, trackId?: string | null) => void;
+  setMainTimebase: (tb: Timebase) => void;
+  toggleShowSubCounter: () => void;
   setBpm: (bpm: number) => void;
   setEngineReady: (v: boolean) => void;
   setWebAudioReady: (v: boolean) => void;
@@ -31,12 +45,12 @@ interface TransportState {
 }
 
 export const useTransportStore = create<TransportState>((set, get) => {
-  // Wire Web Audio position ticker into the store
+  // Playhead ticker — does not move the edit cursor
   webAudioEngine.onPositionUpdate((pos) => {
-    set({ positionSeconds: pos });
-    if (!webAudioEngine.isPlaying()) {
-      set({ isPlaying: false });
-    }
+    set({
+      positionSeconds: pos,
+      isPlaying: webAudioEngine.isPlaying(),
+    });
   });
 
   webAudioEngine.onReadyChange((ready) => {
@@ -51,6 +65,10 @@ export const useTransportStore = create<TransportState>((set, get) => {
   return {
     isPlaying: false,
     positionSeconds: 0,
+    cursorSeconds: 0,
+    cursorTrackId: null,
+    mainTimebase: "bars-beats",
+    showSubCounter: false,
     bpm: 120,
     isLoopEnabled: false,
     abMode: "reference",
@@ -59,6 +77,12 @@ export const useTransportStore = create<TransportState>((set, get) => {
 
     setIsPlaying: (v) => set({ isPlaying: v }),
     setPosition: (s) => set({ positionSeconds: s }),
+    setCursor: (s, trackId) => set({
+      cursorSeconds: s,
+      ...(trackId !== undefined ? { cursorTrackId: trackId } : {}),
+    }),
+    setMainTimebase: (tb) => set({ mainTimebase: tb }),
+    toggleShowSubCounter: () => set((s) => ({ showSubCounter: !s.showSubCounter })),
     setBpm: (bpm) => set({ bpm }),
     setEngineReady: (v) => set({ engineReady: v }),
     setWebAudioReady: (v) => set({ webAudioReady: v }),
@@ -66,17 +90,31 @@ export const useTransportStore = create<TransportState>((set, get) => {
     setAbMode: (m) => set({ abMode: m }),
 
     play: async () => {
+      if (webAudioEngine.isPlaying()) return;
       const { positionSeconds } = get();
-      // Web Audio is the primary playback path.
-      // The C++ engine handles routing/render; it does not have audio files
-      // loaded in the current session so we never delegate play/stop to it.
       webAudioEngine.play(positionSeconds);
       set({ isPlaying: true });
     },
 
+    pause: async () => {
+      if (!webAudioEngine.isPlaying()) {
+        set({ isPlaying: false });
+        return;
+      }
+      webAudioEngine.pause();
+      useEngineStore.getState().resetLiveMeters();
+      set({ isPlaying: false, positionSeconds: webAudioEngine.getPosition() });
+    },
+
+    togglePlayPause: async () => {
+      if (webAudioEngine.isPlaying()) await get().pause();
+      else await get().play();
+    },
+
     stop: async () => {
       webAudioEngine.stop();
-      set({ isPlaying: false, positionSeconds: 0 });
+      useEngineStore.getState().resetLiveMeters();
+      set({ isPlaying: false, positionSeconds: 0, cursorSeconds: 0, cursorTrackId: null });
     },
 
     seek: async (timeSeconds) => {

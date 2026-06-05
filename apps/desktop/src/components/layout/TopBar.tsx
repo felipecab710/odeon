@@ -1,6 +1,7 @@
 import { useProjectStore } from "../../stores/projectStore";
 import { useTransportStore } from "../../stores/transportStore";
 import { useSelectionStore } from "../../stores/selectionStore";
+import { usePlaybackEngineStore } from "../../stores/playbackEngineStore";
 import { useEffect, useState } from "react";
 
 // Stages shown in sequence while any upload/analysis is running.
@@ -44,6 +45,7 @@ export function TopBar({ onOpenSessionLauncher }: TopBarProps) {
     useProjectStore();
   const { engineReady, webAudioReady } = useTransportStore();
   const { compareUserTrackId, compareRefTrackId } = useSelectionStore();
+  const openPlaybackEngine = usePlaybackEngineStore((s) => s.open);
   const displayLabel = useLoadingStage(isLoading, loadingLabel ?? null);
 
   const handleUploadRef = () => {
@@ -98,13 +100,6 @@ export function TopBar({ onOpenSessionLauncher }: TopBarProps) {
           </button>
         </div>
 
-        <div className="w-px h-5 bg-studio-border mx-1" />
-
-        {/* Project name */}
-        <span className="text-studio-text-dim text-xs min-w-0 truncate max-w-48">
-          {project ? project.name : "No project"}
-        </span>
-
         {/* Status */}
         {project && (
           <span className="text-xxs px-1.5 py-0.5 rounded bg-studio-panel text-studio-text-faint uppercase tracking-wider">
@@ -125,6 +120,19 @@ export function TopBar({ onOpenSessionLauncher }: TopBarProps) {
         </div>
 
         <div className="flex-1" />
+
+        <button
+          onClick={openPlaybackEngine}
+          className="btn-top px-2"
+          title="Playback Engine"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+          </svg>
+        </button>
+
+        <div className="w-px h-5 bg-studio-border mx-1" />
 
         {/* Actions */}
         <button

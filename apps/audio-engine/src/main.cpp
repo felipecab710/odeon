@@ -100,6 +100,9 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
     if (method == "getTrackMeters")  return s.getTrackMeters();
     if (method == "renderMix")       return s.renderMix(extractString(p, "outputFilePath"));
     if (method == "analyze")         return s.analyze(extractString(p, "trackId"));
+    if (method == "listAudioDevices")        return s.listAudioDevices();
+    if (method == "getPlaybackEngineSettings") return s.getPlaybackEngineSettings();
+    if (method == "setPlaybackEngineSettings") return s.setPlaybackEngineSettings(p);
 
     return jsonErr("Unknown method: " + method);
 }

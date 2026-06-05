@@ -31,6 +31,14 @@ export function useEngineSync(project: OdeonProject | null) {
         }
       }
 
+      const projectIds = new Set(project.tracks.map((t) => t.id));
+      for (const id of syncedTrackIds.current) {
+        if (!projectIds.has(id)) {
+          engineClient.removeTrack(id).catch(() => {});
+          syncedTrackIds.current.delete(id);
+        }
+      }
+
       // Sync new tracks
       for (const track of project.tracks) {
         if (syncedTrackIds.current.has(track.id)) continue;
@@ -47,5 +55,5 @@ export function useEngineSync(project: OdeonProject | null) {
     };
 
     sync();
-  }, [project?.id, project?.tracks?.length]);
+  }, [project?.id, project?.tracks]);
 }

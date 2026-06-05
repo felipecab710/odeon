@@ -24,6 +24,7 @@ from ..models import (
     StereoProfile,
     TrackAnalysis,
 )
+from .waveform_cache import build_and_cache_from_arrays, cache_path_for
 
 # ─────────────────────────────────────────────
 #  Fast waveform-only pass (runs on upload)
@@ -40,18 +41,38 @@ def quick_analyze(file_path: str) -> TrackAnalysis:
         info = sf.info(str(file_path))
         data, sr = sf.read(str(file_path), dtype="float32", always_2d=True)
         mono = data.mean(axis=1)
+        left = data[:, 0] if data.shape[1] >= 2 else data[:, 0]
+        right = data[:, 1] if data.shape[1] >= 2 else data[:, 0]
         duration = float(info.duration)
         channels = int(info.channels)
     except Exception:
         # Fallback for compressed formats (MP3, M4A) that soundfile can't decode
-        mono, sr = librosa.load(str(file_path), sr=None, mono=True)
+        stereo, sr = librosa.load(str(file_path), sr=None, mono=False)
+        if stereo.ndim == 1:
+            mono = stereo
+            left = right = stereo
+            channels = 1
+        else:
+            mono = librosa.to_mono(stereo)
+            left = stereo[:, 0]
+            right = stereo[:, 1] if stereo.shape[1] > 1 else stereo[:, 0]
+            channels = int(stereo.shape[1])
         duration = float(len(mono) / sr)
-        channels = 1
 
     peak = float(np.max(np.abs(mono))) if len(mono) else 0.0
     rms_val = float(np.sqrt(np.mean(mono ** 2))) if len(mono) else 0.0
 
-    waveform_peaks, waveform_rms = compute_waveform_peaks(mono, num_points=600)
+    waveform_peaks, waveform_rms = compute_waveform_peaks(mono, num_points=4096)
+    wpl, wpr, wrl, wrr = compute_stereo_waveform_peaks(left, right, num_points=4096)
+
+    cache_path = ""
+    try:
+        _, cache_file = build_and_cache_from_arrays(
+            file_path, left, right, int(sr), duration, channels,
+        )
+        cache_path = str(cache_file)
+    except Exception:
+        pass
 
     return TrackAnalysis(
         duration_seconds=duration,
@@ -64,6 +85,11 @@ def quick_analyze(file_path: str) -> TrackAnalysis:
         crest_factor_db=_to_db(peak) - _to_db(rms_val) if rms_val > 0 else 0.0,
         waveform_peaks=waveform_peaks,
         waveform_rms=waveform_rms,
+        waveform_peaks_l=wpl,
+        waveform_peaks_r=wpr,
+        waveform_rms_l=wrl,
+        waveform_rms_r=wrr,
+        waveform_cache_path=cache_path or str(cache_path_for(file_path)),
     )
 
 # ─────────────────────────────────────────────
@@ -306,6 +332,24 @@ def detect_sections_placeholder(
 #  Waveform peaks (for DAW-style display)
 # ─────────────────────────────────────────────
 
+def _channel_peak_chunks(channel: np.ndarray, num_points: int) -> tuple[list[float], list[float]]:
+    total = len(channel)
+    chunk_size = max(1, total // num_points)
+    peaks: list[float] = []
+    rms_vals: list[float] = []
+    for i in range(num_points):
+        start = i * chunk_size
+        end = min(start + chunk_size, total)
+        if start >= total:
+            peaks.append(0.0)
+            rms_vals.append(0.0)
+            continue
+        chunk = channel[start:end]
+        peaks.append(float(np.max(np.abs(chunk))))
+        rms_vals.append(float(np.sqrt(np.mean(chunk ** 2))))
+    return peaks, rms_vals
+
+
 def compute_waveform_peaks(
     mono: np.ndarray,
     num_points: int = 600,
@@ -314,28 +358,30 @@ def compute_waveform_peaks(
     Downsample mono audio into `num_points` chunks.
     Returns (peaks, rms_envelope) — both normalised 0..1.
     """
-    total = len(mono)
-    chunk_size = max(1, total // num_points)
-    peaks: list[float] = []
-    rms_vals: list[float] = []
-
-    for i in range(num_points):
-        start = i * chunk_size
-        end = min(start + chunk_size, total)
-        if start >= total:
-            peaks.append(0.0)
-            rms_vals.append(0.0)
-            continue
-        chunk = np.abs(mono[start:end])
-        peaks.append(float(chunk.max()))
-        rms_vals.append(float(np.sqrt(np.mean(chunk ** 2))))
-
-    # Normalise to 0..1 against the global peak
+    peaks, rms_vals = _channel_peak_chunks(mono, num_points)
     global_peak = max(max(peaks), 1e-9)
     peaks_norm = [min(v / global_peak, 1.0) for v in peaks]
     rms_norm   = [min(v / global_peak, 1.0) for v in rms_vals]
-
     return peaks_norm, rms_norm
+
+
+def compute_stereo_waveform_peaks(
+    left: np.ndarray,
+    right: np.ndarray,
+    num_points: int = 4096,
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """
+    Pro Tools-style stereo overview: separate L/R peak + RMS envelopes.
+    Normalised 0..1 against the global peak across both channels.
+    """
+    pl, rml = _channel_peak_chunks(left, num_points)
+    pr, rmr = _channel_peak_chunks(right, num_points)
+    global_peak = max(max(pl), max(pr), 1e-9)
+
+    def norm(vals: list[float]) -> list[float]:
+        return [min(v / global_peak, 1.0) for v in vals]
+
+    return norm(pl), norm(pr), norm(rml), norm(rmr)
 
 
 # ─────────────────────────────────────────────
@@ -362,7 +408,22 @@ def analyze_track(file_path: str) -> TrackAnalysis:
 
     tempo = estimate_tempo(mono, sr)
     sections = detect_sections_placeholder(mono, sr)
-    waveform_peaks, waveform_rms = compute_waveform_peaks(mono, num_points=600)
+    waveform_peaks, waveform_rms = compute_waveform_peaks(mono, num_points=4096)
+    if stereo is not None and stereo.ndim == 2:
+        left_ch = stereo[:, 0]
+        right_ch = stereo[:, 1] if stereo.shape[1] > 1 else stereo[:, 0]
+    else:
+        left_ch = right_ch = mono
+    wpl, wpr, wrl, wrr = compute_stereo_waveform_peaks(left_ch, right_ch, num_points=4096)
+
+    cache_path = ""
+    try:
+        _, cache_file = build_and_cache_from_arrays(
+            file_path, left_ch, right_ch, sample_rate, duration, channels,
+        )
+        cache_path = str(cache_file)
+    except Exception:
+        pass
 
     if stereo_profile and stereo_profile.width_proxy > 0.8 and freq_profile.sub_20_60 > -30:
         warnings.append(
@@ -385,4 +446,9 @@ def analyze_track(file_path: str) -> TrackAnalysis:
         warnings=warnings,
         waveform_peaks=waveform_peaks,
         waveform_rms=waveform_rms,
+        waveform_peaks_l=wpl,
+        waveform_peaks_r=wpr,
+        waveform_rms_l=wrl,
+        waveform_rms_r=wrr,
+        waveform_cache_path=cache_path or str(cache_path_for(file_path)),
     )

@@ -2,7 +2,7 @@
  * FastAPI analysis service client.
  * All methods call localhost:8000.
  */
-import type { OdeonProject, MixBlueprint } from "@odeon/shared";
+import type { OdeonProject, MixBlueprint, TrackBusGroup } from "@odeon/shared";
 
 const BASE = "http://localhost:8000";
 
@@ -59,6 +59,14 @@ export const apiClient = {
 
   analyzeTrack: (projectId: string, trackId: string) =>
     request<OdeonProject>("POST", `/projects/${projectId}/tracks/${trackId}/analyze`),
+
+  deleteTrack: (projectId: string, trackId: string) =>
+    request<OdeonProject>("DELETE", `/projects/${projectId}/tracks/${trackId}`),
+
+  updateTrackGroups: (projectId: string, trackGroups: TrackBusGroup[]) =>
+    request<OdeonProject>("PUT", `/projects/${projectId}/track-groups`, JSON.stringify({ track_groups: trackGroups }), {
+      "Content-Type": "application/json",
+    }),
 
   compareProject: (
     projectId: string,

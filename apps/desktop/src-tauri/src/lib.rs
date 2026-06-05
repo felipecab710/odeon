@@ -377,6 +377,57 @@ async fn engine_dispose_project(
     rpc_call(&engine, "disposeProject", json!({})).await
 }
 
+#[tauri::command]
+async fn engine_list_audio_devices(
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "listAudioDevices", json!({})).await
+}
+
+#[tauri::command]
+async fn engine_get_playback_settings(
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "getPlaybackEngineSettings", json!({})).await
+}
+
+#[tauri::command]
+async fn engine_set_playback_settings(
+    settings: Value,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "setPlaybackEngineSettings", settings).await
+}
+
+// ─────────────────────────────────────────────
+//  macOS window chrome — dark backing behind webview during resize
+// ─────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn set_macos_window_background(window: &tauri::WebviewWindow) {
+    use cocoa::appkit::{NSColor, NSWindow};
+    use cocoa::base::{id, nil, YES};
+
+    if let Ok(ns_win) = window.ns_window() {
+        unsafe {
+            let ns_win = ns_win as id;
+            // studio-surface grey (#1A1A1A) — matches title bar chrome, not white or pure black
+            let color = NSColor::colorWithRed_green_blue_alpha_(
+                nil,
+                26.0 / 255.0,
+                26.0 / 255.0,
+                26.0 / 255.0,
+                1.0,
+            );
+            ns_win.setBackgroundColor_(color);
+            ns_win.setOpaque_(YES);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_macos_window_background(_window: &tauri::WebviewWindow) {}
+
 // ─────────────────────────────────────────────
 //  App entry point
 // ─────────────────────────────────────────────
@@ -415,9 +466,18 @@ pub fn run() {
             // Tauri intercepts these before they reach the WebView, so the HTML5
             // drag API never fires — we re-emit them as custom events instead.
             if let Some(window) = app.get_webview_window("main") {
+                // studio-surface grey shell — webview + NSWindow (no white title bar / resize gaps).
+                let chrome = tauri::window::Color::from((26u8, 26u8, 26u8));
+                let _ = window.set_background_color(Some(chrome));
+                let _ = window.set_theme(Some(tauri::Theme::Dark));
+                set_macos_window_background(&window);
+
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     match event {
+                        WindowEvent::Resized(..) => {
+                            // Layout is handled in the webview; avoid redundant native calls per frame.
+                        }
                         WindowEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. }) => {
                             let strs: Vec<String> = paths
                                 .iter()
@@ -463,6 +523,9 @@ pub fn run() {
             engine_get_track_meters,
             engine_render_mix,
             engine_dispose_project,
+            engine_list_audio_devices,
+            engine_get_playback_settings,
+            engine_set_playback_settings,
             reveal_in_finder,
         ])
         .run(tauri::generate_context!())

@@ -8,6 +8,8 @@
  * Tracktion types so they can be serialized to/from project.odeon JSON.
  */
 
+#include <juce_core/juce_core.h>
+
 #include <string>
 #include <vector>
 #include <map>
@@ -141,6 +143,21 @@ inline std::string jsonOk(const std::string& payload = "null") {
 
 inline std::string jsonErr(const std::string& msg) {
     return "{\"ok\":false,\"error\":" + jsonQuote(msg) + "}";
+}
+
+inline std::string extractString(const juce::var& v, const char* key, const std::string& def = "") {
+    auto val = v[key];
+    return val.isString() ? val.toString().toStdString() : def;
+}
+
+inline double extractDouble(const juce::var& v, const char* key, double def = 0.0) {
+    auto val = v[key];
+    return (val.isDouble() || val.isInt() || val.isInt64()) ? static_cast<double>(val) : def;
+}
+
+inline bool extractBool(const juce::var& v, const char* key, bool def = false) {
+    auto val = v[key];
+    return val.isBool() ? static_cast<bool>(val) : def;
 }
 
 } // namespace odeon

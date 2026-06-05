@@ -24,11 +24,14 @@ OdeonSession::~OdeonSession() {
 // ─────────────────────────────────────────────────────────────────────────
 
 void OdeonSession::initialise() {
-    engine_ = std::make_unique<te::Engine>(juce::String("OdeonEngine"));
+    syncBehaviourConfig();
+    auto behaviour = std::make_unique<OdeonEngineBehaviour>(&behaviourConfig_);
+    engine_ = std::make_unique<te::Engine>(juce::String("OdeonEngine"), nullptr, std::move(behaviour));
 
     // Boot Tracktion's DeviceManager (wires the engine's audio callback to the
     // default CoreAudio output). Render works without a device; playback needs it.
     engine_->getDeviceManager().initialise(0, 2);
+    applyDiskCacheSize();
     deviceReady_ = engine_->getDeviceManager().getNumWaveOutDevices() > 0;
     if (!deviceReady_)
         logEngineError("initialise", "No audio output device available.");
@@ -550,6 +553,190 @@ std::string OdeonSession::openSession(const std::string& projectId, const std::s
        << ",\"routeCount\":" << routes_.size()
        << ",\"missingSources\":" << missingSources << "}";
     return jsonOk(ss.str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Playback engine
+// ─────────────────────────────────────────────────────────────────────────
+
+void OdeonSession::syncBehaviourConfig() {
+    behaviourConfig_.dynamicPluginProcessing = playbackSettings_.dynamicPluginProcessing;
+    behaviourConfig_.optimizeLowBuffer       = playbackSettings_.optimizeLowBuffer;
+    behaviourConfig_.maxRealtimeThreads      = playbackSettings_.maxRealtimeThreads;
+}
+
+void OdeonSession::applyDiskCacheSize() {
+    if (!engine_) return;
+    engine_->getAudioFileManager().cache.setCacheSizeSamples(diskCacheSamples(playbackSettings_.diskCacheSize));
+}
+
+std::string OdeonSession::serializePlaybackSettings() const {
+    std::ostringstream ss;
+    ss << "{"
+       << "\"outputDeviceName\":" << jsonQuote(playbackSettings_.outputDeviceName)
+       << ",\"bufferSizeSamples\":" << playbackSettings_.bufferSizeSamples
+       << ",\"sampleRate\":" << static_cast<int>(playbackSettings_.sampleRate)
+       << ",\"errorRecovery\":{"
+       << "\"cpuOverload\":" << jsonQuote(errorPolicyToString(playbackSettings_.cpuOverload))
+       << ",\"diskUnderrun\":" << jsonQuote(errorPolicyToString(playbackSettings_.diskUnderrun))
+       << ",\"deviceDisconnect\":" << jsonQuote(errorPolicyToString(playbackSettings_.deviceDisconnect))
+       << "}"
+       << ",\"dynamicPluginProcessing\":" << (playbackSettings_.dynamicPluginProcessing ? "true" : "false")
+       << ",\"optimizeLowBuffer\":" << (playbackSettings_.optimizeLowBuffer ? "true" : "false")
+       << ",\"maxRealtimeThreads\":" << playbackSettings_.maxRealtimeThreads
+       << ",\"ignoreErrorsMainPlayback\":" << (playbackSettings_.ignoreErrorsMainPlayback ? "true" : "false")
+       << ",\"ignoreErrorsAuxIo\":" << (playbackSettings_.ignoreErrorsAuxIo ? "true" : "false")
+       << ",\"diskCacheSize\":" << jsonQuote(diskCacheToString(playbackSettings_.diskCacheSize))
+       << "}";
+    return ss.str();
+}
+
+std::string OdeonSession::serializeDeviceList() const {
+    if (!engine_) return "{\"outputDevices\":[],\"availableBufferSizes\":[],\"availableSampleRates\":[]}";
+
+    auto& dm = engine_->getDeviceManager();
+    juce::AudioDeviceManager::AudioDeviceSetup setup;
+    dm.deviceManager.getAudioDeviceSetup(setup);
+
+    std::ostringstream ss;
+    ss << "{"
+       << "\"deviceType\":" << jsonQuote(dm.deviceManager.getCurrentAudioDeviceType().toStdString())
+       << ",\"currentOutputDevice\":" << jsonQuote(setup.outputDeviceName.toStdString())
+       << ",\"outputDevices\":[";
+
+    if (auto* type = dm.deviceManager.getCurrentDeviceTypeObject()) {
+        auto names = type->getDeviceNames(false);
+        for (int i = 0; i < names.size(); ++i) {
+            if (i > 0) ss << ",";
+            ss << "{\"name\":" << jsonQuote(names[i].toStdString())
+               << ",\"isCurrent\":" << (names[i] == setup.outputDeviceName ? "true" : "false")
+               << "}";
+        }
+    }
+    ss << "],\"availableBufferSizes\":[";
+
+    if (auto* device = dm.deviceManager.getCurrentAudioDevice()) {
+        auto sizes = device->getAvailableBufferSizes();
+        for (int i = 0; i < sizes.size(); ++i) {
+            if (i > 0) ss << ",";
+            ss << sizes[i];
+        }
+    } else {
+        ss << "64,128,256,512,1024";
+    }
+
+    ss << "],\"availableSampleRates\":[";
+    if (auto* device = dm.deviceManager.getCurrentAudioDevice()) {
+        auto rates = device->getAvailableSampleRates();
+        for (int i = 0; i < rates.size(); ++i) {
+            if (i > 0) ss << ",";
+            ss << static_cast<int>(rates[i]);
+        }
+    } else {
+        ss << "44100,48000,96000";
+    }
+    ss << "]}";
+    return ss.str();
+}
+
+std::string OdeonSession::listAudioDevices() {
+    if (!engine_) return jsonErr("Engine not initialised.");
+    return jsonOk(serializeDeviceList());
+}
+
+std::string OdeonSession::getPlaybackEngineSettings() {
+    if (!engine_) return jsonErr("Engine not initialised.");
+
+    auto& dm = engine_->getDeviceManager();
+    juce::AudioDeviceManager::AudioDeviceSetup setup;
+    dm.deviceManager.getAudioDeviceSetup(setup);
+
+    if (playbackSettings_.outputDeviceName.empty())
+        playbackSettings_.outputDeviceName = setup.outputDeviceName.toStdString();
+
+    playbackSettings_.bufferSizeSamples = dm.getBlockSize();
+    playbackSettings_.sampleRate        = dm.getSampleRate();
+
+    const auto devices = serializeDeviceList();
+    std::ostringstream ss;
+    ss << devices.substr(0, devices.size() - 1) // trim trailing }
+       << ",\"settings\":" << serializePlaybackSettings()
+       << ",\"bufferSizeMs\":" << dm.getBlockSizeMs()
+       << ",\"sampleRate\":" << static_cast<int>(dm.getSampleRate())
+       << ",\"cpuUsage\":" << dm.getCpuUsage()
+       << ",\"diskCacheBytes\":" << engine_->getAudioFileManager().cache.getBytesInUse()
+       << ",\"engineAvailable\":" << (deviceReady_ ? "true" : "false")
+       << "}";
+    return jsonOk(ss.str());
+}
+
+std::string OdeonSession::setPlaybackEngineSettings(const juce::var& p) {
+    if (!engine_) return jsonErr("Engine not initialised.");
+
+    auto& dm = engine_->getDeviceManager();
+
+    const auto outDev = extractString(p, "outputDeviceName");
+    if (!outDev.empty())
+        playbackSettings_.outputDeviceName = outDev;
+
+    const int bufSize = static_cast<int>(extractDouble(p, "bufferSizeSamples", playbackSettings_.bufferSizeSamples));
+    if (bufSize > 0)
+        playbackSettings_.bufferSizeSamples = bufSize;
+
+    const double rate = extractDouble(p, "sampleRate", playbackSettings_.sampleRate);
+    if (rate > 0.0)
+        playbackSettings_.sampleRate = rate;
+
+    if (auto er = p["errorRecovery"]; er.isObject()) {
+        playbackSettings_.cpuOverload      = errorPolicyFromString(extractString(er, "cpuOverload"));
+        playbackSettings_.diskUnderrun     = errorPolicyFromString(extractString(er, "diskUnderrun"));
+        playbackSettings_.deviceDisconnect = errorPolicyFromString(extractString(er, "deviceDisconnect"));
+    }
+
+    playbackSettings_.dynamicPluginProcessing = extractBool(p, "dynamicPluginProcessing", playbackSettings_.dynamicPluginProcessing);
+    playbackSettings_.optimizeLowBuffer       = extractBool(p, "optimizeLowBuffer", playbackSettings_.optimizeLowBuffer);
+    playbackSettings_.maxRealtimeThreads      = static_cast<int>(extractDouble(p, "maxRealtimeThreads", playbackSettings_.maxRealtimeThreads));
+    playbackSettings_.ignoreErrorsMainPlayback = extractBool(p, "ignoreErrorsMainPlayback", playbackSettings_.ignoreErrorsMainPlayback);
+    playbackSettings_.ignoreErrorsAuxIo        = extractBool(p, "ignoreErrorsAuxIo", playbackSettings_.ignoreErrorsAuxIo);
+
+    const auto cacheStr = extractString(p, "diskCacheSize");
+    if (!cacheStr.empty())
+        playbackSettings_.diskCacheSize = diskCacheFromString(cacheStr);
+
+    syncBehaviourConfig();
+    applyDiskCacheSize();
+
+    // CPU overload policy → Tracktion mute threshold
+    if (playbackSettings_.cpuOverload == ErrorRecoveryPolicy::stop)
+        dm.setCpuLimitBeforeMuting(0.85);
+    else if (playbackSettings_.cpuOverload == ErrorRecoveryPolicy::silence)
+        dm.setCpuLimitBeforeMuting(0.95);
+    else
+        dm.setCpuLimitBeforeMuting(0.98);
+
+    dm.updateNumCPUs();
+
+    // Apply hardware device + buffer size
+    juce::AudioDeviceManager::AudioDeviceSetup setup;
+    dm.deviceManager.getAudioDeviceSetup(setup);
+
+    if (!playbackSettings_.outputDeviceName.empty())
+        setup.outputDeviceName = playbackSettings_.outputDeviceName;
+
+    setup.bufferSize = playbackSettings_.bufferSizeSamples;
+    setup.sampleRate = playbackSettings_.sampleRate;
+
+    const auto err = dm.deviceManager.setAudioDeviceSetup(setup, true);
+    if (err.isNotEmpty()) {
+        logEngineError("setPlaybackEngineSettings", err.toStdString());
+        return jsonErr("Device setup failed: " + err.toStdString());
+    }
+
+    dm.rescanWaveDeviceList();
+    dm.checkDefaultDevicesAreValid();
+    dm.saveSettings();
+
+    return getPlaybackEngineSettings();
 }
 
 // ─────────────────────────────────────────────────────────────────────────

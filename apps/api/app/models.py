@@ -111,9 +111,14 @@ class TrackAnalysis(BaseModel):
     tempo: Optional[float] = None
     section_energy: Optional[List[SectionEnergy]] = None
     warnings: List[str] = Field(default_factory=list)
-    # Waveform display data — downsampled peak + RMS envelopes (~600 points each)
-    waveform_peaks: Optional[List[float]] = None   # max abs per chunk, 0..1
-    waveform_rms: Optional[List[float]] = None     # RMS per chunk, 0..1
+    # Waveform display data — downsampled peak + RMS envelopes (~4096 points each)
+    waveform_peaks: Optional[List[float]] = None   # mono summary (back-compat)
+    waveform_rms: Optional[List[float]] = None
+    waveform_peaks_l: Optional[List[float]] = None  # Pro Tools stereo L peak
+    waveform_peaks_r: Optional[List[float]] = None  # Pro Tools stereo R peak
+    waveform_rms_l: Optional[List[float]] = None
+    waveform_rms_r: Optional[List[float]] = None
+    waveform_cache_path: Optional[str] = None  # sidecar .odeon.wavecache
 
 
 # ─────────────────────────────────────────────
@@ -180,6 +185,31 @@ class OdeonTrack(BaseModel):
     analysis: Optional[TrackAnalysis] = None
 
 
+class TrackGroupSharing(BaseModel):
+    gain: bool = True
+    gain_relative: bool = True
+    muting: bool = True
+    soloing: bool = True
+    record_enable: bool = True
+    selection: bool = True
+    active_state: bool = True
+    color: bool = True
+    monitoring: bool = True
+
+
+class TrackBusGroup(BaseModel):
+    id: str
+    name: str
+    color: str
+    active: bool = True
+    track_ids: List[str] = Field(default_factory=list)
+    sharing: TrackGroupSharing = Field(default_factory=TrackGroupSharing)
+
+
+class TrackGroupsUpdate(BaseModel):
+    track_groups: List[TrackBusGroup]
+
+
 class OdeonProject(BaseModel):
     id: str
     name: str
@@ -191,6 +221,7 @@ class OdeonProject(BaseModel):
     reference_track_id: Optional[str] = None
     tracks: List[OdeonTrack] = Field(default_factory=list)
     mix_moves: List[MixMove] = Field(default_factory=list)
+    track_groups: List[TrackBusGroup] = Field(default_factory=list)
     report_path: Optional[str] = None
     folder_path: Optional[str] = None   # absolute path to the project folder on disk
 

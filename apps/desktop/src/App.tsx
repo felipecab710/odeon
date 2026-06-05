@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { startFrameMonitor } from "./lib/perfDiagnostics";
+import { useTimelineStore } from "./stores/timelineStore";
 import { TopBar } from "./components/layout/TopBar";
 import { TransportBar } from "./components/transport/TransportBar";
 import { TrackList } from "./components/tracks/TrackList";
@@ -13,9 +15,19 @@ import { engineClient } from "./lib/engineClient";
 import { apiClient } from "./lib/apiClient";
 import { useEngineSync } from "./lib/useEngineSync";
 import { useWebAudioSync } from "./lib/useWebAudioSync";
+import { useTransportShortcuts } from "./hooks/useTransportShortcuts";
+import { PlaybackEngineDialog } from "./components/settings/PlaybackEngineDialog";
+import { webAudioEngine } from "./lib/webAudioEngine";
+import { prefetchProjectWaveformCaches, seedProjectWaveformCaches } from "./lib/waveformEngine";
 import type { OdeonProject } from "@odeon/shared";
+import { DEFAULT_PLAYBACK_SETTINGS } from "@odeon/shared";
+
+function windowTitleForProject(project: OdeonProject | null): string {
+  return project?.name ? `${project.name} — Odeon` : "Odeon";
+}
 
 async function setWindowTitle(title: string) {
+  document.title = title;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().setTitle(title);
@@ -28,6 +40,31 @@ export default function App() {
   const { updateMeters, initTrack } = useEngineStore();
   const [apiReady, setApiReady] = useState(false);
   const [showLauncher, setShowLauncher] = useState(true);
+
+  useTransportShortcuts();
+
+  // Dev perf monitor (enable via localStorage "odeon:perf" = "1")
+  useEffect(() => startFrameMonitor(), []);
+
+  // Native title bar (macOS window chrome) — project name centred in the top bar.
+  useEffect(() => {
+    if (showLauncher) {
+      void setWindowTitle("Odeon");
+      return;
+    }
+    void setWindowTitle(windowTitleForProject(project));
+  }, [project?.id, project?.name, showLauncher]);
+
+  // Apply saved playback-engine prefs to Web Audio on startup
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("odeon:playback-engine");
+      const settings = raw
+        ? { ...DEFAULT_PLAYBACK_SETTINGS, ...JSON.parse(raw) }
+        : DEFAULT_PLAYBACK_SETTINGS;
+      webAudioEngine.applyPlaybackSettings(settings);
+    } catch { /* ignore */ }
+  }, []);
 
   // Check API availability on startup; don't show launcher until API is up
   useEffect(() => {
@@ -54,11 +91,17 @@ export default function App() {
     engineClient.onEngineUnavailable(() => setEngineReady(false)).then((u) => { unsubUnavail = u; });
     engineClient.onTransportState((data) => {
       setEngineReady(true);
-      setIsPlaying(data.isPlaying);
-      setPosition(data.positionSeconds);
       setBpm(data.bpm);
+      // Web Audio owns transport when tracks are loaded — native engine polls at 0 when idle.
+      if (useTransportStore.getState().webAudioReady) return;
+      if (!webAudioEngine.isPlaying()) {
+        setIsPlaying(data.isPlaying);
+        setPosition(data.positionSeconds);
+      }
     }).then((u) => { unsubTransport = u; });
     engineClient.onTrackMeters((data) => {
+      // Web Audio owns live metering in the desktop app — ignore native engine peaks.
+      if (useTransportStore.getState().webAudioReady) return;
       updateMeters(data.meters);
     }).then((u) => { unsubMeters = u; });
 
@@ -68,14 +111,22 @@ export default function App() {
   }, []);
 
   const handleOpenSession = (p: OdeonProject) => {
+    seedProjectWaveformCaches(p);
     setProject(p);
-    setWindowTitle(`${p.name} — Odeon`);
+    useTimelineStore.getState().resetView();
     setShowLauncher(false);
   };
 
   // Sync tracks to engines whenever project changes
   useEngineSync(project);
   useWebAudioSync(project);
+
+  // Seed waveform caches whenever project tracks change (upload / analyze)
+  useEffect(() => {
+    if (!project) return;
+    seedProjectWaveformCaches(project);
+    prefetchProjectWaveformCaches(project);
+  }, [project?.id, project?.tracks]);
 
   // Initialize mixer state for new tracks
   useEffect(() => {
@@ -86,7 +137,7 @@ export default function App() {
   // Show launcher overlay when API is ready but no session open
   if (!apiReady || showLauncher) {
     return (
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-bg">
+      <div className="app-shell flex flex-col h-full w-full overflow-hidden bg-studio-bg">
         {!apiReady ? (
           <div className="flex flex-col flex-1 items-center justify-center gap-3 text-studio-text-faint">
             <div className="w-8 h-8 rounded bg-studio-accent flex items-center justify-center">
@@ -102,7 +153,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-bg">
+    <div className="app-shell flex flex-col h-full w-full overflow-hidden bg-studio-bg">
       <TopBar onOpenSessionLauncher={() => setShowLauncher(true)} />
       <TransportBar />
       <div className="flex flex-1 overflow-hidden">
@@ -113,6 +164,7 @@ export default function App() {
       </div>
       <Mixer />
       <ImportProgress />
+      <PlaybackEngineDialog />
     </div>
   );
 }

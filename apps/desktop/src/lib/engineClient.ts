@@ -27,6 +27,25 @@ async function loadTauri() {
 loadTauri();
 
 // ─────────────────────────────────────────────
+//  RPC unwrap
+// ─────────────────────────────────────────────
+
+interface EngineRpcEnvelope {
+  result?: { ok?: boolean; result?: unknown; error?: string };
+}
+
+export function unwrapEngineResult<T>(response: unknown): T {
+  const envelope = response as EngineRpcEnvelope;
+  const inner = envelope?.result;
+  if (!inner?.ok) {
+    throw new Error(
+      typeof inner?.error === "string" ? inner.error : "Engine RPC failed"
+    );
+  }
+  return inner.result as T;
+}
+
+// ─────────────────────────────────────────────
 //  Engine bridge
 // ─────────────────────────────────────────────
 
@@ -84,6 +103,15 @@ export const engineClient = {
     _invoke("engine_render_mix", { outputFilePath }),
 
   disposeProject: () => _invoke("engine_dispose_project"),
+
+  listAudioDevices: () =>
+    _invoke("engine_list_audio_devices", {}).then(unwrapEngineResult),
+
+  getPlaybackEngineSettings: () =>
+    _invoke("engine_get_playback_settings", {}).then(unwrapEngineResult),
+
+  setPlaybackEngineSettings: (settings: Record<string, unknown>) =>
+    _invoke("engine_set_playback_settings", { settings }).then(unwrapEngineResult),
 
   // ── Event subscriptions ──────────────────────────────────────
 

@@ -1,3 +1,5 @@
+import type { PlaybackEngineSettings } from "@odeon/shared";
+
 /**
  * webAudioEngine — Ardour-architecture Web Audio signal engine.
  *
@@ -42,10 +44,12 @@ export interface MeterData {
 type MeterCb = (meters: Record<string, MeterData>) => void;
 
 interface TrackState {
-  muted:    boolean;
-  soloed:   boolean;
-  volumeDb: number;
-  pan:      number;
+  muted:     boolean;
+  soloed:    boolean;
+  volumeDb:  number;
+  pan:       number;
+  /** false = pre-fader meter (default), true = post-fader/post-mute */
+  meterPost: boolean;
 }
 
 interface AuxBus {
@@ -55,11 +59,12 @@ interface AuxBus {
 }
 
 interface TrackNodes {
-  faderGain: GainNode;
-  muteGain:  GainNode;
-  meterNode: AudioWorkletNode | null;   // null while worklet loads
-  panner:    StereoPannerNode;
-  sendGains: Map<string, GainNode>;     // busId → send gain
+  faderGain:     GainNode;
+  muteGain:      GainNode;
+  preMeterNode:  AudioWorkletNode | null;
+  postMeterNode: AudioWorkletNode | null;
+  panner:        StereoPannerNode;
+  sendGains:     Map<string, GainNode>;
 }
 
 interface InstantPeak { L: number; R: number }
@@ -111,7 +116,7 @@ const AUX_BUSES = [
   { id: "fx2", name: "FX 2" },
 ] as const;
 
-const DEFAULT_STATE: TrackState = { muted: false, soloed: false, volumeDb: 0, pan: 0 };
+const DEFAULT_STATE: TrackState = { muted: false, soloed: false, volumeDb: 0, pan: 0, meterPost: false };
 const EMPTY_BALLISTIC: MeterBallistic = { dispL: -90, dispR: -90, peakL: -90, peakR: -90, peakTimeL: 0, peakTimeR: 0, clipping: false };
 
 // ── Engine ────────────────────────────────────────────────────────────────────
@@ -123,10 +128,12 @@ class WebAudioEngine {
   private buffers            = new Map<string, AudioBuffer>();
   private trackNodes         = new Map<string, TrackNodes>();
   private trackStates        = new Map<string, TrackState>();
+  private clipStarts         = new Map<string, number>();
   private auxBuses           = new Map<string, AuxBus>();
 
   /** Latest raw linear peak from the AudioWorklet, updated every ~10 ms */
-  private instantPeaks       = new Map<string, InstantPeak>();
+  private instantPeaksPre    = new Map<string, InstantPeak>();
+  private instantPeaksPost   = new Map<string, InstantPeak>();
   private masterInstantPeak: InstantPeak = { L: 0, R: 0 };
 
   /** Display ballistics (computed in RAF loop) */
@@ -144,16 +151,40 @@ class WebAudioEngine {
 
   private positionCb:  PositionCb    | null = null;
   private readyCb:     ReadyChangeCb | null = null;
+  private bufferCbs:   Set<() => void>     = new Set();
   private meterCbs:    MeterCb[]           = [];
   private rafId:       number        | null = null;
   private meterRafId:  number        | null = null;
+  private latencyHint: AudioContextLatencyCategory = "interactive";
 
   // ── AudioContext + Master Bus ───────────────────────────────────────────────
 
+  /** Apply playback-engine buffer preference (Web Audio fallback path). */
+  applyPlaybackSettings(settings: PlaybackEngineSettings) {
+    const hint: AudioContextLatencyCategory =
+      settings.bufferSizeSamples <= 128
+        ? "interactive"
+        : settings.bufferSizeSamples >= 512
+          ? "playback"
+          : "balanced";
+
+    if (hint !== this.latencyHint) {
+      this.latencyHint = hint;
+      if (this.ctx) {
+        if (this._isPlaying) this.stop();
+        void this.ctx.close();
+        this.ctx = null;
+        this.masterGain = null;
+        this.masterMeterNode = null;
+        this.workletLoaded = false;
+      }
+    }
+  }
+
   private getCtx(): AudioContext {
     if (!this.ctx) {
-      this.ctx = new AudioContext({ latencyHint: "interactive" });
-      this._buildMasterBus(this.ctx);
+      this.ctx = new AudioContext({ latencyHint: this.latencyHint });
+      void this._buildMasterBus(this.ctx);
     }
     return this.ctx;
   }
@@ -208,22 +239,29 @@ class WebAudioEngine {
 
     faderGain.connect(muteGain);
 
-    // ── OdeonMeter (AudioWorklet pass-through) ────────────────────────────────
-    let meterNode: AudioWorkletNode | null = null;
+    // Chain: source → preMeter → fader → mute → postMeter → panner
+    const meterOpts = {
+      channelCount: channelCount >= 2 ? 2 : 1,
+      channelCountMode: "explicit" as const,
+      channelInterpretation: "speakers" as const,
+      outputChannelCount: [channelCount >= 2 ? 2 : 1],
+    };
+    let preMeterNode: AudioWorkletNode | null = null;
+    let postMeterNode: AudioWorkletNode | null = null;
     if (this.workletLoaded) {
-      meterNode = new AudioWorkletNode(ctx, "odeon-meter", {
-        channelCount: channelCount >= 2 ? 2 : 1,
-        channelCountMode: "explicit",
-        channelInterpretation: "speakers",
-        outputChannelCount: [channelCount >= 2 ? 2 : 1],
-      });
-      meterNode.port.onmessage = (e: MessageEvent<{ peakL: number; peakR: number }>) => {
-        this.instantPeaks.set(trackId, { L: e.data.peakL, R: e.data.peakR });
+      preMeterNode = new AudioWorkletNode(ctx, "odeon-meter", meterOpts);
+      preMeterNode.port.onmessage = (e: MessageEvent<{ peakL: number; peakR: number }>) => {
+        this.instantPeaksPre.set(trackId, { L: e.data.peakL, R: e.data.peakR });
       };
-      muteGain.connect(meterNode);
-      meterNode.connect(panner);
+      preMeterNode.connect(faderGain);
+
+      postMeterNode = new AudioWorkletNode(ctx, "odeon-meter", meterOpts);
+      postMeterNode.port.onmessage = (e: MessageEvent<{ peakL: number; peakR: number }>) => {
+        this.instantPeaksPost.set(trackId, { L: e.data.peakL, R: e.data.peakR });
+      };
+      muteGain.connect(postMeterNode);
+      postMeterNode.connect(panner);
     } else {
-      // Fallback: bypass meter (no worklet)
       muteGain.connect(panner);
     }
 
@@ -239,10 +277,11 @@ class WebAudioEngine {
       sendGains.set(busId, sendGain);
     }
 
-    this.instantPeaks.set(trackId, { L: 0, R: 0 });
+    this.instantPeaksPre.set(trackId, { L: 0, R: 0 });
+    this.instantPeaksPost.set(trackId, { L: 0, R: 0 });
     this.meterBallistic.set(trackId, { ...EMPTY_BALLISTIC });
 
-    const nodes: TrackNodes = { faderGain, muteGain, meterNode, panner, sendGains };
+    const nodes: TrackNodes = { faderGain, muteGain, preMeterNode, postMeterNode, panner, sendGains };
     this.trackNodes.set(trackId, nodes);
     this._applyTrackGains(trackId);
     return nodes;
@@ -266,6 +305,7 @@ class WebAudioEngine {
       this.loadedTrackIds.add(trackId);
       await this._buildTrackNodes(trackId, buffer.numberOfChannels);
       this.readyCb?.(true);
+      this._notifyBufferChange();
       console.info(`[webAudio] ✓ ${trackId}  ${buffer.numberOfChannels}ch  ${buffer.duration.toFixed(1)}s`);
     } catch (e) {
       console.error(`[webAudio] ✗ ${trackId}:`, e);
@@ -278,7 +318,9 @@ class WebAudioEngine {
     this.loadedTrackIds.delete(trackId);
     this.trackNodes.delete(trackId);
     this.trackStates.delete(trackId);
-    this.instantPeaks.delete(trackId);
+    this.clipStarts.delete(trackId);
+    this.instantPeaksPre.delete(trackId);
+    this.instantPeaksPost.delete(trackId);
     this.meterBallistic.delete(trackId);
     this.readyCb?.(this.buffers.size > 0);
   }
@@ -290,7 +332,9 @@ class WebAudioEngine {
     this.loadedTrackIds.clear();
     this.trackNodes.clear();
     this.trackStates.clear();
-    this.instantPeaks.clear();
+    this.clipStarts.clear();
+    this.instantPeaksPre.clear();
+    this.instantPeaksPost.clear();
     this.meterBallistic.clear();
     this.readyCb?.(false);
   }
@@ -298,7 +342,7 @@ class WebAudioEngine {
   private _disconnectTrack(trackId: string) {
     const nodes = this.trackNodes.get(trackId);
     if (!nodes) return;
-    for (const n of [nodes.faderGain, nodes.muteGain, nodes.meterNode, nodes.panner] as (AudioNode | null)[]) {
+    for (const n of [nodes.faderGain, nodes.muteGain, nodes.preMeterNode, nodes.postMeterNode, nodes.panner] as (AudioNode | null)[]) {
       if (n) try { n.disconnect(); } catch { /**/ }
     }
     for (const sg of nodes.sendGains.values()) try { sg.disconnect(); } catch { /**/ }
@@ -308,6 +352,19 @@ class WebAudioEngine {
 
   hasTrack(id: string) { return this.loadedTrackIds.has(id); }
   get trackCount()     { return this.buffers.size; }
+
+  getBuffer(trackId: string): AudioBuffer | null {
+    return this.buffers.get(trackId) ?? null;
+  }
+
+  onBufferChange(cb: () => void): () => void {
+    this.bufferCbs.add(cb);
+    return () => { this.bufferCbs.delete(cb); };
+  }
+
+  private _notifyBufferChange() {
+    for (const cb of this.bufferCbs) cb();
+  }
 
   // ── Aux bus controls ───────────────────────────────────────────────────────
 
@@ -345,6 +402,10 @@ class WebAudioEngine {
 
   // ── Mixer controls ─────────────────────────────────────────────────────────
 
+  setClipStart(trackId: string, seconds: number) {
+    this.clipStarts.set(trackId, Math.max(0, seconds));
+  }
+
   setVolume(trackId: string, db: number) {
     const s = this._getState(trackId);
     this.trackStates.set(trackId, { ...s, volumeDb: db });
@@ -378,6 +439,11 @@ class WebAudioEngine {
       nodes.panner.pan.setValueAtTime(nodes.panner.pan.value, this.ctx.currentTime);
       nodes.panner.pan.setTargetAtTime(pan, this.ctx.currentTime, GATE_TC);
     }
+  }
+
+  /** Toggle strip meter tap: false = pre-fader (default), true = post-fader/post-mute. */
+  setMeterPost(trackId: string, post: boolean) {
+    this.trackStates.set(trackId, { ...this._getState(trackId), meterPost: post });
   }
 
   setMasterVolume(db: number) {
@@ -430,17 +496,24 @@ class WebAudioEngine {
     for (const [trackId, buffer] of this.buffers.entries()) {
       const nodes = this.trackNodes.get(trackId);
       if (!nodes) continue;
+      const clipStart = this.clipStarts.get(trackId) ?? 0;
+      const bufOff    = offsetSeconds - clipStart;
+      if (bufOff < 0 || bufOff >= buffer.duration - 0.001) continue;
       const src     = ctx.createBufferSource();
       src.buffer    = buffer;
-      src.connect(nodes.faderGain);
-      const clamped = Math.max(0, Math.min(offsetSeconds, buffer.duration - 0.001));
+      src.connect(nodes.preMeterNode ?? nodes.faderGain);
+      const clamped = Math.max(0, Math.min(bufOff, buffer.duration - 0.001));
       src.start(startAt, clamped);
       src.onended = () => {
         this.sources.delete(trackId);
         if (this.sources.size === 0) {
-          this._isPlaying = false;
           if (this.rafId !== null) { cancelAnimationFrame(this.rafId); this.rafId = null; }
-          this.positionCb?.(0);
+          // Only reset on natural end — not when pause/stop clears sources
+          if (this._isPlaying) {
+            this._isPlaying = false;
+            this.startOffset = 0;
+            this.positionCb?.(0);
+          }
         }
       };
       this.sources.set(trackId, src);
@@ -451,11 +524,22 @@ class WebAudioEngine {
     this._tick();
   }
 
+  pause() {
+    if (!this._isPlaying) return;
+    this.startOffset = this.getPosition();
+    this._isPlaying = false;
+    if (this.rafId !== null) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+    this._stopSources();
+    this._silenceMeterPeaks();
+    this.positionCb?.(this.startOffset);
+  }
+
   stop() {
     this._stopSources();
     this._isPlaying = false;
     if (this.rafId !== null) { cancelAnimationFrame(this.rafId); this.rafId = null; }
     this.startOffset = 0;
+    this._silenceMeterPeaks();
     this.positionCb?.(0);
   }
 
@@ -472,6 +556,7 @@ class WebAudioEngine {
 
   private _stopSources() {
     for (const src of this.sources.values()) {
+      src.onended = null;
       try { src.stop(0); }      catch { /**/ }
       try { src.disconnect(); } catch { /**/ }
     }
@@ -503,15 +588,37 @@ class WebAudioEngine {
    * Because AudioWorklet posts every ~10 ms and RAF runs every ~16 ms, display
    * latency is max(10, 16) ≈ 16 ms — far tighter than AnalyserNode (~38 ms).
    */
+  /** Clear peak buffers when transport stops — meters show silence, not stale/hover data. */
+  private _silenceMeterPeaks() {
+    for (const id of this.trackNodes.keys()) {
+      this.instantPeaksPre.set(id, { L: 0, R: 0 });
+      this.instantPeaksPost.set(id, { L: 0, R: 0 });
+      this.meterBallistic.set(id, { ...EMPTY_BALLISTIC });
+    }
+    this.masterInstantPeak = { L: 0, R: 0 };
+    this.masterBallistic = { ...EMPTY_BALLISTIC };
+    if (this.meterCbs.length > 0) {
+      const silent: Record<string, MeterData> = {};
+      for (const id of this.trackNodes.keys()) {
+        silent[id] = { leftDb: -90, rightDb: -90, peakLeftDb: -90, peakRightDb: -90, clipping: false };
+      }
+      silent["__master__"] = { leftDb: -90, rightDb: -90, peakLeftDb: -90, peakRightDb: -90, clipping: false };
+      for (const cb of this.meterCbs) cb(silent);
+    }
+  }
+
   private _startMeterLoop() {
     const tick = () => {
       const ctx = this.ctx;
-      if (this.meterCbs.length > 0 && ctx && ctx.state !== "closed") {
+      if (this._isPlaying && this.meterCbs.length > 0 && ctx && ctx.state !== "closed") {
         const now    = performance.now();
         const meters: Record<string, MeterData> = {};
 
         for (const [id] of this.trackNodes.entries()) {
-          const inst = this.instantPeaks.get(id) ?? { L: 0, R: 0 };
+          const s    = this._getState(id);
+          const inst = s.meterPost
+            ? (this.instantPeaksPost.get(id) ?? { L: 0, R: 0 })
+            : (this.instantPeaksPre.get(id) ?? { L: 0, R: 0 });
           const b    = this.meterBallistic.get(id) ?? { ...EMPTY_BALLISTIC };
           const m    = this._applyBallistics(inst, b, now);
           this.meterBallistic.set(id, m.next);

@@ -4,6 +4,15 @@
 import { create } from "zustand";
 import type { OdeonProject } from "@odeon/shared";
 import { apiClient } from "../lib/apiClient";
+import { trackGroupsFromApi, trackGroupsToApi } from "../lib/trackGroupSync";
+import { useSelectionStore } from "./selectionStore";
+import { useTimelineStore } from "./timelineStore";
+import { useEngineStore } from "./engineStore";
+import { useTrackGroupStore } from "./trackGroupStore";
+import { webAudioEngine } from "../lib/webAudioEngine";
+import { engineClient } from "../lib/engineClient";
+import { invalidateWaveformBitmap } from "../lib/waveformEngine";
+import { ensureReferenceStemBusGroup } from "../lib/referenceStemGroup";
 
 export interface PendingTrack {
   id: string;
@@ -25,11 +34,50 @@ interface ProjectState {
   uploadReference: (file: File) => Promise<void>;
   uploadUserStems: (files: File[]) => Promise<void>;
   analyzeProject: () => Promise<void>;
-  analyzeTrack: (trackId: string) => Promise<void>;
+  analyzeTrack: (trackId: string, opts?: { manageLoading?: boolean }) => Promise<void>;
   compareProject: (userTrackId?: string, refTrackId?: string) => Promise<void>;
   exportBlueprint: () => Promise<void>;
   setProject: (p: OdeonProject) => void;
+  saveTrackGroups: () => Promise<void>;
+  setClipStart: (trackId: string, seconds: number) => void;
+  setTrackColor: (trackId: string, color: string) => void;
+  deleteTrack: (trackId: string) => Promise<void>;
   clearError: () => void;
+}
+
+let referenceUploadInFlight = false;
+
+function normalizeProject(p: OdeonProject): OdeonProject {
+  return { ...p, track_groups: p.track_groups ?? [] };
+}
+
+function syncTrackGroupsFromProject(p: OdeonProject) {
+  const normalized = normalizeProject(p);
+  const validIds = new Set(normalized.tracks.map((t) => t.id));
+  useTrackGroupStore.getState().hydrateFromProject(
+    trackGroupsFromApi(normalized.track_groups, validIds),
+  );
+  return normalized;
+}
+
+function applyAnalyzedProject(p: OdeonProject, analyzedTrackId?: string) {
+  const normalized = syncTrackGroupsFromProject(p);
+  const stemTracks = normalized.tracks.filter((t) => t.role === "reference_stem");
+  if (stemTracks.length > 0) {
+    ensureReferenceStemBusGroup(stemTracks);
+  } else if (analyzedTrackId) {
+    const analyzed = normalized.tracks.find((t) => t.id === analyzedTrackId);
+    if (
+      analyzed?.role === "reference_full_mix" &&
+      normalized.status !== "stems_separated"
+    ) {
+      return {
+        project: normalized,
+        error: "Stem separation did not produce tracks. Ensure Demucs is installed and try Analyze + Stems again.",
+      };
+    }
+  }
+  return { project: normalized, error: null as string | null };
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -39,8 +87,98 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   pendingTracks: [],
   error: null,
 
-  setProject: (p) => set({ project: p }),
+  setProject: (p) => set({ project: syncTrackGroupsFromProject(p) }),
+
+  saveTrackGroups: async () => {
+    const { project } = get();
+    if (!project) return;
+    const groups = useTrackGroupStore.getState().groups;
+    try {
+      const updated = await apiClient.updateTrackGroups(
+        project.id,
+        trackGroupsToApi(groups),
+      );
+      set({ project: syncTrackGroupsFromProject(updated), error: null });
+    } catch (e: unknown) {
+      set({ error: String(e) });
+    }
+  },
+
   clearError: () => set({ error: null }),
+
+  setClipStart: (trackId, seconds) =>
+    set((s) => {
+      if (!s.project) return {};
+      const t = Math.max(0, Math.round(seconds * 1000) / 1000);
+      return {
+        project: {
+          ...s.project,
+          tracks: s.project.tracks.map((tr) =>
+            tr.id === trackId ? { ...tr, clip_start_seconds: t } : tr
+          ),
+        },
+      };
+    }),
+
+  setTrackColor: (trackId, color) => {
+    invalidateWaveformBitmap(trackId);
+    set((s) => {
+      if (!s.project) return {};
+      return {
+        project: {
+          ...s.project,
+          tracks: s.project.tracks.map((tr) =>
+            tr.id === trackId ? { ...tr, color } : tr
+          ),
+        },
+      };
+    });
+  },
+
+  deleteTrack: async (trackId) => {
+    const { project } = get();
+    if (!project) return;
+
+    const removedIds = new Set<string>([trackId]);
+    const target = project.tracks.find((t) => t.id === trackId);
+    if (target?.role === "reference_full_mix") {
+      for (const t of project.tracks) {
+        if (t.role === "reference_stem") removedIds.add(t.id);
+      }
+    }
+
+    const prevTracks = project.tracks;
+    const prevIndex = prevTracks.findIndex((t) => t.id === trackId);
+
+    try {
+      const updated = await apiClient.deleteTrack(project.id, trackId);
+      set({ project: syncTrackGroupsFromProject(updated), error: null });
+
+      for (const id of removedIds) {
+        webAudioEngine.removeTrack(id);
+        engineClient.removeTrack(id).catch(() => {});
+        invalidateWaveformBitmap(id);
+        useEngineStore.getState().removeTrack(id);
+        useTimelineStore.getState().clearTrackHeight(id);
+        useTrackGroupStore.getState().removeTrackFromAllGroups(id);
+      }
+
+      const sel = useSelectionStore.getState();
+      if (sel.selectedTrackId && removedIds.has(sel.selectedTrackId)) {
+        const remaining = updated.tracks;
+        const next = remaining[prevIndex] ?? remaining[prevIndex - 1] ?? remaining[0];
+        sel.selectTrack(next?.id ?? null);
+      }
+      if (sel.compareUserTrackId && removedIds.has(sel.compareUserTrackId)) {
+        sel.setCompareUserTrack(null);
+      }
+      if (sel.compareRefTrackId && removedIds.has(sel.compareRefTrackId)) {
+        sel.setCompareRefTrack(null);
+      }
+    } catch (e: unknown) {
+      set({ error: String(e) });
+    }
+  },
 
   createProject: async (name = "Untitled Project") => {
     set({ isLoading: true, loadingLabel: "creating project", error: null });
@@ -54,7 +192,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   uploadReference: async (file) => {
     const { project } = get();
-    if (!project) return;
+    if (!project || referenceUploadInFlight) return;
+    referenceUploadInFlight = true;
     const pendingId = `pending-ref-${Date.now()}`;
     set((s) => ({
       isLoading: true,
@@ -78,12 +217,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }, 400);
 
       const updated = await apiClient.uploadReference(project.id, file);
+      const normalized = syncTrackGroupsFromProject(updated);
+      const refId = normalized.reference_track_id;
       set((s) => ({
-        project: updated,
-        isLoading: false,
-        loadingLabel: null,
+        project: normalized,
+        isLoading: Boolean(refId),
+        loadingLabel: refId ? "analyzing & separating stems…" : null,
         pendingTracks: s.pendingTracks.filter((p) => p.id !== pendingId),
       }));
+      if (refId) {
+        try {
+          await get().analyzeTrack(refId, { manageLoading: false });
+        } finally {
+          set({ isLoading: false, loadingLabel: null });
+        }
+      }
     } catch (e: unknown) {
       set((s) => ({
         error: String(e),
@@ -91,6 +239,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         loadingLabel: null,
         pendingTracks: s.pendingTracks.filter((p) => p.id !== pendingId),
       }));
+    } finally {
+      referenceUploadInFlight = false;
     }
   },
 
@@ -124,7 +274,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const updated = await apiClient.uploadUserStems(project.id, files);
       const pendingIds = new Set(newPending.map((p) => p.id));
       set((s) => ({
-        project: updated,
+        project: syncTrackGroupsFromProject(updated),
         isLoading: false,
         loadingLabel: null,
         pendingTracks: s.pendingTracks.filter((p) => !pendingIds.has(p.id)),
@@ -145,20 +295,58 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!project) return;
     set({ isLoading: true, loadingLabel: "analyzing tracks…", error: null });
     try {
+      const ref = project.tracks.find(
+        (t) =>
+          t.role === "reference_full_mix" &&
+          (t.analysis_status === "pending" || t.analysis_status === "failed"),
+      );
+      if (ref) {
+        await get().analyzeTrack(ref.id, { manageLoading: false });
+        const after = get().project;
+        const morePending = after?.tracks.some(
+          (t) =>
+            t.id !== ref.id &&
+            (t.analysis_status === "pending" || t.analysis_status === "failed"),
+        );
+        if (morePending && after) {
+          set({ isLoading: true, loadingLabel: "analyzing remaining tracks…" });
+          const updated = await apiClient.analyzeProject(after.id);
+          set({
+            project: syncTrackGroupsFromProject(updated),
+            isLoading: false,
+            loadingLabel: null,
+          });
+        } else {
+          set({ isLoading: false, loadingLabel: null });
+        }
+        return;
+      }
+
       const updated = await apiClient.analyzeProject(project.id);
-      set({ project: updated, isLoading: false, loadingLabel: null });
+      set({
+        project: syncTrackGroupsFromProject(updated),
+        isLoading: false,
+        loadingLabel: null,
+      });
     } catch (e: unknown) {
       set({ error: String(e), isLoading: false, loadingLabel: null });
     }
   },
 
-  analyzeTrack: async (trackId: string) => {
+  analyzeTrack: async (trackId: string, opts?: { manageLoading?: boolean }) => {
     const { project } = get();
     if (!project) return;
-    // Mark the track as analyzing optimistically so the UI responds immediately
+    const manageLoading = opts?.manageLoading !== false;
+    const isReference = project.tracks.find((t) => t.id === trackId)?.role === "reference_full_mix";
+
     set((s) => ({
-      isLoading: true,
-      loadingLabel: "analyzing…",
+      ...(manageLoading
+        ? {
+            isLoading: true,
+            loadingLabel: isReference ? "analyzing & separating stems…" : "analyzing…",
+          }
+        : {}),
+      error: null,
       project: s.project
         ? {
             ...s.project,
@@ -170,13 +358,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }));
     try {
       const updated = await apiClient.analyzeTrack(project.id, trackId);
-      set({ project: updated, isLoading: false, loadingLabel: null });
+      const { project: nextProject, error: stemError } = applyAnalyzedProject(updated, trackId);
+      set({
+        project: nextProject,
+        ...(manageLoading ? { isLoading: false, loadingLabel: null } : {}),
+        ...(stemError ? { error: stemError } : {}),
+      });
     } catch (e: unknown) {
-      // Revert the optimistic status back to failed
       set((s) => ({
         error: String(e),
-        isLoading: false,
-        loadingLabel: null,
+        ...(manageLoading ? { isLoading: false, loadingLabel: null } : {}),
         project: s.project
           ? {
               ...s.project,

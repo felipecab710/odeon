@@ -29,7 +29,10 @@ export type EngineRpcMethod =
   | "soloTrack"
   | "getTrackMeters"
   | "renderMix"
-  | "analyze";
+  | "analyze"
+  | "listAudioDevices"
+  | "getPlaybackEngineSettings"
+  | "setPlaybackEngineSettings";
 
 export interface EngineRpcRequest {
   id: number;

@@ -8,16 +8,50 @@
   }
 
   html,
-  body,
-  #root {
+  body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #333333;
+    background: #1a1a1a;
     color: #e8e8e8;
     font-family: "Inter", system-ui, sans-serif;
     font-size: 13px;
     -webkit-font-smoothing: antialiased;
     user-select: none;
+  }
+
+  /* Full-bleed underlay — studio-surface grey behind webview during native resize. */
+  #window-bleed {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: #1a1a1a;
+    pointer-events: none;
+  }
+
+  #root {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: #0f0f0f;
+  }
+
+  /* Pro Tools–style shell: flex panels track the frame on every resize tick. */
+  .app-shell {
+    contain: layout style;
+  }
+
+  /* Pause transitions/animations while the native window frame is resizing. */
+  html[data-resizing="true"] * {
+    transition-duration: 0s !important;
+    animation-play-state: paused !important;
+  }
+
+  /* GPU-hint waveform layers during zoom (Ableton Metal-style compositing). */
+  html[data-zooming="true"] canvas {
+    will-change: transform;
   }
 
   ::-webkit-scrollbar {

@@ -25,6 +25,8 @@ from .models import (
     OdeonTrack,
     ProjectStatus,
     StemType,
+    TrackBusGroup,
+    TrackGroupsUpdate,
     TrackRole,
     BlueprintProjectSummary,
     BlueprintTrackSummary,
@@ -82,6 +84,32 @@ def health():
         "stem_separator": separator.__class__.__name__,
         "stem_separation_available": separator.is_available(),
     }
+
+
+# ─────────────────────────────────────────────
+#  Waveform cache (Pro Tools-style pyramid sidecar)
+# ─────────────────────────────────────────────
+
+@app.get("/waveform-cache")
+def get_waveform_cache(path: str):
+    """
+    Return the `.odeon.wavecache` sidecar for an audio file.
+    Builds the cache on first request if missing.
+    """
+    from .audio.waveform_cache import build_and_cache_waveform, read_waveform_cache
+
+    audio = Path(path)
+    if not audio.is_file():
+        raise HTTPException(status_code=404, detail=f"Audio file not found: {path}")
+
+    data = read_waveform_cache(path)
+    if data is None:
+        try:
+            data, _ = build_and_cache_waveform(path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Waveform cache build failed: {exc}")
+
+    return JSONResponse(data)
 
 
 # ─────────────────────────────────────────────
@@ -158,6 +186,26 @@ def get_mix_moves(project_id: str):
     return _get_or_404(project_id).mix_moves
 
 
+@app.put("/projects/{project_id}/track-groups", response_model=OdeonProject)
+def update_track_groups(project_id: str, body: TrackGroupsUpdate):
+    """Persist Pro Tools–style track/bus groups on the project."""
+    project = _get_or_404(project_id)
+    valid_ids = {t.id for t in project.tracks}
+
+    cleaned: list[TrackBusGroup] = []
+    for g in body.track_groups:
+        track_ids = [tid for tid in g.track_ids if tid in valid_ids]
+        if not track_ids:
+            continue
+        cleaned.append(g.model_copy(update={"track_ids": track_ids}))
+
+    project.track_groups = cleaned
+    project.updated_at = _now()
+    save_project(project)
+    _write_session_file(project)
+    return project
+
+
 # ─────────────────────────────────────────────
 #  Reference upload
 # ─────────────────────────────────────────────
@@ -172,6 +220,12 @@ async def upload_reference(project_id: str, file: UploadFile = File(...)):
 
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
+
+    # Replace any previous reference upload — never accumulate duplicate full-mix tracks
+    project.tracks = [
+        t for t in project.tracks
+        if t.role not in (TrackRole.reference_full_mix, TrackRole.reference_stem)
+    ]
 
     track_id = _uid()
     ref_track = OdeonTrack(
@@ -257,23 +311,88 @@ async def upload_user_stems(project_id: str, files: List[UploadFile] = File(...)
 #  Analyze all pending tracks
 # ─────────────────────────────────────────────
 
+_STEM_COLORS = {
+    "drums": "#E84C3D",
+    "bass": "#F39C12",
+    "vocals": "#2ECC71",
+    "other": "#9B59B6",
+}
+
+
+def _separate_reference_stems(project: OdeonProject, project_id: str, track: OdeonTrack) -> None:
+    """Run Demucs on a reference full-mix track and append reference_stem tracks."""
+    if track.role != TrackRole.reference_full_mix:
+        return
+
+    stem_out_dir = (
+        Path(project.folder_path) / "stems"
+        if project.folder_path
+        else STEMS_DIR / project_id / "reference"
+    )
+    separator = get_separator()
+    if not separator.is_available():
+        logger.info("Stem separator unavailable — skipping for track %s", track.id)
+        return
+
+    logger.info("Separating stems for reference track %s", track.id)
+    sep_result = separator.separate(track.file_path, str(stem_out_dir))
+    if not sep_result.success:
+        logger.error("Stem separation failed for track %s: %s", track.id, sep_result.error)
+        return
+
+    project.tracks = [t for t in project.tracks if t.role != TrackRole.reference_stem]
+    for stem in sep_result.stems:
+        stem_track = OdeonTrack(
+            id=_uid(),
+            project_id=project_id,
+            name=stem.name,
+            role=TrackRole.reference_stem,
+            stem_type=StemType(stem.stem_type),
+            file_path=stem.file_path,
+            color=_STEM_COLORS.get(stem.stem_type, "#888888"),
+            analysis_status=AnalysisStatus.pending,
+        )
+        try:
+            stem_track.analysis = quick_analyze(stem.file_path)
+        except Exception:
+            pass
+        project.tracks.append(stem_track)
+    project.status = ProjectStatus.stems_separated
+
+
+def _run_track_analysis(project: OdeonProject, track: OdeonTrack) -> None:
+    track.analysis_status = AnalysisStatus.analyzing
+    try:
+        track.analysis = analyze_track(track.file_path)
+        track.analysis_status = AnalysisStatus.complete
+        if track.analysis.tempo and not project.bpm:
+            project.bpm = track.analysis.tempo
+        if track.analysis.sample_rate:
+            project.sample_rate = track.analysis.sample_rate
+    except Exception as exc:
+        logger.error("Analysis failed for track %s: %s", track.id, exc)
+        track.analysis_status = AnalysisStatus.failed
+
+
 @app.post("/projects/{project_id}/analyze", response_model=OdeonProject)
 def analyze_project(project_id: str):
     project = _get_or_404(project_id)
 
     for track in project.tracks:
-        if track.analysis_status in (AnalysisStatus.pending, AnalysisStatus.failed):
-            track.analysis_status = AnalysisStatus.analyzing
-            try:
-                track.analysis = analyze_track(track.file_path)
-                track.analysis_status = AnalysisStatus.complete
-            except Exception as exc:
-                logger.error("Analysis failed for track %s: %s", track.id, exc)
-                track.analysis_status = AnalysisStatus.failed
+        if track.analysis_status not in (AnalysisStatus.pending, AnalysisStatus.failed):
+            continue
+        _run_track_analysis(project, track)
+        if (
+            track.role == TrackRole.reference_full_mix
+            and track.analysis_status == AnalysisStatus.complete
+        ):
+            _separate_reference_stems(project, project_id, track)
 
-    project.status = ProjectStatus.analyzed
+    if project.status != ProjectStatus.stems_separated:
+        project.status = ProjectStatus.analyzed
     project.updated_at = _now()
     save_project(project)
+    _write_session_file(project)
     return project
 
 
@@ -281,12 +400,34 @@ def analyze_project(project_id: str):
 #  Per-track analyze (full analysis + stems for reference)
 # ─────────────────────────────────────────────
 
-_STEM_COLORS = {
-    "drums": "#E84C3D",
-    "bass": "#F39C12",
-    "vocals": "#2ECC71",
-    "other": "#9B59B6",
-}
+@app.delete("/projects/{project_id}/tracks/{track_id}", response_model=OdeonProject)
+def delete_track(project_id: str, track_id: str):
+    """Remove a track from the project. Deleting reference full-mix also removes its stems."""
+    project = _get_or_404(project_id)
+    track = next((t for t in project.tracks if t.id == track_id), None)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"Track {track_id} not found in project {project_id}")
+
+    if track.role == TrackRole.reference_full_mix:
+        project.tracks = [
+            t for t in project.tracks
+            if t.role not in (TrackRole.reference_full_mix, TrackRole.reference_stem)
+        ]
+        project.reference_track_id = None
+    else:
+        project.tracks = [t for t in project.tracks if t.id != track_id]
+
+    if project.reference_track_id == track_id:
+        project.reference_track_id = None
+
+    project.mix_moves = [
+        m for m in project.mix_moves
+        if m.target_track_id != track_id and m.reference_track_id != track_id
+    ]
+    project.updated_at = _now()
+    save_project(project)
+    _write_session_file(project)
+    return project
 
 
 @app.post("/projects/{project_id}/tracks/{track_id}/analyze", response_model=OdeonProject)
@@ -301,56 +442,14 @@ def analyze_single_track(project_id: str, track_id: str):
     if track is None:
         raise HTTPException(status_code=404, detail=f"Track {track_id} not found in project {project_id}")
 
-    # Full analysis
-    track.analysis_status = AnalysisStatus.analyzing
-    try:
-        track.analysis = analyze_track(track.file_path)
-        track.analysis_status = AnalysisStatus.complete
-        if track.analysis.tempo and not project.bpm:
-            project.bpm = track.analysis.tempo
-        if track.analysis.sample_rate:
-            project.sample_rate = track.analysis.sample_rate
-    except Exception as exc:
-        logger.error("Full analysis failed for track %s: %s", track_id, exc)
-        track.analysis_status = AnalysisStatus.failed
+    _run_track_analysis(project, track)
+    if track.analysis_status == AnalysisStatus.failed:
         project.updated_at = _now()
         save_project(project)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=f"Analysis failed for track {track_id}")
 
-    # Stem separation — only for reference full-mix tracks
     if track.role == TrackRole.reference_full_mix:
-        stem_out_dir = (
-            Path(project.folder_path) / "stems"
-            if project.folder_path
-            else STEMS_DIR / project_id / "reference"
-        )
-        separator = get_separator()
-        if separator.is_available():
-            logger.info("Separating stems for reference track %s", track_id)
-            sep_result = separator.separate(track.file_path, str(stem_out_dir))
-            if sep_result.success:
-                # Remove any previous reference stems so we don't accumulate duplicates
-                project.tracks = [t for t in project.tracks if t.role != TrackRole.reference_stem]
-                for stem in sep_result.stems:
-                    stem_track = OdeonTrack(
-                        id=_uid(),
-                        project_id=project_id,
-                        name=stem.name,
-                        role=TrackRole.reference_stem,
-                        stem_type=StemType(stem.stem_type),
-                        file_path=stem.file_path,
-                        color=_STEM_COLORS.get(stem.stem_type, "#888888"),
-                        analysis_status=AnalysisStatus.pending,
-                    )
-                    # Quick waveform for each stem too
-                    try:
-                        stem_track.analysis = quick_analyze(stem.file_path)
-                    except Exception:
-                        pass
-                    project.tracks.append(stem_track)
-                project.status = ProjectStatus.stems_separated
-        else:
-            logger.info("Stem separator unavailable — skipping for track %s", track_id)
+        _separate_reference_stems(project, project_id, track)
 
     project.updated_at = _now()
     save_project(project)
