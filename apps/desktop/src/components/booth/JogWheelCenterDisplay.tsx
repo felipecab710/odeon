@@ -1,6 +1,10 @@
 import { useEffect, useId, useRef } from "react";
-import { useTransportStore } from "../../stores/transportStore";
 import { VisualPlayPosition } from "../../lib/visualPlayPosition";
+import {
+  firstCueSec,
+  vinylAngleFromPositionSec,
+  VINYL_RPM_33,
+} from "../../lib/boothTransportSim";
 
 const SIZE = 97;
 const CX = SIZE / 2;
@@ -19,24 +23,20 @@ const BLACK_TOP = CY - WHITE_R - WHITE_W / 2;
 const ORANGE_SZ = 3.8;
 const ORANGE_TOP = BLACK_TOP + BLACK_H - 1.1;
 
-function firstCueSec(hotCueTimes: (number | null)[], hotCueSlots: boolean[]): number {
-  for (let i = 0; i < hotCueTimes.length; i++) {
-    if (hotCueSlots[i] && hotCueTimes[i] != null) return hotCueTimes[i]!;
-  }
-  return 0;
-}
-
 function truncate(str: string, max: number): string {
   return str.length > max ? `${str.slice(0, max - 1)}…` : str;
 }
 
 export function JogWheelCenterDisplay({
   deckIndex,
-  timelineStartSec,
-  durationSec,
+  positionSec,
+  durationSec: _durationSec,
   isLoaded,
   isPlaying,
   loopActive,
+  loopInSec = 0,
+  loopOutSec = 0,
+  playRate = 1,
   artworkUrl,
   artist,
   title,
@@ -44,11 +44,14 @@ export function JogWheelCenterDisplay({
   hotCueTimes,
 }: {
   deckIndex: number;
-  timelineStartSec: number;
+  positionSec: number;
   durationSec: number;
   isLoaded: boolean;
   isPlaying: boolean;
   loopActive: boolean;
+  loopInSec?: number;
+  loopOutSec?: number;
+  playRate?: number;
   artworkUrl: string | null;
   artist: string;
   title: string;
@@ -64,6 +67,21 @@ export function JogWheelCenterDisplay({
   const visualRef = useRef(new VisualPlayPosition());
   const playheadRef = useRef<SVGGElement>(null);
   const cueRef = useRef<SVGGElement>(null);
+  const positionRef = useRef(positionSec);
+  const frozenPosRef = useRef(positionSec);
+  const playingRef = useRef(isPlaying);
+  const rateRef = useRef(playRate);
+  const loopActiveRef = useRef(loopActive);
+  const loopInRef = useRef(loopInSec);
+  const loopOutRef = useRef(loopOutSec);
+
+  positionRef.current = positionSec;
+  playingRef.current = isPlaying;
+  if (!isPlaying) frozenPosRef.current = positionSec;
+  rateRef.current = playRate;
+  loopActiveRef.current = loopActive;
+  loopInRef.current = loopInSec;
+  loopOutRef.current = loopOutSec;
 
   const cueSec = firstCueSec(hotCueTimes, hotCueSlots);
   const isMaster = deckIndex === 0;
@@ -73,17 +91,27 @@ export function JogWheelCenterDisplay({
   const syncLit = isPlaying && isLoaded;
   const masterLit = isMaster && isLoaded;
 
-  const dur = durationSec > 0 ? durationSec : 1;
-
   useEffect(() => {
     let raf = 0;
-    const loop = () => {
-      const { positionSeconds, isPlaying: transportPlaying } = useTransportStore.getState();
-      const localPos = Math.max(0, positionSeconds - timelineStartSec);
-      visualRef.current.sync(localPos, transportPlaying);
-      const pos = visualRef.current.interpolate();
-      const playAngle = (pos / dur) * 360;
-      const cueAngle = (cueSec / dur) * 360;
+
+    const loop = (now: number) => {
+      const loopBounds = loopActiveRef.current && loopOutRef.current > loopInRef.current
+        ? { inSec: loopInRef.current, outSec: loopOutRef.current }
+        : null;
+
+      const playing = playingRef.current;
+      const posSource = playing ? positionRef.current : frozenPosRef.current;
+      visualRef.current.sync(
+        posSource,
+        playing,
+        playing ? rateRef.current : 0,
+        loopBounds,
+      );
+      const pos = visualRef.current.interpolate(now);
+      const rate = playing ? rateRef.current : 0;
+
+      const playAngle = vinylAngleFromPositionSec(pos, rate, VINYL_RPM_33);
+      const cueAngle = vinylAngleFromPositionSec(cueSec, rate, VINYL_RPM_33);
 
       playheadRef.current?.setAttribute(
         "transform",
@@ -96,9 +124,10 @@ export function JogWheelCenterDisplay({
 
       raf = requestAnimationFrame(loop);
     };
+
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [timelineStartSec, dur, cueSec]);
+  }, [cueSec]);
 
   return (
     <svg
@@ -162,7 +191,7 @@ export function JogWheelCenterDisplay({
         </g>
       )}
 
-      {/* Rotating cue — orange block on red ring, geometry meets black when aligned */}
+      {/* Rotating cue — orange block on red ring */}
       {isLoaded && (
         <g ref={cueRef} transform={`rotate(0 ${CX} ${CY})`}>
           <rect

@@ -4,7 +4,8 @@
  */
 import type { DeckMix, CfAssign } from "../../lib/deckMixEngine";
 import { setTrackId } from "../../lib/deckMixEngine";
-import { STUDIO_GRID, STUDIO_SIDEBAR, LANE_HEIGHT } from "./setTimelineLayout";
+import { useStudioAutomationStore } from "../../stores/studioAutomationStore";
+import { STUDIO_SIDEBAR, LANE_HEIGHT } from "./setTimelineLayout";
 import { DJMKnob } from "./DJMKnob";
 import { DJMVerticalFader } from "./DJMVerticalFader";
 import { useEngineStore } from "../../stores/engineStore";
@@ -15,12 +16,18 @@ interface Props {
   entryId: string;
   mix: DeckMix;
   color: string;
+  height?: number;
   onChange: (mix: DeckMix) => void;
 }
 
-export function DJMLaneStrip({ index, entryId, mix, color, onChange }: Props) {
+export function DJMLaneStrip({ index, entryId, mix, color, height = LANE_HEIGHT, onChange }: Props) {
   const trackId = setTrackId(entryId);
   const meters = useEngineStore(s => s.trackStates[trackId]);
+  const expanded = useStudioAutomationStore(s => s.tracks[index]?.expanded ?? false);
+  const armed = useStudioAutomationStore(s => s.tracks[index]?.armed ?? false);
+  const editMode = useStudioAutomationStore(s => s.editMode);
+  const toggleExpanded = useStudioAutomationStore(s => s.toggleTrackExpanded);
+  const setTrackArmed = useStudioAutomationStore(s => s.setTrackArmed);
 
   const btn = (active: boolean, accent?: string) => ({
     width: 16, height: 14, fontSize: 7, fontWeight: 700, border: "none",
@@ -40,16 +47,31 @@ export function DJMLaneStrip({ index, entryId, mix, color, onChange }: Props) {
 
   return (
     <div style={{
-      height: LANE_HEIGHT,
-      borderBottom: `1px solid ${STUDIO_GRID}`,
+      height,
       padding: "4px 6px",
       display: "flex", gap: 4,
       background: STUDIO_SIDEBAR,
     }}>
       {/* Left controls */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color, letterSpacing: "0.05em", marginBottom: 3 }}>
-          Deck {index + 1}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
+          <button
+            type="button"
+            title={expanded ? "Collapse automation" : "Expand automation"}
+            onClick={() => toggleExpanded(index)}
+            style={{
+              width: 14, height: 14, fontSize: 8, fontWeight: 700,
+              border: `1px solid ${expanded ? color : "#444"}`,
+              background: expanded ? `${color}33` : "#222",
+              color: expanded ? color : "#888",
+              borderRadius: 2, cursor: "pointer", padding: 0, flexShrink: 0,
+            }}
+          >
+            {expanded ? "▾" : "▸"}
+          </button>
+          <span style={{ fontSize: 9, fontWeight: 700, color, letterSpacing: "0.05em" }}>
+            Deck {index + 1}
+          </span>
         </div>
 
         <div style={{ display: "flex", gap: 1, marginBottom: 3 }}>
@@ -66,6 +88,13 @@ export function DJMLaneStrip({ index, entryId, mix, color, onChange }: Props) {
         </div>
 
         <div style={{ display: "flex", gap: 2, marginBottom: 3 }}>
+          {editMode === "record" && (
+            <button
+              style={btn(armed, "#ff2222")}
+              title={armed ? "Disarm automation record" : "Arm for automation record"}
+              onClick={() => setTrackArmed(index, !armed)}
+            >R</button>
+          )}
           <button style={btn(mix.solo)} title="Solo"
             onClick={() => patch({ solo: !mix.solo })}>S</button>
           <button style={btn(mix.cue, "#ff9800")} title="Cue (headphone preview via solo)"

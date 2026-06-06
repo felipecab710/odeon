@@ -24,7 +24,13 @@ from ..models import (
     StereoProfile,
     TrackAnalysis,
 )
-from .waveform_cache import build_and_cache_from_arrays, cache_path_for
+from .waveform_cache import (
+    build_and_cache_from_arrays,
+    cache_path_for,
+    is_waveform_cache_valid,
+    load_audio_stereo,
+    read_waveform_cache,
+)
 
 # ─────────────────────────────────────────────
 #  Fast waveform-only pass (runs on upload)
@@ -54,9 +60,8 @@ def quick_analyze(file_path: str) -> TrackAnalysis:
             channels = 1
         else:
             mono = librosa.to_mono(stereo)
-            left = stereo[:, 0]
-            right = stereo[:, 1] if stereo.shape[1] > 1 else stereo[:, 0]
-            channels = int(stereo.shape[1])
+            left, right = stereo_lr_channels(stereo)
+            channels = int(stereo.shape[0])
         duration = float(len(mono) / sr)
 
     peak = float(np.max(np.abs(mono))) if len(mono) else 0.0
@@ -130,6 +135,7 @@ def load_audio_mono_and_stereo(
     """
     Returns (mono, stereo_or_None, actual_sr).
     stereo is None for mono-only sources.
+    When present, stereo is librosa layout: (n_channels, n_samples).
     """
     audio_stereo, sr = librosa.load(file_path, sr=target_sr, mono=False)
     if audio_stereo.ndim == 1:
@@ -139,6 +145,15 @@ def load_audio_mono_and_stereo(
         stereo = audio_stereo
         mono = librosa.to_mono(stereo)
     return mono, stereo, sr
+
+
+def stereo_lr_channels(stereo: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract L/R waveforms from librosa stereo (n_channels, n_samples)."""
+    if stereo.ndim != 2:
+        raise ValueError("expected 2D stereo array")
+    left = stereo[0]
+    right = stereo[1] if stereo.shape[0] > 1 else stereo[0]
+    return left, right
 
 
 # ─────────────────────────────────────────────
@@ -425,6 +440,45 @@ def compute_stereo_waveform_peaks(
 
 
 # ─────────────────────────────────────────────
+#  Waveform cache build + validation
+# ─────────────────────────────────────────────
+
+def _build_waveform_cache(
+    file_path: str,
+    left: np.ndarray,
+    right: np.ndarray,
+    sample_rate: int,
+    duration: float,
+    channels: int,
+    freq_colors: np.ndarray,
+) -> str:
+    """Write v2 sidecar; retry with soundfile decode if channels look truncated."""
+    try:
+        _, cache_file = build_and_cache_from_arrays(
+            file_path, left, right, sample_rate, duration, channels,
+            freq_colors=freq_colors,
+        )
+        pyramid = read_waveform_cache(file_path)
+        if pyramid and is_waveform_cache_valid(pyramid, duration, sample_rate):
+            return str(cache_file)
+    except Exception:
+        pass
+
+    try:
+        left, right, sr, dur, ch = load_audio_stereo(file_path)
+        _, cache_file = build_and_cache_from_arrays(
+            file_path, left, right, sr, dur, ch, freq_colors=freq_colors,
+        )
+        pyramid = read_waveform_cache(file_path)
+        if pyramid and is_waveform_cache_valid(pyramid, dur, sr):
+            return str(cache_file)
+    except Exception:
+        pass
+
+    return str(cache_path_for(file_path))
+
+
+# ─────────────────────────────────────────────
 #  Full analysis pipeline
 # ─────────────────────────────────────────────
 
@@ -450,23 +504,16 @@ def analyze_track(file_path: str) -> TrackAnalysis:
     sections = detect_sections_placeholder(mono, sr)
     waveform_peaks, waveform_rms = compute_waveform_peaks(mono, num_points=4096)
     if stereo is not None and stereo.ndim == 2:
-        left_ch = stereo[:, 0]
-        right_ch = stereo[:, 1] if stereo.shape[1] > 1 else stereo[:, 0]
+        left_ch, right_ch = stereo_lr_channels(stereo)
     else:
         left_ch = right_ch = mono
     wpl, wpr, wrl, wrr = compute_stereo_waveform_peaks(left_ch, right_ch, num_points=4096)
 
     freq_colors = compute_freq_colors(mono, sr)
 
-    cache_path = ""
-    try:
-        _, cache_file = build_and_cache_from_arrays(
-            file_path, left_ch, right_ch, sample_rate, duration, channels,
-            freq_colors=freq_colors,
-        )
-        cache_path = str(cache_file)
-    except Exception:
-        pass
+    cache_path = _build_waveform_cache(
+        file_path, left_ch, right_ch, sample_rate, duration, channels, freq_colors,
+    )
 
     if stereo_profile and stereo_profile.width_proxy > 0.8 and freq_profile.sub_20_60 > -30:
         warnings.append(

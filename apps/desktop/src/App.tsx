@@ -10,6 +10,7 @@ import { engineClient } from "./lib/engineClient";
 import { apiClient } from "./lib/apiClient";
 import { useEngineSync } from "./lib/useEngineSync";
 import { useTransportShortcuts } from "./hooks/useTransportShortcuts";
+import { useUndoShortcuts } from "./hooks/useUndoShortcuts";
 import { prefetchProjectWaveformCaches } from "./lib/waveformEngine";
 import type { OdeonProject } from "@odeon/shared";
 import { StudioView } from "./views/StudioView";
@@ -38,6 +39,7 @@ export default function App() {
   const [apiReady, setApiReady] = useState(false);
 
   useTransportShortcuts();
+  useUndoShortcuts();
 
   useEffect(() => startFrameMonitor(), []);
 

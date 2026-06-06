@@ -197,23 +197,41 @@ async function fetchSidecar(cachePath: string): Promise<WaveformCache | null> {
   }
 }
 
+async function rebuildEntryWaveform(entryId: string): Promise<void> {
+  try {
+    await fetch(`http://localhost:8000/select/entries/${entryId}/rebuild-waveform`, {
+      method: "POST",
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function loadWaveformCache(
   audioPath: string,
   cachePath?: string | null,
+  entryId?: string | null,
 ): Promise<WaveformCache | null> {
   if (!audioPath) return null;
 
   const sidecar = cachePath || wavecachePath(audioPath);
 
   const cached = memoryCache.get(audioPath);
-  if (cached) return cached;
+  if (cached && isFullWaveformCache(cached) && !isCorruptWaveformCache(cached)) {
+    return cached;
+  }
 
   const pending = inflight.get(audioPath);
   if (pending) return pending;
 
   const promise = (async () => {
-    const data = await fetchSidecar(sidecar);
-    if (data) memoryCache.set(audioPath, data);
+    let data = await fetchSidecar(sidecar);
+    if (data && isCorruptWaveformCache(data) && entryId) {
+      memoryCache.delete(audioPath);
+      await rebuildEntryWaveform(entryId);
+      data = await fetchSidecar(sidecar);
+    }
+    if (data && !isCorruptWaveformCache(data)) memoryCache.set(audioPath, data);
     return data;
   })();
 
@@ -232,7 +250,7 @@ export function seedWaveformCache(audioPath: string, cache: WaveformCache) {
   if (!audioPath) return;
   // Don't overwrite a full sidecar with a coarse analysis seed
   const existing = memoryCache.get(audioPath);
-  if (existing && isFullWaveformCache(existing)) return;
+  if (existing && isFullWaveformCache(existing) && !isCorruptWaveformCache(existing)) return;
   memoryCache.set(audioPath, cache);
 }
 
@@ -242,6 +260,16 @@ export function isFullWaveformCache(cache: WaveformCache): boolean {
     Object.keys(cache.levels).length > 1 ||
     (Object.values(cache.levels)[0]?.length ?? 0) > 5000
   );
+}
+
+/** Detect truncated pyramid data (e.g. librosa channel-order bug wrote 1 bucket). */
+export function isCorruptWaveformCache(cache: WaveformCache): boolean {
+  const dur = cache.duration_seconds ?? 0;
+  const sr = cache.sample_rate ?? 44100;
+  if (dur < 5 || !sr) return false;
+  const maxBuckets = Math.max(0, ...Object.values(cache.levels).map((l) => l?.length ?? 0));
+  const minExpected = Math.max(20, Math.ceil((dur * sr) / 16384));
+  return maxBuckets < minExpected;
 }
 
 /** Invalidate the in-memory entry for a given audio path. */

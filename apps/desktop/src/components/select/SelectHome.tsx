@@ -15,7 +15,10 @@ interface Toast {
 let _toastId = 0;
 
 export function SelectHome() {
-  const { loading, stats, filter, isPolling, setFilter, loadEntries, loadStats, loadCollections, importFolder, analyzeAll, ensurePolling } = useSelectStore();
+  const {
+    loading, scanning, stats, filter, isPolling, catalogFolderPath,
+    setFilter, loadEntries, loadStats, loadCollections, importFolder, scanFolder, ensurePolling,
+  } = useSelectStore();
   const [refreshing, setRefreshing] = useState(false);
   const [rebuildingWaves, setRebuildingWaves] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -68,18 +71,30 @@ export function SelectHome() {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, multiple: false });
       if (typeof selected === "string") {
-        await importFolder(selected);
-        await analyzeAll();
+        const added = await importFolder(selected);
+        showToast(added > 0 ? `${added} new track${added === 1 ? "" : "s"} added` : "Folder imported");
       }
     } catch {
-      // browser / dialog unavailable — open a manual fallback
       const path = prompt("Enter folder path to import:");
       if (path) {
-        await importFolder(path);
-        await analyzeAll();
+        const added = await importFolder(path);
+        showToast(added > 0 ? `${added} new track${added === 1 ? "" : "s"} added` : "Folder imported");
       }
     }
-  }, [importFolder, analyzeAll]);
+  }, [importFolder]);
+
+  const handleScan = useCallback(async () => {
+    if (!catalogFolderPath) {
+      showToast("Import a folder first to set your music catalog", "error");
+      return;
+    }
+    const added = await scanFolder();
+    if (added > 0) {
+      showToast(`${added} new track${added === 1 ? "" : "s"} found — analyzing…`);
+    } else {
+      showToast("No new files found");
+    }
+  }, [catalogFolderPath, scanFolder]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden", background: "#161616", position: "relative" }}>
@@ -111,7 +126,7 @@ export function SelectHome() {
       >
         <button
           onClick={handleImport}
-          disabled={loading}
+          disabled={loading || scanning}
           style={{
             padding: "3px 12px", fontSize: 11, fontWeight: 600,
             background: "#2a2a2a", color: "#ccc", border: "1px solid #3a3a3a",
@@ -119,6 +134,23 @@ export function SelectHome() {
           }}
         >
           {loading ? "Loading…" : "Import Folder"}
+        </button>
+
+        <button
+          onClick={handleScan}
+          disabled={loading || scanning || !catalogFolderPath}
+          title={catalogFolderPath ? `Scan for new files in ${catalogFolderPath}` : "Import a folder first"}
+          style={{
+            padding: "3px 12px", fontSize: 11, fontWeight: 600,
+            background: scanning ? "#2a2a2a" : "#1e2e3e",
+            color: scanning ? "#888" : "#5b9bd5",
+            border: "1px solid #2a4a6a",
+            borderRadius: 4,
+            cursor: loading || scanning || !catalogFolderPath ? "default" : "pointer",
+            opacity: catalogFolderPath ? 1 : 0.5,
+          }}
+        >
+          {scanning ? "Scanning…" : "Scan"}
         </button>
 
         <button

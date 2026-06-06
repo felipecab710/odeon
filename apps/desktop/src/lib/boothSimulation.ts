@@ -20,22 +20,88 @@ import {
   type DeckMix,
   defaultDeckMix,
   applyAllDeckMixesBySlot,
+  applyDeckMixToEngine,
   deckTrackId,
+  effectiveVolumeDb,
+  setTrackId,
 } from "./deckMixEngine";
+import { engineClient } from "./engineClient";
 import { useEngineStore } from "../stores/engineStore";
 import { assignDeckLanes } from "./boothDeckAssign";
 import { mossFxFromPlan } from "./boothMossFx";
 import type { TransitionPlanData } from "./apiClient";
 import type { BoothMode } from "../stores/boothStore";
 import { djSyncCoordinator } from "./djSyncCoordinator";
+import { simulateChannelMeters } from "./boothMeterSim";
+import type { WaveformCache } from "./waveformEngine/types";
+import {
+  firstCueSec,
+  indicatorToLit,
+  pioneerIndicators,
+  vinylAngleFromPositionSec,
+} from "./boothTransportSim";
+import { useStudioAutomationStore } from "../stores/studioAutomationStore";
+import { applyLaneAutomation } from "./applyLaneAutomation";
 
 const GAIN_TO_DB = (g: number) => (g <= 0.001 ? -60 : 20 * Math.log10(g));
+
+function laneActiveAt(lane: LaneLayout, playheadSec: number): boolean {
+  return playheadSec >= lane.startSec && playheadSec < lane.endSec;
+}
+
+/** Merge timeline deck mix with transition automation when enabled. */
+function resolveDeckMixForChannel(
+  mix: DeckMix,
+  lane: LaneLayout | null,
+  inTransition: boolean,
+  transT: number,
+  isOutgoing: boolean,
+  playheadSec: number,
+): DeckMix & { signalFaderDb: number } {
+  if (!lane) return { ...mix, faderDb: -60, signalFaderDb: -60 };
+
+  const active = laneActiveAt(lane, playheadSec);
+  let displayFader = mix.faderDb;
+  let signalFader = active ? mix.faderDb : -60;
+  let filter = mix.filter;
+  let low = mix.low;
+
+  const globalAutomation = useStudioAutomationStore.getState().globalEnabled;
+  const curves = lane
+    ? useStudioAutomationStore.getState().tracks[lane.index]?.curves
+    : undefined;
+  const automated = applyLaneAutomation(mix, curves, playheadSec, {
+    inTransition,
+    transT,
+    isOutgoing,
+    globalEnabled: globalAutomation,
+  });
+
+  if (globalAutomation && mix.showAutomation) {
+    displayFader = automated.faderDb;
+    signalFader = active ? automated.faderDb : -60;
+    filter = automated.filter;
+    low = automated.low;
+  } else if (inTransition && mix.showAutomation) {
+    const gain = transitionGainCurve(transT, isOutgoing);
+    const autoDb = GAIN_TO_DB(gain);
+    displayFader = autoDb;
+    signalFader = active ? autoDb : -60;
+    filter = mix.filter + transitionFilterCurve(transT, isOutgoing) * 12;
+    const eqKill = transitionEqKillCurve(transT, isOutgoing);
+    if (eqKill < 0) low = Math.min(low, eqKill);
+  }
+
+  if (mix.mute) signalFader = -60;
+
+  return { ...mix, faderDb: displayFader, signalFaderDb: signalFader, filter, low };
+}
 
 function trackTitle(e: CatalogEntry): string {
   return e.title || e.file_name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").trim();
 }
 
-function findActiveTransition(
+export function findActiveTransition(
   transitions: TransitionRegion[],
   playheadSec: number,
 ): { transition: TransitionRegion; t: number } | null {
@@ -66,9 +132,9 @@ function buildDeckState(
   lane: LaneLayout | null,
   isPlaying: boolean,
   playheadSec: number,
-  prevJogAngle: number,
   bpm: number,
   prevDeck: CDJDeckState | undefined,
+  playRate = 1,
 ): CDJDeckState {
   if (!lane) {
     return {
@@ -82,7 +148,7 @@ function buildDeckState(
       durationSec: 0,
       isPlaying: false,
       isLoaded: false,
-      jogAngle: prevJogAngle,
+      jogAngle: 0,
       pitchPercent: 0,
       playLit: false,
       cueLit: false,
@@ -95,14 +161,21 @@ function buildDeckState(
   }
 
   const entry = lane.entry;
-  let localPos = Math.max(0, playheadSec - lane.startSec);
   const dur = entry.duration_seconds ?? 240;
+  const laneActive = laneActiveAt(lane, playheadSec);
+  // Freeze local position when off-timeline — don't let global playhead keep spinning the platter.
+  let localPos: number;
+  if (!laneActive) {
+    localPos = playheadSec >= lane.endSec ? dur : 0;
+  } else {
+    localPos = Math.max(0, Math.min(dur, playheadSec - lane.startSec));
+  }
   const laneBpm = entry.bpm ?? bpm;
   const loopActive = prevDeck?.loopActive ?? false;
   const loopIn = prevDeck?.loopInSec ?? 0;
   const loopOut = prevDeck?.loopOutSec ?? Math.min(dur, loopIn + 16);
-  localPos = applyLoopWrap(localPos, loopActive, loopIn, loopOut);
-  const jogDelta = isPlaying ? (laneBpm / 60) * 360 * (1 / 60) : 0;
+  localPos = applyLoopWrap(localPos, loopActive && laneActive, loopIn, loopOut);
+  const deckPlaying = isPlaying && laneActive;
 
   return {
     deckIndex,
@@ -113,11 +186,11 @@ function buildDeckState(
     key: entry.key ?? "—",
     positionSec: localPos,
     durationSec: dur,
-    isPlaying,
+    isPlaying: deckPlaying,
     isLoaded: true,
-    jogAngle: (prevJogAngle + jogDelta) % 360,
-    pitchPercent: 0,
-    playLit: isPlaying,
+    jogAngle: vinylAngleFromPositionSec(localPos, deckPlaying ? playRate : 0),
+    pitchPercent: (playRate - 1) * 100,
+    playLit: deckPlaying,
     cueLit: false,
     hotCueSlots: prevDeck?.hotCueSlots ?? Array(8).fill(false),
     hotCueTimes: prevDeck?.hotCueTimes ?? Array(8).fill(null),
@@ -134,43 +207,69 @@ function buildChannelState(
   inTransition: boolean,
   transT: number,
   isOutgoing: boolean,
+  playheadSec: number,
+  isPlaying: boolean,
+  engineRoute: "set" | "dj",
+  waveCaches: Record<string, WaveformCache | null> | undefined,
+  nowMs: number,
+  crossfaderPos: number,
 ): DJMChannelState {
-  let high = mix.high;
-  let mid = mix.mid;
-  let low = mix.low;
-  let filter = mix.filter;
-  let faderDb = mix.faderDb;
+  const resolved = resolveDeckMixForChannel(
+    mix, lane, inTransition, transT, isOutgoing, playheadSec,
+  );
+  const {
+    trimDb, high, mid, low, filter, faderDb, signalFaderDb, cfAssign, cue, solo, mute,
+  } = resolved;
 
-  if (inTransition && lane) {
-    const gain = transitionGainCurve(transT, isOutgoing);
-    faderDb = GAIN_TO_DB(gain);
-    filter = transitionFilterCurve(transT, isOutgoing) * 12;
-    const eqKill = transitionEqKillCurve(transT, isOutgoing);
-    if (eqKill < 0) low = eqKill;
-  }
-
-  const trackId = lane != null ? deckTrackId(chIndex) : null;
+  const trackId = lane?.card.entryId
+    ? (engineRoute === "set" ? setTrackId(lane.card.entryId) : deckTrackId(chIndex))
+    : null;
   const meters = trackId
     ? useEngineStore.getState().trackStates[trackId]
     : null;
+
+  const localPos = lane ? Math.max(0, playheadSec - lane.startSec) : 0;
+  const cache = lane?.card.entryId ? waveCaches?.[lane.card.entryId] : null;
+  const meterMix: DeckMix = {
+    ...defaultDeckMix(),
+    trimDb,
+    faderDb: signalFaderDb,
+    cfAssign,
+    mute,
+  };
+  const meterFaderDb = effectiveVolumeDb(meterMix, crossfaderPos, engineRoute);
+  const { meterL, meterR } = simulateChannelMeters({
+    entryId: lane?.card.entryId ?? `ch-${chIndex}`,
+    cache,
+    localPosSec: localPos,
+    faderDb: meterFaderDb,
+    isPlaying: isPlaying && meterFaderDb > -50,
+    engineL: meters?.leftMeterDb,
+    engineR: meters?.rightMeterDb,
+    enginePeakL: meters?.peakLeftDb,
+    enginePeakR: meters?.peakRightDb,
+    bpm: lane?.entry.bpm ?? undefined,
+    nowMs,
+  });
 
   return {
     channelIndex: chIndex,
     entryId: lane?.card.entryId ?? null,
     deckLabel: lane ? `Deck ${chIndex + 1}` : `CH ${chIndex + 1}`,
     color: DECK_COLORS[chIndex],
-    trimDb: mix.trimDb,
+    trimDb,
     high,
     mid,
     low,
     filter,
     faderDb,
-    cfAssign: mix.cfAssign,
-    cue: mix.cue,
-    solo: mix.solo,
-    mute: mix.mute,
-    meterL: meters?.leftMeterDb ?? -90,
-    meterR: meters?.rightMeterDb ?? -90,
+    signalFaderDb,
+    cfAssign,
+    cue,
+    solo,
+    mute,
+    meterL,
+    meterR,
     beatFxActive: inTransition && isOutgoing,
   };
 }
@@ -184,12 +283,23 @@ export interface SimulationInput {
   mode: BoothMode;
   transitionPlans: Record<number, TransitionPlanData | null>;
   interactiveChannels: DJMChannelState[] | null;
+  engineRoute?: "set" | "dj";
+  waveCaches?: Record<string, WaveformCache | null>;
+  /** Timeline lane mixes keyed by lane index — drives Pioneer booth + engine. */
+  laneMixes?: Record<number, DeckMix>;
+  /** Wall clock for Pioneer LED blink phases (Mixxx ControlIndicator). */
+  nowMs?: number;
+  /** Per-deck playback rate from sync coordinator (1 = nominal pitch). */
+  deckRates?: Record<number, number>;
 }
 
 export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
   const {
     sorted, entryMap, playheadSec, isPlaying, prevSnapshot,
-    mode, transitionPlans, interactiveChannels,
+    mode, transitionPlans, interactiveChannels, engineRoute = "dj", waveCaches,
+    laneMixes,
+    nowMs = performance.now(),
+    deckRates,
   } = input;
   const layout = computeSetLayout(sorted, entryMap);
   const { lanes, transitions } = layout;
@@ -222,26 +332,63 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
 
   const mixes: Record<number, DeckMix> = {};
   for (let i = 0; i < lanes.length; i++) {
-    mixes[i] = {
-      ...defaultDeckMix(),
-      cfAssign: i % 2 === 0 ? "A" : "B",
-      faderDb: 0,
-    };
+    mixes[i] = laneMixes?.[i] ?? defaultDeckMix();
   }
 
   const prevDecks = prevSnapshot?.decks ?? [];
 
-  const decks: CDJDeckState[] = deckLanes.map((lane, i) =>
-    buildDeckState(
+  const resolvedDeckRates: Record<number, number> = { ...deckRates };
+  if (mode === "simulation" && activeTrans) {
+    const leaderIdx = deckLanes.findIndex(
+      l => l?.card.entryId === activeTrans.transition.fromEntryId,
+    );
+    const leaderBpm = leaderIdx >= 0
+      ? (deckLanes[leaderIdx]?.entry.bpm ?? 128)
+      : 128;
+    for (let i = 0; i < deckLanes.length; i++) {
+      const lane = deckLanes[i];
+      if (!lane) {
+        resolvedDeckRates[i] = 1;
+        continue;
+      }
+      if (i === leaderIdx) {
+        resolvedDeckRates[i] = 1;
+      } else {
+        const bpm = lane.entry.bpm ?? 128;
+        resolvedDeckRates[i] = Math.max(0.5, Math.min(2, leaderBpm / bpm));
+      }
+    }
+  }
+
+  const decks: CDJDeckState[] = deckLanes.map((lane, i) => {
+    const laneActive = !!lane
+      && playheadSec >= lane.startSec
+      && playheadSec < lane.endSec;
+    const deckPlaying = isPlaying && laneActive;
+    const playRate = resolvedDeckRates[i] ?? 1;
+    const base = buildDeckState(
       i,
       lane,
-      isPlaying && !!lane && playheadSec >= (lane?.startSec ?? 0) && playheadSec < (lane?.endSec ?? 0),
+      deckPlaying,
       playheadSec,
-      prevDecks[i]?.jogAngle ?? 0,
       layout.lanes[0]?.entry.bpm ?? 128,
       prevDecks[i],
-    ),
-  );
+      playRate,
+    );
+    const cueSec = firstCueSec(base.hotCueTimes, base.hotCueSlots);
+    const indicators = pioneerIndicators({
+      isLoaded: base.isLoaded,
+      deckPlaying,
+      localPosSec: base.positionSec,
+      cueSec,
+      durationSec: base.durationSec,
+    });
+    return {
+      ...base,
+      playLit: indicatorToLit(indicators.play, nowMs),
+      cueLit: indicatorToLit(indicators.cue, nowMs),
+    };
+  });
 
   if (mode === "simulation" && activeTrans) {
     const outLane = lanes.find(l => l.card.entryId === activeTrans.transition.fromEntryId);
@@ -254,7 +401,7 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
         decks.map((d, i) => ({
           deckIndex: i,
           bpm: d.bpm,
-          rate: 1,
+          rate: resolvedDeckRates[i] ?? 1,
           loaded: d.isLoaded,
         })),
       );
@@ -263,7 +410,7 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
 
   let channels: DJMChannelState[] = [0, 1, 2, 3].map(chIndex => {
     const lane = deckLanes[chIndex];
-    const mix = lane ? (mixes[lane.index] ?? defaultDeckMix()) : defaultDeckMix();
+    let mix = lane ? { ...(mixes[lane.index] ?? defaultDeckMix()) } : defaultDeckMix();
 
     let inTransition = false;
     let transT = 0;
@@ -275,14 +422,19 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
         inTransition = true;
         transT = activeTrans.t;
         isOutgoing = true;
+        mix.cfAssign = "A";
       } else if (lane.card.entryId === tr.toEntryId) {
         inTransition = true;
         transT = activeTrans.t;
         isOutgoing = false;
+        mix.cfAssign = "B";
       }
     }
 
-    const base = buildChannelState(chIndex, lane, mix, inTransition, transT, isOutgoing);
+    const base = buildChannelState(
+      chIndex, lane, mix, inTransition, transT, isOutgoing,
+      playheadSec, isPlaying, engineRoute, waveCaches, nowMs, crossfaderPos,
+    );
     if (interactiveChannels?.[chIndex]?.entryId === base.entryId) {
       const ic = interactiveChannels[chIndex];
       return {
@@ -293,6 +445,7 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
         low: ic.low,
         filter: ic.filter,
         faderDb: ic.faderDb,
+        signalFaderDb: ic.faderDb,
         cfAssign: ic.cfAssign,
         cue: ic.cue,
         solo: ic.solo,
@@ -333,16 +486,133 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
   };
 }
 
+export interface SetEnginePushContext {
+  lanes: LaneLayout[];
+  mixes: Record<number, DeckMix>;
+  playheadSec: number;
+  isPlaying: boolean;
+  mode: BoothMode;
+  activeTrans: { transition: TransitionRegion; t: number } | null;
+}
+
+/** Volume for set-preview engine — clips gate playback; don't silence by lane-active UI. */
+function resolveSetLaneEngineVolume(
+  mix: DeckMix,
+  lane: LaneLayout,
+  playheadSec: number,
+  inTransition: boolean,
+  transT: number,
+  isOutgoing: boolean,
+): number {
+  if (mix.mute) return -60;
+  const globalAutomation = useStudioAutomationStore.getState().globalEnabled;
+  const curves = useStudioAutomationStore.getState().tracks[lane.index]?.curves;
+  const automated = applyLaneAutomation(mix, curves, playheadSec, {
+    inTransition,
+    transT,
+    isOutgoing,
+    globalEnabled: globalAutomation,
+  });
+  return Math.max(-60, automated.faderDb);
+}
+
+function pushSetLaneMixes(
+  ctx: SetEnginePushContext,
+  crossfaderPos: number,
+): void {
+  for (const lane of ctx.lanes) {
+    let mix = { ...(ctx.mixes[lane.index] ?? defaultDeckMix()) };
+    let inTransition = false;
+    let transT = 0;
+    let isOutgoing = false;
+
+    if (ctx.activeTrans && ctx.mode === "simulation") {
+      const tr = ctx.activeTrans.transition;
+      if (lane.card.entryId === tr.fromEntryId) {
+        inTransition = true;
+        transT = ctx.activeTrans.t;
+        isOutgoing = true;
+      } else if (lane.card.entryId === tr.toEntryId) {
+        inTransition = true;
+        transT = ctx.activeTrans.t;
+        isOutgoing = false;
+      }
+    }
+
+    const globalAutomation = useStudioAutomationStore.getState().globalEnabled;
+    const curves = ctx.mixes[lane.index]
+      ? useStudioAutomationStore.getState().tracks[lane.index]?.curves
+      : undefined;
+    const automated = applyLaneAutomation(mix, curves, ctx.playheadSec, {
+      inTransition,
+      transT,
+      isOutgoing,
+      globalEnabled: globalAutomation,
+    });
+
+    const pushMix: DeckMix = {
+      ...defaultDeckMix(),
+      trimDb: mix.trimDb,
+      faderDb: resolveSetLaneEngineVolume(
+        mix, lane, ctx.playheadSec, inTransition, transT, isOutgoing,
+      ),
+      high: automated.high,
+      mid: automated.mid,
+      low: automated.low,
+      filter: automated.filter,
+      cfAssign: "THRU",
+      cue: false,
+      solo: false,
+      mute: mix.mute,
+      showAutomation: mix.showAutomation,
+    };
+    applyDeckMixToEngine(lane.card.entryId, pushMix, crossfaderPos);
+  }
+}
+
+/** Push timeline deck mixes to set-preview engine (independent of booth RAF). */
+export function pushSetEngineMixes(
+  lanes: LaneLayout[],
+  transitions: TransitionRegion[],
+  mixes: Record<number, DeckMix>,
+  playheadSec: number,
+  mode: BoothMode = "simulation",
+): void {
+  pushSetLaneMixes(
+    {
+      lanes,
+      mixes,
+      playheadSec,
+      isPlaying: true,
+      mode,
+      activeTrans: findActiveTransition(transitions, playheadSec),
+    },
+    0.5,
+  );
+}
+
 /** Push computed channel mixes to engine. */
 export function pushBoothToEngine(
   snapshot: BoothSnapshot,
+  route: "set" | "dj" = "dj",
+  setCtx?: SetEnginePushContext,
 ): void {
-  const mixes: Record<number, DeckMix> = {};
+  if (route !== "set") {
+    void engineClient.setCrossfader(snapshot.mixer.crossfaderPos);
+  }
 
+  if (route === "set" && setCtx) {
+    pushSetLaneMixes(setCtx, snapshot.mixer.crossfaderPos);
+    return;
+  }
+
+  const slotMixes: Record<number, DeckMix> = {};
   snapshot.channels.forEach(ch => {
     if (!ch.entryId) return;
-    const faderDb = snapshot.mode === "simulation" ? ch.faderDb : (ch.faderDb || 0);
-    mixes[ch.channelIndex] = {
+    const faderDb = snapshot.mode === "simulation"
+      ? ch.signalFaderDb
+      : (ch.signalFaderDb || ch.faderDb || 0);
+    const mix: DeckMix = {
       ...defaultDeckMix(),
       trimDb: ch.trimDb,
       faderDb: Math.max(-60, faderDb),
@@ -356,7 +626,9 @@ export function pushBoothToEngine(
       mute: ch.mute,
       showAutomation: true,
     };
+    slotMixes[ch.channelIndex] = mix;
   });
-
-  applyAllDeckMixesBySlot(mixes, snapshot.mixer.crossfaderPos);
+  if (Object.keys(slotMixes).length > 0) {
+    applyAllDeckMixesBySlot(slotMixes, snapshot.mixer.crossfaderPos);
+  }
 }

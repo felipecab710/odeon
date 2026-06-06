@@ -170,7 +170,7 @@ function LoopCueBtn() {
 }
 
 export function FigmaCDJ3000({
-  deck, entry, timelineStartSec = 0, interactive, onCue, onHotcue,
+  deck, entry, interactive, onCue, onHotcue,
 }: Props) {
   const [cache, setCache] = useState<WaveformCache | null>(null);
   const dur = cache?.duration_seconds || deck.durationSec || 0;
@@ -180,8 +180,8 @@ export function FigmaCDJ3000({
     loadWaveformCache(entry.file_path).then(setCache).catch(() => setCache(null));
   }, [entry?.file_path]);
 
-  const cueLit = deck.cueLit || !interactive;
-  const playLit = deck.playLit || !interactive;
+  const cueLit = deck.cueLit;
+  const playLit = deck.playLit;
 
   const artworkUrl = useMemo(
     () => (entry?.has_artwork && entry?.id ? apiClient.select.artworkUrl(entry.id) : null),
@@ -303,11 +303,14 @@ export function FigmaCDJ3000({
         >
           <JogWheelCenterDisplay
             deckIndex={deck.deckIndex}
-            timelineStartSec={timelineStartSec}
+            positionSec={deck.positionSec}
             durationSec={dur || deck.durationSec}
             isLoaded={deck.isLoaded}
             isPlaying={deck.isPlaying}
             loopActive={deck.loopActive}
+            loopInSec={deck.loopInSec}
+            loopOutSec={deck.loopOutSec}
+            playRate={1 + deck.pitchPercent / 100}
             artworkUrl={artworkUrl}
             artist={deck.artist}
             title={deck.title}

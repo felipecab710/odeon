@@ -22,7 +22,7 @@ function MiniWaveform({ entry, mode }: { entry: CatalogEntry; mode: WaveformMode
     setCache(null);
     setFailed(false);
     let cancelled = false;
-    loadWaveformCache(entry.file_path, entry.waveform_cache_path)
+    loadWaveformCache(entry.file_path, entry.waveform_cache_path, entry.id)
       .then(c => {
         if (cancelled) return;
         if (c) setCache(c);
@@ -55,6 +55,14 @@ function formatDuration(s?: number | null): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60).toString().padStart(2, "0");
   return `${m}:${sec}`;
+}
+
+function fileFormat(entry: CatalogEntry): string {
+  const name = entry.file_name || entry.file_path;
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return "—";
+  const ext = name.slice(dot + 1).trim();
+  return ext ? ext.toUpperCase() : "—";
 }
 
 function StatusBadge({ status }: { status: CatalogEntry["status"] }) {
@@ -105,6 +113,7 @@ const COLUMNS = [
   { key: "title",    label: "TITLE",    width: 180, tip: false },
   { key: "artist",   label: "ARTIST",   width: 140, tip: false },
   { key: "album",    label: "ALBUM",    width: 120, tip: false },
+  { key: "Format",   label: "FORMAT",   width: 52,  tip: true  },
   { key: "Duration", label: "DURATION", width: 68,  tip: true  },
   { key: "BPM",      label: "BPM",      width: 58,  tip: true  },
   { key: "Key",      label: "KEY",      width: 60,  tip: true  },
@@ -217,6 +226,9 @@ export function CatalogTable() {
                 </td>
                 <td style={{ padding: "4px 10px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#666" }}>
                   {entry.album ?? "—"}
+                </td>
+                <td style={{ padding: "4px 10px", color: "#777", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em" }}>
+                  {fileFormat(entry)}
                 </td>
                 <td style={{ padding: "4px 10px", color: "#888", fontVariantNumeric: "tabular-nums" }}>
                   {formatDuration(entry.duration_seconds)}

@@ -199,8 +199,14 @@ export const apiClient = {
     transitionStats: (entryId: string) =>
       request<TransitionStats>("GET", `/select/entries/${entryId}/transition-stats`),
 
+    proDjStatus: () =>
+      request<ProDjStatus>("GET", "/select/pro-dj/status"),
+
     fetch1001TL: (entryId: string) =>
       request<{ queued: boolean; track: string }>("POST", `/select/entries/${entryId}/fetch-1001tl`),
+
+    tlFetchStatus: (entryId: string) =>
+      request<TlFetchStatus>("GET", `/select/entries/${entryId}/tl-fetch-status`),
 
     fetch1001TLLibrary: (limit = 20) =>
       request<{ queued: number }>("POST", `/select/fetch-1001tl-library?limit=${limit}`),
@@ -303,14 +309,17 @@ export interface SimilarResult {
 }
 
 export interface TransitionResult {
-  entry_id: string;
+  entry_id: string | null;
   title: string;
   artist?: string | null;
   bpm?: number | null;
   key?: string | null;
   has_artwork: boolean;
   transition_count: number;
+  pro_count?: number;
+  user_count?: number;
   source: string;
+  in_library?: boolean;
 }
 
 export interface TransitionStats {
@@ -318,6 +327,22 @@ export interface TransitionStats {
   total_transitions: number;
   sources: number;
   has_data: boolean;
+}
+
+export interface ProDjStatus {
+  configured: boolean;
+  provider: string;
+  signup_url: string;
+}
+
+export interface TlFetchStatus {
+  phase: "idle" | "searching" | "scanning" | "done";
+  scanned?: number;
+  total?: number;
+  error?: "no_api_key" | "api_error" | "track_not_found" | "no_sets" | "no_matches" | "blocked" | "fetch_failed" | "disabled";
+  library_matches?: number;
+  pro_transitions?: number;
+  tl_track?: string;
 }
 
 export interface SearchStatus {

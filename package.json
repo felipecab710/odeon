@@ -10,7 +10,11 @@
   "scripts": {
     "desktop": "pnpm --filter desktop dev",
     "api": "cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000",
-    "dev": "pnpm api & pnpm desktop"
+    "dev": "pnpm api & pnpm desktop",
+    "dev:all": "concurrently -n api,desktop -c blue,green \"pnpm api\" \"pnpm --filter desktop tauri dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   },
   "engines": {
     "node": ">=20.0.0"

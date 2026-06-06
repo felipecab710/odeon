@@ -2,6 +2,7 @@
  * Compact Pioneer-style channel fader.
  */
 import { useCallback, useEffect, useRef } from "react";
+import { beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
 import { faderDbToPos, faderPosToDb } from "../../lib/proToolsFaderScale";
 import { PioneerFaderCap } from "./PioneerFaderCap";
 
@@ -31,7 +32,10 @@ export function DJMVerticalFader({ valueDb, onChange, height = 52 }: Props) {
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => { if (dragging.current) updateFromY(e.clientY); };
-    const onUp = () => { dragging.current = false; };
+    const onUp = () => {
+      if (dragging.current) endUndoGesture();
+      dragging.current = false;
+    };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => {
@@ -43,7 +47,12 @@ export function DJMVerticalFader({ valueDb, onChange, height = 52 }: Props) {
   return (
     <div
       ref={trackRef}
-      onMouseDown={(e) => { e.preventDefault(); dragging.current = true; updateFromY(e.clientY); }}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        dragging.current = true;
+        beginUndoGesture();
+        updateFromY(e.clientY);
+      }}
       onDoubleClick={() => onChange(0)}
       style={{
         width: 16, height, position: "relative",

@@ -8,8 +8,11 @@ export const FIELD_TOOLTIPS: Record<string, string> = {
   Status:
     "Shows where this track is in the analysis pipeline. Pending = not yet processed. Analyzing = running now. Ready = all data available. Error = something went wrong with the file (usually a corrupt or unsupported format).",
 
+  Format:
+    "Audio file container/codec (WAV, FLAC, MP3, etc.). Lossless formats (WAV, FLAC, AIFF) preserve full quality; compressed formats (MP3, M4A) trade file size for some fidelity.",
+
   Duration:
-    "Total length of the track in seconds. Knowing this helps you plan mixes — a 6-minute track gives you more time to blend out of a previous track than a 3-minute edit.",
+    "Total track length (minutes:seconds). Knowing this helps you plan mixes — a 6-minute track gives you more time to blend out of a previous track than a 3-minute edit.",
 
   BPM:
     "Beats per minute — the speed of the track. DJs use BPM to beatmatch: two tracks at the same BPM can be synced so their beats land together. Mixing tracks within ±4 BPM of each other usually sounds natural. Big jumps (e.g. 128 → 140) will feel jarring unless you do a full stop or transition.",

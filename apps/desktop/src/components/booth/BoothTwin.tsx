@@ -23,12 +23,13 @@ import { SchematicDJM, type ChannelHandlers } from "./SchematicDJM";
 interface Props {
   entryMap: Map<string, CatalogEntry>;
   interactive?: boolean;
+  compact?: boolean;
   onCrossfaderChange?: (pos: number) => void;
   getTimelineStart?: (entryId: string) => number;
 }
 
 export function BoothTwin({
-  entryMap, interactive, onCrossfaderChange, getTimelineStart,
+  entryMap, interactive, compact, onCrossfaderChange, getTimelineStart,
 }: Props) {
   const {
     decks, channels, mixer, simulationActive,
@@ -97,32 +98,33 @@ export function BoothTwin({
       background: "radial-gradient(ellipse at 50% 0%, #141414 0%, #080808 70%)",
       overflow: "hidden",
     }}>
-      {/* Status bar */}
-      <div style={{
-        height: 32, flexShrink: 0, background: "#111", borderBottom: "1px solid #222",
-        display: "flex", alignItems: "center", padding: "0 12px", gap: 10, fontSize: 9,
-      }}>
-        <span style={{ color: simulationActive ? "#4caf50" : "#666", fontWeight: 700 }}>
-          {simulationActive ? "● LIVE" : "○ STANDBY"}
-        </span>
-        {!simulationActive && (
-          <span style={{ color: "#555", fontSize: 8 }}>press ▶ to simulate</span>
-        )}
-        {currentTransitionIndex != null && (
-          <span style={{ color: "#6495ed", fontWeight: 600 }}>
-            T{currentTransitionIndex + 1}→{currentTransitionIndex + 2}
-            {transitionStrategy ? ` · ${transitionStrategy.replace(/_/g, " ")}` : ""}
+      {!compact && (
+        <div style={{
+          height: 32, flexShrink: 0, background: "#111", borderBottom: "1px solid #222",
+          display: "flex", alignItems: "center", padding: "0 12px", gap: 10, fontSize: 9,
+        }}>
+          <span style={{ color: simulationActive ? "#4caf50" : "#666", fontWeight: 700 }}>
+            {simulationActive ? "● LIVE" : "○ STANDBY"}
           </span>
-        )}
-        {mossReason && (
-          <span style={{ color: "#888", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {mossReason}
+          {!simulationActive && (
+            <span style={{ color: "#555", fontSize: 8 }}>press ▶ to simulate</span>
+          )}
+          {currentTransitionIndex != null && (
+            <span style={{ color: "#6495ed", fontWeight: 600 }}>
+              T{currentTransitionIndex + 1}→{currentTransitionIndex + 2}
+              {transitionStrategy ? ` · ${transitionStrategy.replace(/_/g, " ")}` : ""}
+            </span>
+          )}
+          {mossReason && (
+            <span style={{ color: "#888", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {mossReason}
+            </span>
+          )}
+          <span style={{ color: "#555", marginLeft: "auto" }}>
+            {Math.floor(playheadSec / 60)}:{Math.floor(playheadSec % 60).toString().padStart(2, "0")}
           </span>
-        )}
-        <span style={{ color: "#555", marginLeft: "auto" }}>
-          {Math.floor(playheadSec / 60)}:{Math.floor(playheadSec % 60).toString().padStart(2, "0")}
-        </span>
-      </div>
+        </div>
+      )}
 
       <BoothScale>
         <SchematicCDJ

@@ -2,6 +2,7 @@
  * Pioneer-style rotary knob — drag vertically to adjust, double-click resets.
  */
 import { useCallback, useRef, useState } from "react";
+import { beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
 
 interface Props {
   value: number;
@@ -38,6 +39,7 @@ export function DJMKnob({
     dragging.current = true;
     startY.current = e.clientY;
     startVal.current = value;
+    beginUndoGesture();
 
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
@@ -45,6 +47,7 @@ export function DJMKnob({
     };
     const onUp = () => {
       dragging.current = false;
+      endUndoGesture();
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };

@@ -470,6 +470,7 @@ def _binary_to_pyramid(data: bytes) -> dict[str, Any] | None:
         "duration_seconds": meta["duration_seconds"],
         "global_peak": global_peak,
         "block_sizes": meta["block_sizes"],
+        "total_samples": total_samples,
         "levels": levels,
         "source_hash": meta.get("source_hash"),
         "freq_colors": freq_colors,  # (256, 3) uint8 or None
@@ -492,6 +493,23 @@ def write_waveform_cache(
     dest = cache_path_for(audio_path)
     dest.write_bytes(_pyramid_to_binary(pyramid, audio_path, freq_colors, overview))
     return dest
+
+
+def is_waveform_cache_valid(
+    pyramid: dict[str, Any],
+    duration_seconds: float,
+    sample_rate: int,
+) -> bool:
+    """Reject sidecars whose pyramid has far too few buckets for the track length."""
+    if duration_seconds < 5 or sample_rate <= 0:
+        return True
+    levels = pyramid.get("levels") or {}
+    if not levels:
+        return False
+    max_buckets = max(len(v) for v in levels.values())
+    expected = int(duration_seconds * sample_rate)
+    min_expected = max(20, expected // PYRAMID_BLOCK_SIZES[-1])
+    return max_buckets >= min_expected
 
 
 def read_waveform_cache(audio_path: str | Path) -> dict[str, Any] | None:

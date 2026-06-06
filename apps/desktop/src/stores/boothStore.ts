@@ -44,6 +44,8 @@ export interface DJMChannelState {
   low: number;
   filter: number;
   faderDb: number;
+  /** Effective fader for meters/engine — silent when lane is off-timeline. */
+  signalFaderDb: number;
   cfAssign: CfAssign;
   cue: boolean;
   solo: boolean;
@@ -118,6 +120,7 @@ function defaultChannel(i: number): DJMChannelState {
     low: 0,
     filter: 0,
     faderDb: 0,
+    signalFaderDb: -60,
     cfAssign: "THRU",
     cue: false,
     solo: false,

@@ -23,6 +23,7 @@ from .embeddings import (
 from .transition_graph import (
     init_transition_db, record_transition, get_next_by_transitions,
     transition_stats, fetch_transitions_for_track, rebuild_key_map,
+    get_fetch_progress,
 )
 from .markers import delete_marker, get_markers, init_markers_db, upsert_marker
 from .metadata import get_artwork_bytes
@@ -114,6 +115,20 @@ def _rebuild_one_waveform(entry_id: str) -> bool:
         return True
     except Exception as e:
         return False
+
+
+@router.post("/entries/{entry_id}/rebuild-waveform")
+async def rebuild_entry_waveform(entry_id: str):
+    """Rebuild .odeon.wavecache for one READY entry (fast — waveform only)."""
+    entry = get_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry not found")
+    if entry.status != CatalogEntryStatus.ready:
+        raise HTTPException(400, "Entry must be analyzed (ready) before rebuilding waveform")
+    ok = _rebuild_one_waveform(entry_id)
+    if not ok:
+        raise HTTPException(500, "Waveform rebuild failed")
+    return {"rebuilt": True, "entry_id": entry_id}
 
 
 @router.post("/rebuild-waveforms")
@@ -782,11 +797,26 @@ def get_transitions(entry_id: str, limit: int = 5, exclude_ids: str = ""):
         title=entry.title or entry.file_name,
         exclude_ids=exclude,
         limit=limit,
+        include_unmatched=True,
     )
 
-    # Resolve entry_ids to full entries
     result = []
     for n in nexts:
+        if n.get("in_library") is False or not n.get("entry_id"):
+            result.append({
+                "entry_id": n.get("entry_id"),
+                "title": n.get("title") or "unknown",
+                "artist": n.get("artist"),
+                "bpm": None,
+                "key": None,
+                "has_artwork": False,
+                "transition_count": n["transition_count"],
+                "pro_count": n.get("pro_count", 0),
+                "user_count": n.get("user_count", 0),
+                "source": n["source"],
+                "in_library": False,
+            })
+            continue
         e = get_entry(n["entry_id"])
         if e:
             result.append({
@@ -797,7 +827,10 @@ def get_transitions(entry_id: str, limit: int = 5, exclude_ids: str = ""):
                 "key": e.key,
                 "has_artwork": e.has_artwork,
                 "transition_count": n["transition_count"],
+                "pro_count": n.get("pro_count", 0),
+                "user_count": n.get("user_count", 0),
                 "source": n["source"],
+                "in_library": True,
             })
 
     return result
@@ -814,18 +847,23 @@ def get_transition_stats(entry_id: str):
     return stats
 
 
+@router.get("/pro-dj/status")
+def pro_dj_status_endpoint():
+    """Whether Parse.bot API key is configured for 1001tracklists pro-DJ data."""
+    from .tl_provider import pro_dj_status
+    return pro_dj_status()
+
+
 @router.post("/entries/{entry_id}/fetch-1001tl")
 def fetch_1001tl(entry_id: str, background_tasks=None):
     """
-    Trigger a 1001tracklists.com fetch for this track in the background.
-    Finds DJ sets containing this track and records what came before/after.
-    Rate-limited (3s between requests). Results cached for 7 days.
+    Fetch pro-DJ transitions from 1001tracklists via Parse.bot.
+    Requires PARSE_API_KEY in apps/api/.env.
     """
     entry = get_entry(entry_id)
     if not entry:
         raise HTTPException(404, f"Entry not found: {entry_id}")
 
-    # Rebuild key map first so matches work
     all_entries = list_entries(status="ready", limit=5000)
     rebuild_key_map(all_entries)
 
@@ -842,15 +880,21 @@ def fetch_1001tl(entry_id: str, background_tasks=None):
     return {"queued": True, "track": entry.title or entry.file_name}
 
 
+@router.get("/entries/{entry_id}/tl-fetch-status")
+def tl_fetch_status(entry_id: str):
+    """Poll while a 1001TL background fetch is running."""
+    return get_fetch_progress(entry_id)
+
+
 @router.post("/fetch-1001tl-library")
 def fetch_1001tl_library(limit: int = 50):
-    """
-    Trigger 1001TL fetching for up to `limit` tracks in the library (background).
-    Start with limit=10 to test — each track takes 3-30s due to rate limiting.
-    """
+    """Prefetch pro-DJ data for up to `limit` library tracks (background)."""
+    from .tl_provider import is_pro_dj_configured
+    if not is_pro_dj_configured():
+        return {"queued": 0, "error": "no_api_key"}
+
     entries = list_entries(status="ready", limit=5000)
     rebuild_key_map(entries)
-
     targets = entries[:limit]
 
     import threading
@@ -867,7 +911,6 @@ def fetch_1001tl_library(limit: int = 50):
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-
     return {"queued": len(targets)}
 
 

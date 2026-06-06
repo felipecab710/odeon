@@ -12,7 +12,7 @@ export function channelToDeckMix(ch: DJMChannelState): DeckMix {
   return {
     ...defaultDeckMix(),
     trimDb: ch.trimDb,
-    faderDb: ch.faderDb,
+    faderDb: ch.signalFaderDb ?? ch.faderDb,
     high: ch.high,
     mid: ch.mid,
     low: ch.low,

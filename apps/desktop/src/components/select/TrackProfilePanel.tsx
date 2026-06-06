@@ -39,6 +39,21 @@ function formatTime(s: number): string {
   return `${m}:${sec}`;
 }
 
+function formatDuration(s?: number | null): string {
+  if (s == null) return "—";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60).toString().padStart(2, "0");
+  return `${m}:${sec}`;
+}
+
+function fileFormat(entry: CatalogEntry): string {
+  const name = entry.file_name || entry.file_path;
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return "—";
+  const ext = name.slice(dot + 1).trim();
+  return ext ? ext.toUpperCase() : "—";
+}
+
 // ─────────────────────────────────────────────
 //  Sub-components
 // ─────────────────────────────────────────────
@@ -270,7 +285,7 @@ export function TrackProfilePanel() {
   // Load waveform cache when entry is ready
   useEffect(() => {
     if (!entry?.file_path || entry.status !== "ready") return;
-    loadWaveformCache(entry.file_path).then(c => setCache(c)).catch(() => {});
+    loadWaveformCache(entry.file_path, entry.waveform_cache_path, entry.id).then(c => setCache(c)).catch(() => {});
   }, [entry?.file_path, entry?.status]);
 
   const handleAddMarker = useCallback(async (req: CreateMarkerRequest) => {
@@ -370,7 +385,8 @@ export function TrackProfilePanel() {
           {entry.file_name}
         </div>
         <MetaRow label="Status"   value={entry.status} />
-        <MetaRow label="Duration" value={entry.duration_seconds != null ? `${entry.duration_seconds.toFixed(1)}s` : null} />
+        <MetaRow label="Format"   value={fileFormat(entry)} />
+        <MetaRow label="Duration" value={formatDuration(entry.duration_seconds)} />
         <MetaRow label="BPM"      value={entry.bpm != null ? entry.bpm.toFixed(2) : null} />
         <MetaRow label="Key"      value={entry.key} />
         <MetaRow label="LUFS"     value={entry.integrated_lufs != null ? entry.integrated_lufs.toFixed(1) : null} />

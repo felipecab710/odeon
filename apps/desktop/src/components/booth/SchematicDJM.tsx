@@ -33,7 +33,6 @@ const RIGHT_COL_W = 124;
 const DJM_H_PAD = 8; // main row padding left + right
 const DJM_COL_GAP = 6; // two 3px column gaps
 const CHANNELS_W = CHANNEL_W * 4;
-const CROSSFADER_SECTION_H = 38;
 /** Outer chassis width — fits columns exactly, no dead space on the right */
 export const DJM_WIDTH = DJM_H_PAD + LEFT_COL_W + DJM_COL_GAP + CHANNELS_W + DJM_COL_GAP + RIGHT_COL_W;
 const SEND_FX = ["SHORT", "LONG", "DUB", "REVERB"] as const;
@@ -159,26 +158,30 @@ function masterLedGlow(fromTop: number, lit: boolean): string {
 /** Stereo master VU — L/R LED columns with central dB silkscreen */
 function MasterVuMeter({ leftDb, rightDb, height }: { leftDb: number; rightDb: number; height: number }) {
   const segs = MASTER_METER_DB.length;
-  const toLit = (db: number) => {
+  const toLevel = (db: number) => {
     const clamped = Math.max(-33, Math.min(9, db));
-    return Math.round(((clamped + 33) / 42) * segs);
+    return ((clamped + 33) / 42) * segs;
   };
-  const lLit = toLit(leftDb);
-  const rLit = toLit(rightDb);
+  const lLevel = toLevel(leftDb);
+  const rLevel = toLevel(rightDb);
 
-  const ledCol = (litCount: number) => (
+  const ledCol = (level: number) => (
     <div style={{
       width: 8, display: "flex", flexDirection: "column-reverse",
       justifyContent: "space-between", alignItems: "center",
       padding: "3px 1px", height: "100%",
     }}>
       {MASTER_METER_DB.map((_, i) => {
-        const lit = i < litCount;
+        const fullLit = i < Math.floor(level);
+        const partial = i === Math.floor(level) && level - Math.floor(level) > 0.04;
+        const lit = fullLit || partial;
         const fromTop = segs - 1 - i;
+        const color = masterLedColor(fromTop, lit);
         return (
           <div key={i} style={{
             width: 3.5, height: 3.5, borderRadius: "50%", flexShrink: 0,
-            background: masterLedColor(fromTop, lit),
+            background: color,
+            opacity: partial ? 0.35 + (level - Math.floor(level)) * 0.65 : 1,
             boxShadow: masterLedGlow(fromTop, lit),
             border: lit ? "none" : "1px solid #0a0a0a",
           }} />
@@ -197,7 +200,7 @@ function MasterVuMeter({ leftDb, rightDb, height }: { leftDb: number; rightDb: n
         border: "1px solid #4a4a4a",
         boxShadow: "inset 0 2px 5px rgba(0,0,0,0.9)",
       }}>
-        {ledCol(lLit)}
+        {ledCol(lLevel)}
         <div style={{
           position: "relative", width: 11, height: "100%",
           fontSize: 4, color: "#c8c8c8", fontWeight: 600,
@@ -213,7 +216,7 @@ function MasterVuMeter({ leftDb, rightDb, height }: { leftDb: number; rightDb: n
             </span>
           ))}
         </div>
-        {ledCol(rLit)}
+        {ledCol(rLevel)}
       </div>
       <div style={{
         display: "flex", gap: 14, fontSize: 5, color: PIONEER.label,
@@ -296,7 +299,7 @@ function chLedGlow(segFromTop: number, lit: boolean): string {
 function ChannelMeter({ db, height }: { db: number; height: number }) {
   const segs = CHANNEL_METER_DB.length;
   const clamped = Math.max(-30, Math.min(12, db));
-  const litCount = Math.round(((clamped + 30) / 42) * segs);
+  const level = ((clamped + 30) / 42) * segs;
 
   return (
     <div style={{ display: "flex", gap: 2, height, alignItems: "stretch", flexShrink: 0 }}>
@@ -310,12 +313,16 @@ function ChannelMeter({ db, height }: { db: number; height: number }) {
         boxShadow: "inset 0 3px 6px rgba(0,0,0,0.95)",
       }}>
         {CHANNEL_METER_DB.map((_, i) => {
-          const lit = i < litCount;
+          const fullLit = i < Math.floor(level);
+          const partial = i === Math.floor(level) && level - Math.floor(level) > 0.04;
+          const lit = fullLit || partial;
           const fromTop = segs - 1 - i;
+          const color = chLedColor(fromTop, lit);
           return (
             <div key={i} style={{
               width: 4.5, height: 4.5, borderRadius: "50%", flexShrink: 0,
-              background: chLedColor(fromTop, lit),
+              background: color,
+              opacity: partial ? 0.35 + (level - Math.floor(level)) * 0.65 : 1,
               boxShadow: chLedGlow(fromTop, lit),
               border: lit ? "none" : "1px solid #141414",
             }} />
@@ -690,141 +697,6 @@ function PioneerCueButton({ active, onClick }: { active?: boolean; onClick?: () 
   );
 }
 
-/** Silver crossfader cap — wide horizontal slider (V10 reference) */
-function CrossfaderCap({ leftPct }: { leftPct: number }) {
-  return (
-    <div style={{
-      position: "absolute",
-      left: `${leftPct}%`,
-      top: "50%",
-      transform: "translate(-50%, -50%)",
-      width: 54,
-      height: 15,
-      borderRadius: 3,
-      background: [
-        "linear-gradient(180deg,",
-        "#2a2a2a 0%, #6a6a6a 12%, #a0a0a0 26%,",
-        "#d8d8d8 40%, #f4f4f4 47%, #ffffff 49%,",
-        "#ffffff 51%, #ececec 56%, #c0c0c0 70%,",
-        "#707070 86%, #303030 100%)",
-      ].join(" "),
-      boxShadow: "0 2px 5px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.55)",
-      pointerEvents: "none",
-      zIndex: 2,
-    }}>
-      <div style={{
-        position: "absolute", left: 5, right: 5, top: "50%",
-        height: 1.5, transform: "translateY(-50%)",
-        background: "#181818",
-      }} />
-    </div>
-  );
-}
-
-/** Bottom crossfader bar — aligned under channel strips, A/B labels, model badge */
-function PioneerCrossfaderBar({
-  position, interactive, onChange,
-}: {
-  position: number;
-  interactive?: boolean;
-  onChange?: (pos: number) => void;
-}) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-
-  const updateFromX = useCallback((clientX: number) => {
-    if (!onChange) return;
-    const rect = trackRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    onChange(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)));
-  }, [onChange]);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => { if (dragging.current) updateFromX(e.clientX); };
-    const onUp = () => { dragging.current = false; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [updateFromX]);
-
-  return (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      padding: `4px 4px 5px`,
-      gap: 3,
-      flexShrink: 0,
-      height: CROSSFADER_SECTION_H,
-      boxSizing: "border-box",
-      background: "linear-gradient(180deg, #1c1c1c 0%, #101010 100%)",
-      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-    }}>
-      <div style={{ width: LEFT_COL_W, flexShrink: 0 }} />
-      <div style={{
-        width: CHANNELS_W,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-      }}>
-        <span style={{
-          fontSize: 8, color: "#ffffff", fontWeight: 800,
-          width: 7, flexShrink: 0, lineHeight: 1,
-        }}>
-          A
-        </span>
-        <div
-          ref={trackRef}
-          onMouseDown={e => {
-            if (!interactive || !onChange) return;
-            e.preventDefault();
-            dragging.current = true;
-            updateFromX(e.clientX);
-          }}
-          onDoubleClick={() => onChange?.(0.5)}
-          style={{
-            flex: 1,
-            height: 10,
-            borderRadius: 5,
-            position: "relative",
-            background: "linear-gradient(180deg, #020202 0%, #0a0a0a 45%, #060606 55%, #020202 100%)",
-            boxShadow: "inset 0 2px 6px rgba(0,0,0,0.95), inset 0 -1px 3px rgba(0,0,0,0.8)",
-            border: "1px solid #000",
-            cursor: interactive && onChange ? "ew-resize" : "default",
-          }}
-        >
-          <CrossfaderCap leftPct={position * 100} />
-        </div>
-        <span style={{
-          fontSize: 8, color: "#ffffff", fontWeight: 800,
-          width: 7, flexShrink: 0, textAlign: "right", lineHeight: 1,
-        }}>
-          B
-        </span>
-      </div>
-      <div style={{
-        width: RIGHT_COL_W,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "flex-end",
-        justifyContent: "flex-end",
-        paddingLeft: 3,
-        height: "100%",
-      }}>
-        <span style={{
-          fontSize: 4.5, color: "#a8a8a8", fontWeight: 600,
-          letterSpacing: "0.1em", lineHeight: 1, whiteSpace: "nowrap",
-        }}>
-          PROFESSIONAL MIXER DJM-V10
-        </span>
-      </div>
-    </div>
-  );
-}
-
 interface Props {
   channels: DJMChannelState[];
   mixer: DJMMixerState;
@@ -840,7 +712,7 @@ const BRUSHED: CSSProperties = {
     "linear-gradient(180deg, #232323 0%, #1a1a1a 6%, #161616 60%, #101010 100%)",
 };
 
-export function SchematicDJM({ channels, mixer, onCrossfaderChange, interactive, channelHandlers }: Props) {
+export function SchematicDJM({ channels, mixer, interactive, channelHandlers }: Props) {
   const h = channelHandlers;
   const knob = (fn?: (v: number) => void) => interactive ? fn : undefined;
 
@@ -1134,11 +1006,6 @@ export function SchematicDJM({ channels, mixer, onCrossfaderChange, interactive,
         </div>
       </div>
 
-      <PioneerCrossfaderBar
-        position={mixer.crossfaderPos}
-        interactive={interactive}
-        onChange={onCrossfaderChange}
-      />
     </PioneerChassis>
   );
 }

@@ -52,12 +52,21 @@ export function defaultDeckMix(): DeckMix {
   };
 }
 
-/** Pioneer-style constant-power crossfader weight (0 = full A, 1 = full B). */
+/**
+ * Mixxx EngineXfader constant-power bus gains (LEFT=0, CENTER=1, RIGHT=2).
+ * Returns linear gain 0..1 for the channel's orientation bus.
+ */
 export function crossfaderWeight(assign: CfAssign, position: number): number {
   const t = Math.max(0, Math.min(1, position));
-  if (assign === "THRU") return 1;
-  if (assign === "A") return Math.cos(t * Math.PI * 0.5);
-  return Math.sin(t * Math.PI * 0.5);
+  const left = Math.cos(t * Math.PI * 0.5);
+  const right = Math.sin(t * Math.PI * 0.5);
+  const norm = Math.sqrt(left * left + right * right) || 1;
+  const nLeft = left / norm;
+  const nRight = right / norm;
+
+  if (assign === "A") return nLeft;
+  if (assign === "B") return nRight;
+  return 1; // THRU → CENTER bus (Mixxx orientation 1)
 }
 
 export function crossfaderWeightToDb(weight: number): number {
@@ -65,9 +74,21 @@ export function crossfaderWeightToDb(weight: number): number {
   return 20 * Math.log10(weight);
 }
 
-export function effectiveVolumeDb(mix: DeckMix, crossfaderPos: number): number {
+/**
+ * @param route — Studio set timeline uses per-clip levels only (no A/B bus).
+ *   Crossfader is visual on the booth; the engine already mixes overlapping clips.
+ */
+export function effectiveVolumeDb(
+  mix: DeckMix,
+  crossfaderPos: number,
+  route: "set" | "dj" = "dj",
+): number {
+  const base = mix.trimDb + mix.faderDb;
+  if (route === "set") {
+    return Math.max(-120, Math.min(12, base));
+  }
   const cfDb = crossfaderWeightToDb(crossfaderWeight(mix.cfAssign, crossfaderPos));
-  return Math.max(-120, Math.min(12, mix.trimDb + mix.faderDb + cfDb));
+  return Math.max(-120, Math.min(12, base + cfDb));
 }
 
 export function applyDeckMixToEngine(
@@ -96,7 +117,8 @@ function applyDeckMixByTrackId(
   mix: DeckMix,
   crossfaderPos: number,
 ): void {
-  const volumeDb = effectiveVolumeDb(mix, crossfaderPos);
+  const route = trackId.startsWith("set:") ? "set" : "dj";
+  const volumeDb = effectiveVolumeDb(mix, crossfaderPos, route);
   const soloed = mix.solo || mix.cue;
   const deckIndex = parseDeckIndex(trackId);
 
@@ -123,7 +145,12 @@ function applyDeckMixByTrackId(
 
   engineClient.setTrackVolume(trackId, volumeDb);
   engineClient.muteTrack(trackId, mix.mute);
-  engineClient.soloTrack(trackId, soloed);
+  // Set timeline has no PFL bus — cue/solo would silence non-soloed arrangement lanes.
+  if (route === "dj") {
+    engineClient.soloTrack(trackId, soloed);
+  } else {
+    engineClient.soloTrack(trackId, false);
+  }
 }
 
 export function applyAllDeckMixes(
