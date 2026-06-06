@@ -83,3 +83,66 @@ export interface SelectStats {
   total_duration_s: number;
   collections:      number;
 }
+
+// ── ML pipeline types ─────────────────────────────────────────────
+
+export interface TrackSection {
+  label:           string;
+  start_seconds:   number;
+  end_seconds:     number;
+  bars:            number;
+}
+
+export interface SelectTrackAnalysis {
+  source?:              string;
+  sections?:            TrackSection[];
+  mix_in_safe?:         boolean;
+  mix_out_safe?:        boolean;
+  vocal_enters_seconds?: number | null;
+  energy_arc?:          string;
+  rhythm_pattern?:      string;
+  mood?:                string;
+  transition_notes?:    string;
+  bpm?:                 number;
+  beat_times?:          number[];
+}
+
+export interface TransitionStep {
+  bar:     number;
+  action:  string;
+  freq_hz?: number;
+  duration_bars?: number;
+}
+
+export interface TransitionPlan {
+  status:                  string;
+  source?:                 string;
+  mix_out_bar?:            number;
+  mix_in_bar?:             number;
+  transition_length_bars?: number;
+  strategy?:               string;
+  steps?:                  TransitionStep[];
+  reason?:                 string;
+  bpm_a?:                  number;
+  bpm_b?:                  number;
+}
+
+export interface StemPaths {
+  entry_id:     string;
+  job_id?:      string;
+  vocals_path?: string | null;
+  drums_path?:  string | null;
+  bass_path?:   string | null;
+  other_path?:  string | null;
+}
+
+export interface GenerationResult {
+  status:            string;
+  source?:           string;
+  job_id?:           string;
+  local_path?:       string;
+  duration_seconds?: number;
+  bpm?:              number;
+  key?:              string;
+  bars?:             number;
+}

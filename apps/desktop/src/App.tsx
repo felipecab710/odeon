@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { startFrameMonitor } from "./lib/perfDiagnostics";
 import { TopBar } from "./components/layout/TopBar";
-import { NavBar } from "./components/layout/NavBar";
+import { AppTitleBar } from "./components/layout/AppTitleBar";
 import { useProjectStore } from "./stores/projectStore";
 import { useTransportStore } from "./stores/transportStore";
 import { useEngineStore } from "./stores/engineStore";
@@ -21,24 +21,6 @@ function windowTitleForProject(project: OdeonProject | null): string {
   return project?.name ? `${project.name} — Odeon` : "Odeon";
 }
 
-function AppBar() {
-  return (
-    <div style={{
-      height: 44, background: "#141414", borderBottom: "1px solid #222",
-      display: "flex", alignItems: "center", padding: "0 16px", flexShrink: 0,
-    }}>
-      <div style={{
-        width: 24, height: 24, borderRadius: 4, background: "#2a6496",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        marginRight: 10, flexShrink: 0,
-      }}>
-        <span style={{ color: "#fff", fontWeight: 700, fontSize: 12 }}>O</span>
-      </div>
-      <span style={{ color: "#fff", fontWeight: 700, fontSize: 13, letterSpacing: "0.06em" }}>ODEON</span>
-    </div>
-  );
-}
-
 async function setWindowTitle(title: string) {
   document.title = title;
   try {
@@ -52,6 +34,7 @@ export default function App() {
   const { setBpm, setEngineReady } = useTransportStore();
   const { initTrack } = useEngineStore();
   const view = useNavigationStore((s) => s.view);
+  const engineProject = view === "studio" ? project : null;
   const [apiReady, setApiReady] = useState(false);
 
   useTransportShortcuts();
@@ -98,7 +81,9 @@ export default function App() {
     return () => unsubs.forEach((u) => u());
   }, []);
 
-  useEngineSync(project);
+  // Only the Studio view owns the engine via the DAW project.
+  // Research/Booth use useSetEngineSync — avoid wiping set-preview on every render.
+  useEngineSync(engineProject);
 
   useEffect(() => {
     if (!project) return;
@@ -125,12 +110,8 @@ export default function App() {
 
   return (
     <div className="app-shell flex flex-col h-full w-full overflow-hidden bg-studio-bg">
-      {view === "studio" ? (
-        <TopBar />
-      ) : (
-        <AppBar />
-      )}
-      <NavBar />
+      <AppTitleBar />
+      {view === "studio" && <TopBar />}
       {view === "studio"   && <StudioView />}
       {view === "select"   && <SelectView />}
       {view === "research" && <ResearchView />}

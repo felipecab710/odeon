@@ -204,6 +204,50 @@ export const apiClient = {
 
     fetch1001TLLibrary: (limit = 20) =>
       request<{ queued: number }>("POST", `/select/fetch-1001tl-library?limit=${limit}`),
+
+    // ── ML pipeline ────────────────────────────────────────────────
+    mlStatus: () =>
+      request<MlServerStatus>("GET", "/select/ml/status"),
+
+    embedRemote: (entryId: string, models = "clap,muq") =>
+      request<{ entry_id: string; dims: Record<string, number>; stored: Record<string, boolean> }>(
+        "POST", `/select/entries/${entryId}/embed-remote?models=${models}`),
+
+    embedRemoteAll: (models = "clap,muq") =>
+      request<{ queued: number; models: string[]; background: boolean }>(
+        "POST", `/select/embed-remote-all?models=${models}`),
+
+    analyzeMl: (entryId: string) =>
+      request<{ entry_id: string; analysis: TrackAnalysisData; source: string }>(
+        "POST", `/select/entries/${entryId}/analyze-ml`),
+
+    getAnalysis: (entryId: string) =>
+      request<{ entry_id: string; analysis: TrackAnalysisData; source: string; mert_features?: Record<string, unknown> }>(
+        "GET", `/select/entries/${entryId}/analysis`),
+
+    separate: (entryId: string) =>
+      request<{ entry_id: string; job_id: string; stems: Record<string, string> }>(
+        "POST", `/select/entries/${entryId}/separate`),
+
+    getStems: (entryId: string) =>
+      request<StemPathsData>("GET", `/select/entries/${entryId}/stems`),
+
+    planTransition: (fromEntryId: string, toEntryId: string) =>
+      request<TransitionPlanData>("POST", "/select/set/plan-transition",
+        JSON.stringify({ from_entry_id: fromEntryId, to_entry_id: toEntryId }),
+        { "Content-Type": "application/json" }),
+
+    generateBridge: (fromEntryId: string, toEntryId: string, bars = 8) =>
+      request<GenerationResultData>("POST", "/select/generate/bridge",
+        JSON.stringify({ from_entry_id: fromEntryId, to_entry_id: toEntryId, bars }),
+        { "Content-Type": "application/json" }),
+
+    generateRiser: (entryId: string, bars = 4, intensity = 0.8) =>
+      request<GenerationResultData>("POST", "/select/generate/riser",
+        JSON.stringify({ entry_id: entryId, bars, intensity }),
+        { "Content-Type": "application/json" }),
+
+    generatedAudioUrl: (genId: string) => `${BASE}/select/generated/${genId}/audio`,
   },
 };
 
@@ -280,6 +324,62 @@ export interface SearchStatus {
   clap_available: boolean;
   clap_embedded_tracks: number;
   feature_embedded_tracks: number;
-  active_mode: "clap" | "metadata";
+  active_mode: "runpod_clap" | "local_clap" | "metadata";
   install_hint: string | null;
+}
+
+export interface MlServerStatus {
+  configured: boolean;
+  ok?: boolean;
+  gpu?: Record<string, unknown>;
+  models_loaded?: string[];
+  phases?: Record<string, unknown>;
+  error?: string | null;
+}
+
+export interface TrackAnalysisData {
+  source?: string;
+  sections?: { label: string; start_seconds: number; end_seconds: number; bars: number }[];
+  mix_in_safe?: boolean;
+  mix_out_safe?: boolean;
+  vocal_enters_seconds?: number | null;
+  energy_arc?: string;
+  rhythm_pattern?: string;
+  mood?: string;
+  transition_notes?: string;
+}
+
+export interface TransitionStepData {
+  bar: number;
+  action: string;
+  freq_hz?: number;
+  duration_bars?: number;
+}
+
+export interface TransitionPlanData {
+  status: string;
+  source?: string;
+  mix_out_bar?: number;
+  mix_in_bar?: number;
+  transition_length_bars?: number;
+  strategy?: string;
+  steps?: TransitionStepData[];
+  reason?: string;
+}
+
+export interface StemPathsData {
+  entry_id: string;
+  job_id?: string;
+  vocals_path?: string | null;
+  drums_path?: string | null;
+  bass_path?: string | null;
+  other_path?: string | null;
+}
+
+export interface GenerationResultData {
+  status: string;
+  source?: string;
+  job_id?: string;
+  local_path?: string;
+  duration_seconds?: number;
 }

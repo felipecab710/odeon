@@ -4,11 +4,16 @@ Runs on localhost:8000. The Tauri frontend calls this over HTTP.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 import logging
 import shutil
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile

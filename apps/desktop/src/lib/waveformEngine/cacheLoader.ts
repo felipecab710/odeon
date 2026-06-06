@@ -107,11 +107,13 @@ function parseBinaryV2(buf: ArrayBuffer): WaveformCache | null {
 }
 
 /** Read sidecar from disk (Tauri) or API (browser dev). Handles v1 JSON and v2 binary. */
-async function fetchSidecar(audioPath: string): Promise<WaveformCache | null> {
+async function fetchSidecar(cachePath: string): Promise<WaveformCache | null> {
+  if (!cachePath) return null;
+
   try {
     // Tauri fast path: read bytes from disk
     const { readFile } = await import("@tauri-apps/plugin-fs");
-    const bytes = await readFile(wavecachePath(audioPath));
+    const bytes = await readFile(cachePath);
 
     // Tauri readFile returns a Uint8Array that may have byteOffset > 0 in a
     // shared pool buffer — always slice to get a correctly-aligned ArrayBuffer.
@@ -135,27 +137,37 @@ async function fetchSidecar(audioPath: string): Promise<WaveformCache | null> {
     } catch {
       return null;
     }
-  } catch {
+  } catch (diskErr) {
     // Browser / Tauri plugin not available: fetch binary directly from API
     try {
       const res = await fetch(
-        `http://localhost:8000/select/waveform?path=${encodeURIComponent(wavecachePath(audioPath))}`,
+        `http://localhost:8000/select/waveform?path=${encodeURIComponent(cachePath)}`,
       );
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn("[waveformCache] API fetch failed:", cachePath, res.status);
+        return null;
+      }
       const buf = await res.arrayBuffer();
       const view = new DataView(buf);
       if (buf.byteLength >= 4 && view.getUint32(0, false) === MAGIC) {
         return parseBinaryV2(buf);
       }
+      console.warn("[waveformCache] unexpected format:", cachePath);
       return null;
-    } catch {
+    } catch (apiErr) {
+      console.warn("[waveformCache] load failed:", cachePath, diskErr, apiErr);
       return null;
     }
   }
 }
 
-export async function loadWaveformCache(audioPath: string): Promise<WaveformCache | null> {
+export async function loadWaveformCache(
+  audioPath: string,
+  cachePath?: string | null,
+): Promise<WaveformCache | null> {
   if (!audioPath) return null;
+
+  const sidecar = cachePath || wavecachePath(audioPath);
 
   const cached = memoryCache.get(audioPath);
   if (cached) return cached;
@@ -164,7 +176,7 @@ export async function loadWaveformCache(audioPath: string): Promise<WaveformCach
   if (pending) return pending;
 
   const promise = (async () => {
-    const data = await fetchSidecar(audioPath);
+    const data = await fetchSidecar(sidecar);
     if (data) memoryCache.set(audioPath, data);
     return data;
   })();

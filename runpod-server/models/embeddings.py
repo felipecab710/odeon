@@ -133,6 +133,29 @@ def embed_mert(file_path: str) -> Optional[List[float]]:
         return None
 
 
+def extract_mert_features(file_path: str) -> Optional[Dict[str, Any]]:
+    """Structured musical features from MERT + librosa."""
+    vec = embed_mert(file_path)
+    if not vec:
+        return None
+    try:
+        import librosa
+        y, sr = librosa.load(file_path, sr=22050, mono=True, duration=30)
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        bpm = float(tempo) if hasattr(tempo, "__float__") else float(tempo[0])
+        cent = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
+        return {
+            "bpm_estimate": round(bpm, 1),
+            "brightness": round(cent / 5000, 3),
+            "rhythm_pattern": "four_on_floor" if 118 <= bpm <= 135 else "varied",
+            "timbre": "bright" if cent > 3000 else "dark",
+            "energy": round(float(np.sqrt(np.mean(y ** 2))), 4),
+        }
+    except Exception as e:
+        logger.error("MERT feature extraction failed: %s", e)
+        return None
+
+
 def embed_all(file_path: str, models: List[str]) -> Dict[str, Optional[List[float]]]:
     """Run requested embedding models on a local file path."""
     result: Dict[str, Optional[List[float]]] = {}

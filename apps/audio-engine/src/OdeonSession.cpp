@@ -3,6 +3,7 @@
 #include <cmath>
 #include <chrono>
 #include <sstream>
+#include <algorithm>
 
 namespace odeon {
 
@@ -113,6 +114,10 @@ std::string OdeonSession::disposeSession() {
     edit_.reset();
     currentProjectId_.clear();
     projectDir_ = juce::File();
+    djMode_ = false;
+    numDjDecks_ = 0;
+    for (auto& d : djDecks_)
+        d = OdeonDjDeck{};
     return jsonOk();
 }
 
@@ -367,6 +372,446 @@ std::string OdeonSession::moveClip(const std::string& trackId, const std::string
         }
     }
     return jsonErr("Clip " + clipId + " not found in Tracktion edit for track " + trackId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  DJ deck players
+// ─────────────────────────────────────────────────────────────────────────
+
+te::WaveAudioClip* OdeonSession::findDeckWaveClip(OdeonRoute* route) {
+    if (!route || !route->track) return nullptr;
+    for (auto* clip : route->track->getClips()) {
+        if (auto* wac = dynamic_cast<te::WaveAudioClip*>(clip))
+            return wac;
+    }
+    return nullptr;
+}
+
+void OdeonSession::clearDeckClips(OdeonDjDeck& deck) {
+    OdeonRoute* route = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        route = findRoute(deck.trackId);
+    }
+    if (route && route->track) {
+        const auto clips = route->track->getClips();
+        for (int i = clips.size() - 1; i >= 0; --i)
+            clips[(size_t) i]->removeFromParent();
+        route->clips.clear();
+    }
+    deck.waveClip = nullptr;
+    deck.loaded = false;
+    deck.filePath.clear();
+    deck.clipId.clear();
+    deck.timelineStart = 0.0;
+    deck.duration = 0.0;
+    deck.rate = 1.0;
+}
+
+std::string OdeonSession::createDjSession(int numDecks) {
+    const int n = std::clamp(numDecks, 1, 4);
+
+    const std::string sessionResult = createSession("odeon-dj-booth", "");
+    if (sessionResult.find("\"ok\":false") != std::string::npos)
+        return sessionResult;
+
+    djMode_ = true;
+    numDjDecks_ = n;
+    for (auto& d : djDecks_)
+        d = OdeonDjDeck{};
+
+    for (int i = 0; i < n; ++i) {
+        const std::string trackId = "deck:" + std::to_string(i);
+        const std::string name    = "Deck " + std::to_string(i + 1);
+        const std::string created = createTrack(trackId, name, "deck", "full_mix");
+        if (created.find("\"ok\":false") != std::string::npos)
+            return created;
+
+        djDecks_[(size_t) i].deckIndex = i;
+        djDecks_[(size_t) i].trackId   = trackId;
+    }
+
+    return jsonOk("{\"numDecks\":" + std::to_string(n) + "}");
+}
+
+std::string OdeonSession::loadDeck(int deckIndex, const std::string& filePath,
+                                   const std::string& name, double timelineStartSeconds) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode. Call createDjSession first.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index: " + std::to_string(deckIndex));
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    clearDeckClips(deck);
+
+    OdeonRoute* route = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        route = findRoute(deck.trackId);
+    }
+    if (!route || !route->track)
+        return jsonErr("Deck route not found: " + deck.trackId);
+
+    if (!name.empty())
+        route->track->setName(name);
+
+    const std::string added = addClip(deck.trackId, "", filePath, timelineStartSeconds);
+    if (added.find("\"ok\":false") != std::string::npos)
+        return added;
+
+    deck.filePath      = filePath;
+    deck.timelineStart = timelineStartSeconds;
+    deck.clipId        = juce::File(filePath).getFileNameWithoutExtension().toStdString();
+    deck.rate          = 1.0;
+    deck.loaded        = true;
+    deck.waveClip      = findDeckWaveClip(route);
+    if (deck.waveClip)
+        deck.duration = deck.waveClip->getPosition().getLength().inSeconds();
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"trackId\":" + jsonQuote(deck.trackId) +
+                  ",\"durationSeconds\":" + std::to_string(deck.duration) + "}");
+}
+
+std::string OdeonSession::unloadDeck(int deckIndex) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+
+    clearDeckClips(djDecks_[(size_t) deckIndex]);
+    return jsonOk();
+}
+
+std::string OdeonSession::deckSeek(int deckIndex, double timelineStartSeconds) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded || !deck.waveClip)
+        return jsonErr("Deck not loaded.");
+
+    const double dur = deck.waveClip->getPosition().getLength().inSeconds();
+    te::ClipPosition pos;
+    pos.time = tracktion::TimeRange(
+        tracktion::TimePosition::fromSeconds(timelineStartSeconds),
+        tracktion::TimeDuration::fromSeconds(dur));
+    deck.waveClip->setPosition(pos);
+    deck.timelineStart = timelineStartSeconds;
+
+    {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        if (auto* route = findRoute(deck.trackId)) {
+            for (auto& ac : route->clips) {
+                if (ac.clipId == deck.clipId) {
+                    ac.startTime = timelineStartSeconds;
+                    break;
+                }
+            }
+        }
+    }
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"timelineStart\":" + std::to_string(timelineStartSeconds) + "}");
+}
+
+std::string OdeonSession::deckSetRate(int deckIndex, double rate) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded || !deck.waveClip)
+        return jsonErr("Deck not loaded.");
+
+    const double clamped = std::clamp(rate, 0.5, 2.0);
+    deck.waveClip->setSpeedRatio(clamped);
+    deck.rate = clamped;
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"rate\":" + std::to_string(clamped) + "}");
+}
+
+std::string OdeonSession::getDjState() {
+    std::ostringstream ss;
+    ss << "{\"numDecks\":" << numDjDecks_ << ",\"decks\":[";
+    for (int i = 0; i < numDjDecks_; ++i) {
+        if (i > 0) ss << ",";
+        const auto& d = djDecks_[(size_t) i];
+        double localPos = 0.0;
+        if (d.loaded && transport_) {
+            localPos = std::max(0.0, positionSeconds() - d.timelineStart);
+            if (localPos > d.duration) localPos = d.duration;
+        }
+        ss << "{"
+           << "\"deckIndex\":" << i
+           << ",\"trackId\":" << jsonQuote(d.trackId)
+           << ",\"loaded\":" << (d.loaded ? "true" : "false")
+           << ",\"filePath\":" << jsonQuote(d.filePath)
+           << ",\"timelineStart\":" << d.timelineStart
+           << ",\"durationSeconds\":" << d.duration
+           << ",\"localPositionSeconds\":" << localPos
+           << ",\"rate\":" << d.rate
+           << ",\"bpm\":" << d.bpm
+           << ",\"syncFollower\":" << (d.syncFollower ? "true" : "false")
+           << ",\"loopActive\":" << (d.loop.active ? "true" : "false")
+           << ",\"loopIn\":" << d.loop.inSeconds
+           << ",\"loopOut\":" << d.loop.outSeconds
+           << ",\"hotcues\":[";
+        for (int h = 0; h < d.hotcueCount; ++h) {
+            if (h > 0) ss << ",";
+            ss << "{\"slot\":" << d.hotcues[(size_t) h].slot
+               << ",\"timeSeconds\":" << d.hotcues[(size_t) h].timeSeconds << "}";
+        }
+        ss << "]}";
+    }
+    ss << "]}";
+    return ss.str();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  DJ mixer DSP (Phase C)
+// ─────────────────────────────────────────────────────────────────────────
+
+OdeonRoute* OdeonSession::findDeckRoute(int deckIndex) {
+    if (deckIndex < 0 || deckIndex >= numDjDecks_) return nullptr;
+    return findRoute(djDecks_[(size_t) deckIndex].trackId);
+}
+
+void OdeonSession::ensureDeckEqualiser(OdeonRoute& route) {
+    if (!route.track || !edit_) return;
+    if (route.track->getEqualiserPlugin()) return;
+
+    if (auto plugin = edit_->getPluginCache().createNewPlugin(
+            te::EqualiserPlugin::xmlTypeName, {})) {
+        route.track->pluginList.insertPlugin(plugin, 0, nullptr);
+    }
+}
+
+float OdeonSession::crossfaderWeightDb(CfOrientation orient) const {
+    const float t = std::clamp(crossfaderPos_, 0.f, 1.f);
+    float weight = 1.f;
+    switch (orient) {
+        case CfOrientation::A:
+            weight = std::cos(t * static_cast<float>(juce::MathConstants<double>::halfPi));
+            break;
+        case CfOrientation::B:
+            weight = std::sin(t * static_cast<float>(juce::MathConstants<double>::halfPi));
+            break;
+        case CfOrientation::THRU:
+        default:
+            weight = 1.f;
+            break;
+    }
+    if (weight <= 0.00001f) return -120.f;
+    return 20.f * std::log10(weight);
+}
+
+void OdeonSession::applyDjRouteMix(OdeonRoute& route) {
+    if (!route.track) return;
+
+    ensureDeckEqualiser(route);
+
+    const auto& m = route.mix;
+    const float cfDb   = crossfaderWeightDb(m.cfOrient);
+    const float volDb  = std::clamp(m.trimDb + m.faderDb + cfDb, -120.f, 12.f);
+
+    if (auto* vp = route.track->getVolumePlugin())
+        vp->setVolumeDb(volDb);
+    route.mix.volumeDb = volDb;
+
+    route.track->setMute(m.muted);
+    route.track->setSolo(m.pfl || m.soloed);
+
+    if (auto* eq = route.track->getEqualiserPlugin()) {
+        float lowG  = m.lowDb;
+        float midG  = m.midDb;
+        float highG = m.highDb;
+
+        if (m.filter > 0.f) {
+            lowG  = std::min(lowG, -m.filter);
+            highG = std::max(highG, -m.filter * 0.25f);
+        } else if (m.filter < 0.f) {
+            highG = std::min(highG, m.filter);
+            lowG  = std::max(lowG, m.filter * 0.25f);
+        }
+
+        eq->setLowGain(lowG);
+        eq->setMidGain1(midG);
+        eq->setMidGain2(0.f);
+        eq->setHighGain(highG);
+    }
+}
+
+std::string OdeonSession::setDeckEq(int deckIndex, float lowDb, float midDb, float highDb) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findDeckRoute(deckIndex);
+    if (!route) return jsonErr("Deck route not found.");
+
+    route->mix.lowDb  = std::clamp(lowDb, -20.f, 20.f);
+    route->mix.midDb  = std::clamp(midDb, -20.f, 20.f);
+    route->mix.highDb = std::clamp(highDb, -20.f, 20.f);
+    applyDjRouteMix(*route);
+    return jsonOk();
+}
+
+std::string OdeonSession::setDeckFilter(int deckIndex, float filter) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findDeckRoute(deckIndex);
+    if (!route) return jsonErr("Deck route not found.");
+
+    route->mix.filter = std::clamp(filter, -12.f, 12.f);
+    applyDjRouteMix(*route);
+    return jsonOk();
+}
+
+std::string OdeonSession::setDeckChannelMix(int deckIndex, float trimDb, float faderDb,
+                                            float lowDb, float midDb, float highDb, float filter,
+                                            const std::string& orientation, bool muted, bool pfl) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findDeckRoute(deckIndex);
+    if (!route) return jsonErr("Deck route not found.");
+
+    route->mix.trimDb   = std::clamp(trimDb, -12.f, 12.f);
+    route->mix.faderDb  = std::clamp(faderDb, -60.f, 12.f);
+    route->mix.lowDb    = std::clamp(lowDb, -20.f, 20.f);
+    route->mix.midDb    = std::clamp(midDb, -20.f, 20.f);
+    route->mix.highDb   = std::clamp(highDb, -20.f, 20.f);
+    route->mix.filter   = std::clamp(filter, -12.f, 12.f);
+    route->mix.cfOrient = cfFromString(orientation);
+    route->mix.muted    = muted;
+    route->mix.pfl      = pfl;
+    route->mix.soloed   = pfl;
+    applyDjRouteMix(*route);
+    return jsonOk();
+}
+
+std::string OdeonSession::setCrossfader(float position) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    crossfaderPos_ = std::clamp(position, 0.f, 1.f);
+
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    for (int i = 0; i < numDjDecks_; ++i) {
+        if (auto* route = findDeckRoute(i))
+            applyDjRouteMix(*route);
+    }
+    return jsonOk("{\"crossfader\":" + std::to_string(crossfaderPos_) + "}");
+}
+
+std::string OdeonSession::setDeckOrientation(int deckIndex, const std::string& orientation) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findDeckRoute(deckIndex);
+    if (!route) return jsonErr("Deck route not found.");
+
+    route->mix.cfOrient = cfFromString(orientation);
+    applyDjRouteMix(*route);
+    return jsonOk();
+}
+
+std::string OdeonSession::setPflDeck(int deckIndex, bool enabled) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findDeckRoute(deckIndex);
+    if (!route) return jsonErr("Deck route not found.");
+
+    route->mix.pfl = enabled;
+    route->mix.soloed = enabled;
+    applyDjRouteMix(*route);
+    return jsonOk();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  DJ deck controls (Phase B)
+// ─────────────────────────────────────────────────────────────────────────
+
+std::string OdeonSession::deckSetHotcue(int deckIndex, int slot, double timeSeconds) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_) return jsonErr("Invalid deck index.");
+    if (slot < 0 || slot >= 8) return jsonErr("Hotcue slot must be 0-7.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded) return jsonErr("Deck not loaded.");
+
+    const double t = std::clamp(timeSeconds, 0.0, deck.duration);
+    bool found = false;
+    for (int i = 0; i < deck.hotcueCount; ++i) {
+        if (deck.hotcues[(size_t) i].slot == slot) {
+            deck.hotcues[(size_t) i].timeSeconds = t;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        if (deck.hotcueCount >= 8) return jsonErr("Hotcue slots full.");
+        deck.hotcues[(size_t) deck.hotcueCount++] = { slot, t };
+    }
+    return jsonOk("{\"slot\":" + std::to_string(slot) + ",\"timeSeconds\":" + std::to_string(t) + "}");
+}
+
+std::string OdeonSession::deckJumpHotcue(int deckIndex, int slot) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_) return jsonErr("Invalid deck index.");
+
+    const auto& deck = djDecks_[(size_t) deckIndex];
+    for (int i = 0; i < deck.hotcueCount; ++i) {
+        if (deck.hotcues[(size_t) i].slot == slot) {
+            return deckSeek(deckIndex, deck.timelineStart + deck.hotcues[(size_t) i].timeSeconds);
+        }
+    }
+    return jsonErr("Hotcue not set.");
+}
+
+std::string OdeonSession::deckClearHotcue(int deckIndex, int slot) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_) return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    for (int i = 0; i < deck.hotcueCount; ++i) {
+        if (deck.hotcues[(size_t) i].slot == slot) {
+            for (int j = i + 1; j < deck.hotcueCount; ++j)
+                deck.hotcues[(size_t) j - 1] = deck.hotcues[(size_t) j];
+            --deck.hotcueCount;
+            return jsonOk();
+        }
+    }
+    return jsonErr("Hotcue not set.");
+}
+
+std::string OdeonSession::deckSetLoop(int deckIndex, bool enabled, double inSeconds, double outSeconds) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_) return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded) return jsonErr("Deck not loaded.");
+
+    deck.loop.active = enabled;
+    deck.loop.inSeconds  = std::max(0.0, inSeconds);
+    deck.loop.outSeconds = std::clamp(outSeconds, deck.loop.inSeconds + 0.1, deck.duration);
+    return jsonOk();
+}
+
+std::string OdeonSession::deckSetSyncMode(int deckIndex, const std::string& mode) {
+    if (!djMode_) return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_) return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (mode == "leader") {
+        syncLeaderDeck_ = deckIndex;
+        for (int i = 0; i < numDjDecks_; ++i)
+            djDecks_[(size_t) i].syncFollower = (i != deckIndex);
+    } else if (mode == "follower") {
+        deck.syncFollower = true;
+    } else {
+        deck.syncFollower = false;
+    }
+    return jsonOk();
 }
 
 std::string OdeonSession::notifyTracksReady() {

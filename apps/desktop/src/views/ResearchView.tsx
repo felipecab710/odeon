@@ -8,6 +8,8 @@ import React, {
 } from "react";
 import { useSelectStore } from "../stores/selectStore";
 import { useSetBuilderStore, type SetCard } from "../stores/setBuilderStore";
+import { TransitionArrangementView } from "../components/setbuilder/TransitionArrangementView";
+import { BoothPanel } from "../components/booth/BoothPanel";
 import type { CatalogEntry } from "@odeon/shared";
 import {
   apiClient,
@@ -16,6 +18,8 @@ import {
   type SemanticResult,
   type TransitionResult,
   type SearchStatus,
+  type TransitionPlanData,
+  type GenerationResultData,
 } from "../lib/apiClient";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -238,7 +242,7 @@ function LibrarySidebar({
             value={semanticQuery}
             onChange={e => setSemanticQuery(e.target.value)}
             placeholder={searchStatus?.clap_available
-              ? 'Describe the vibe: "dark minimal 126 BPM"...'
+              ? 'Describe the vibe: "uplifting summer house"...'
               : 'e.g. "dark peak-time 8B 128 BPM"...'}
             style={{
               width: "100%", background: "#111",
@@ -255,8 +259,10 @@ function LibrarySidebar({
             }} />
             <span style={{ color: "#3a3a3a", fontSize: 9, lineHeight: 1.4 }}>
               {searchStatus?.clap_available
-                ? `CLAP active · ${searchStatus.clap_embedded_tracks} tracks embedded`
-                : "Metadata mode · install laion-clap for full AI search"}
+                ? `CLAP active · ${searchStatus.clap_embedded_tracks} tracks embedded${searchStatus.active_mode === "runpod_clap" ? " · GPU" : ""}`
+                : searchStatus?.clap_embedded_tracks
+                  ? `Indexing… ${searchStatus.clap_embedded_tracks}/201 embedded`
+                  : "Metadata mode · embed tracks for AI search"}
             </span>
           </div>
         </div>
@@ -554,6 +560,29 @@ function SetTrackCard({
             position: "absolute", bottom: 0, left: 0, right: 0, height: 3,
             background: flowColor, opacity: 0.8,
           }} />
+        )}
+
+        {/* Open in arrangement hint */}
+        {selected && (
+          <button
+            onClick={e => {
+              e.stopPropagation();
+              const { setViewMode, selectTransition, cards } = useSetBuilderStore.getState();
+              const sorted = [...cards].sort((a, b) => a.order - b.order);
+              const pos = sorted.findIndex(c => c.id === card.id);
+              if (pos >= 0 && pos < sorted.length - 1) selectTransition(pos);
+              else if (pos > 0) selectTransition(pos - 1);
+              setViewMode("arrangement");
+            }}
+            style={{
+              position: "absolute", bottom: 8, right: 8,
+              background: "rgba(0,0,0,0.8)", border: "1px solid #facc1555",
+              borderRadius: 4, padding: "3px 7px", fontSize: 9, fontWeight: 700,
+              color: "#facc15", cursor: "pointer",
+            }}
+          >
+            ⊟ Edit transition
+          </button>
         )}
       </div>
 
@@ -1046,6 +1075,9 @@ function SelectedTab({
   const [djTransitions, setDjTransitions] = useState<TransitionResult[]>([]);
   const [tlFetching, setTlFetching] = useState(false);
   const [tlFetched, setTlFetched] = useState(false);
+  const [transitionPlan, setTransitionPlan] = useState<TransitionPlanData | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [genResult, setGenResult] = useState<GenerationResultData | null>(null);
 
   // Auto-load 5 "play next" suggestions whenever a card is selected
   useEffect(() => {
@@ -1061,15 +1093,25 @@ function SelectedTab({
     }).catch(() => {}).finally(() => setLoadingNext(false));
   }, [selectedEntry?.id, cards.map(c => c.entryId).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const pos = selectedCard ? sorted.findIndex(c => c.id === selectedCard.id) : -1;
+  const prevCard = pos > 0 ? sorted[pos - 1] : null;
+  const nextCard = pos >= 0 && pos < sorted.length - 1 ? sorted[pos + 1] : null;
+  const nextEntry = nextCard ? entryMap.get(nextCard.entryId) : null;
+
+  useEffect(() => {
+    if (!selectedEntry || !nextEntry) { setTransitionPlan(null); return; }
+    setPlanLoading(true);
+    apiClient.select.planTransition(selectedEntry.id, nextEntry.id)
+      .then(setTransitionPlan)
+      .catch(() => setTransitionPlan(null))
+      .finally(() => setPlanLoading(false));
+  }, [selectedEntry?.id, nextEntry?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!selectedEntry || !selectedCard) {
     return <p style={{ color: "#3a3a3a", fontSize: 12, marginTop: 8 }}>Click a card on the canvas to see its analysis.</p>;
   }
 
-  const pos = sorted.findIndex(c => c.id === selectedCard.id);
-  const prevCard = pos > 0 ? sorted[pos - 1] : null;
-  const nextCard = pos < sorted.length - 1 ? sorted[pos + 1] : null;
   const prevEntry = prevCard ? entryMap.get(prevCard.entryId) : null;
-  const nextEntry = nextCard ? entryMap.get(nextCard.entryId) : null;
 
   const inEdge = flowEdges.find(e => e.from_id === prevCard?.entryId && e.to_id === selectedCard.entryId);
   const outEdge = flowEdges.find(e => e.from_id === selectedCard.entryId && e.to_id === nextCard?.entryId);
@@ -1278,6 +1320,50 @@ function SelectedTab({
             → TO #{pos + 2} {displayTitle(nextEntry).slice(0, 22)}…
           </p>
           {outEdge ? <EdgeDetail edge={outEdge} /> : <p style={{ color: "#2a2a2a", fontSize: 10 }}>Scoring…</p>}
+
+          {/* AI Transition Plan */}
+          <div style={{ marginTop: 10 }}>
+            <p style={{ color: "#4a4a4a", fontSize: 10, fontWeight: 600, letterSpacing: "0.07em", marginBottom: 6 }}>
+              AI TRANSITION PLAN
+            </p>
+            {planLoading ? (
+              <p style={{ color: "#2a2a2a", fontSize: 10 }}>Planning…</p>
+            ) : transitionPlan?.steps ? (
+              <div style={{ background: "#0a0a0a", border: "1px solid #1a1a1a", borderRadius: 6, padding: "8px 10px" }}>
+                <p style={{ color: "#888", fontSize: 10, marginBottom: 6, lineHeight: 1.4 }}>{transitionPlan.reason}</p>
+                <p style={{ color: "#555", fontSize: 9, marginBottom: 6 }}>
+                  {transitionPlan.strategy} · {transitionPlan.transition_length_bars} bars
+                </p>
+                {transitionPlan.steps.map((step, i) => (
+                  <div key={i} style={{ fontSize: 9, color: "#666", padding: "2px 0", borderTop: i > 0 ? "1px solid #151515" : "none" }}>
+                    Bar {step.bar}: <span style={{ color: "#00c3ff" }}>{step.action.replace(/_/g, " ")}</span>
+                    {step.freq_hz && <span style={{ color: "#444" }}> @ {step.freq_hz}Hz</span>}
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button
+                    onClick={async () => {
+                      const r = await apiClient.select.generateBridge(selectedEntry!.id, nextEntry!.id);
+                      setGenResult(r);
+                    }}
+                    style={{ flex: 1, background: "#111", border: "1px solid #333", borderRadius: 4, padding: "4px 6px", color: "#888", fontSize: 9, cursor: "pointer" }}
+                  >Generate Bridge</button>
+                  <button
+                    onClick={async () => {
+                      const r = await apiClient.select.generateRiser(selectedEntry!.id);
+                      setGenResult(r);
+                    }}
+                    style={{ flex: 1, background: "#111", border: "1px solid #333", borderRadius: 4, padding: "4px 6px", color: "#888", fontSize: 9, cursor: "pointer" }}
+                  >Generate Riser</button>
+                </div>
+                {genResult?.job_id && (
+                  <audio controls src={apiClient.select.generatedAudioUrl(genResult.job_id)} style={{ width: "100%", marginTop: 6, height: 28 }} />
+                )}
+              </div>
+            ) : (
+              <p style={{ color: "#2a2a2a", fontSize: 10 }}>RunPod required for transition planning.</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -1379,7 +1465,10 @@ function SetBuilderCanvas({
 // ─── ResearchView (entry point) ───────────────────────────────────────────────
 
 export function ResearchView() {
-  const { setName, setSetName, clearSet, cards, selectedCardId, reorder } = useSetBuilderStore();
+  const {
+    setName, setSetName, clearSet, cards, selectedCardId, reorder,
+    viewMode, setViewMode, selectedTransitionIndex, selectTransition,
+  } = useSetBuilderStore();
   const entries = useSelectStore(s => s.entries);
   const [editingName, setEditingName] = useState(false);
   const [suggestMode, setSuggestMode] = useState(false);
@@ -1431,6 +1520,19 @@ export function ResearchView() {
     if (!selectedCardId) setSuggestMode(false);
   }, [selectedCardId]);
 
+  // Sync transition index when selecting a card in node view
+  useEffect(() => {
+    if (!selectedCardId || viewMode !== "nodes") return;
+    const pos = sorted.findIndex(c => c.id === selectedCardId);
+    if (pos >= 0 && pos < sorted.length - 1) {
+      selectTransition(pos);
+    } else if (pos === sorted.length - 1 && pos > 0) {
+      selectTransition(pos - 1);
+    }
+  }, [selectedCardId, viewMode, sorted.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeTransitionIndex = selectedTransitionIndex ?? 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0e0e0e" }}>
       {/* Top bar */}
@@ -1461,6 +1563,38 @@ export function ResearchView() {
             {setName}
           </button>
         )}
+
+        {/* View mode toggle */}
+        <div style={{
+          display: "flex", background: "#111", borderRadius: 5, border: "1px solid #2a2a2a", overflow: "hidden",
+        }}>
+          {([
+            { id: "nodes" as const, label: "⊞ Nodes" },
+            { id: "arrangement" as const, label: "⊟ Studio" },
+            { id: "booth" as const, label: "◎ Booth" },
+          ]).map(({ id, label }) => (
+            <button
+              key={id}
+              onClick={() => {
+                setViewMode(id);
+                if (id === "arrangement" && selectedTransitionIndex == null && sorted.length >= 2) {
+                  const pos = selectedCard
+                    ? sorted.findIndex(c => c.id === selectedCard.id)
+                    : 0;
+                  selectTransition(Math.min(Math.max(0, pos), sorted.length - 2));
+                }
+              }}
+              style={{
+                background: viewMode === id ? "rgba(0,195,255,0.15)" : "transparent",
+                border: "none", padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                color: viewMode === id ? "#00c3ff" : "#555",
+                letterSpacing: "0.03em",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
         <span style={{ flex: 1 }} />
 
@@ -1504,7 +1638,23 @@ export function ResearchView() {
           onSuggestMode={() => setSuggestMode(v => !v)}
         />
 
-        <SetBuilderCanvas flowEdges={flowEdges} />
+        {viewMode === "nodes" ? (
+          <SetBuilderCanvas flowEdges={flowEdges} />
+        ) : viewMode === "booth" && sorted.length >= 2 ? (
+          <BoothPanel sorted={sorted} entryMap={entryMap} />
+        ) : sorted.length >= 2 ? (
+          <TransitionArrangementView
+            sorted={sorted}
+            entryMap={entryMap}
+            flowEdges={flowEdges}
+            transitionIndex={Math.min(activeTransitionIndex, sorted.length - 2)}
+            onSelectTransition={selectTransition}
+          />
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontSize: 13 }}>
+            Add tracks to your set, then switch to Studio or Booth view
+          </div>
+        )}
 
         <AiPanel
           cards={cards}

@@ -8,6 +8,7 @@
     "core:window:allow-set-background-color",
     "core:window:allow-set-theme",
     "core:window:allow-set-title-bar-style",
+    "core:window:allow-start-dragging",
     "shell:allow-spawn",
     "shell:allow-execute",
     "shell:allow-stdin-write",

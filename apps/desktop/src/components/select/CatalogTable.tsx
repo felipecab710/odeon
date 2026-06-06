@@ -22,7 +22,7 @@ function MiniWaveform({ entry, mode }: { entry: CatalogEntry; mode: WaveformMode
     setCache(null);
     setFailed(false);
     let cancelled = false;
-    loadWaveformCache(entry.file_path)
+    loadWaveformCache(entry.file_path, entry.waveform_cache_path)
       .then(c => {
         if (cancelled) return;
         if (c) setCache(c);

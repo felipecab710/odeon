@@ -23,10 +23,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from models.embeddings import embed_all, embed_clap_text, save_upload_to_temp
-from models.registry import gpu_info, is_loaded, loaded_models
+from models.registry import dependency_status, gpu_info, is_loaded, loaded_models
 from models import separation, analysis, reasoning, generation
 
 logging.basicConfig(level=logging.INFO)
@@ -97,18 +98,24 @@ async def _save_upload(upload: UploadFile) -> str:
 
 @app.get("/status")
 def status():
+    deps = dependency_status()
     return {
         "ok": True,
         "service": "odeon-ml-server",
         "version": "0.1.0",
         "gpu": gpu_info(),
         "models_loaded": loaded_models(),
+        "dependencies": deps,
         "phases": {
-            "embeddings": {"clap": True, "muq": True, "mert": True},
-            "separation": "stub",
-            "analysis": "stub",
-            "reasoning": "stub",
-            "generation": "stub",
+            "embeddings": {
+                "clap": deps.get("laion_clap", False),
+                "muq": deps.get("transformers", False),
+                "mert": deps.get("transformers", False),
+            },
+            "separation": separation.is_available(),
+            "analysis": analysis.is_available(),
+            "reasoning": reasoning.is_available(),
+            "generation": generation.is_available(),
         },
     }
 
@@ -129,7 +136,17 @@ async def embed_file(
         model_list = [m.strip() for m in models.split(",") if m.strip()]
         result = embed_all(tmp, model_list)
         dims = {k: len(v) if v else 0 for k, v in result.items()}
-        return {"embeddings": result, "dims": dims, "models": model_list}
+        errors = {k: f"{k} embedding failed — check server logs" for k, v in result.items() if not v}
+        if errors and all(v is None for v in result.values()):
+            raise HTTPException(
+                500,
+                detail={
+                    "message": "All embedding models failed",
+                    "errors": errors,
+                    "hint": "Run: pip install -r requirements.txt (laion-clap for CLAP)",
+                },
+            )
+        return {"embeddings": result, "dims": dims, "models": model_list, "errors": errors or None}
     finally:
         Path(tmp).unlink(missing_ok=True)
 
@@ -184,6 +201,22 @@ def gen_bridge(req: GenerateBridgeRequest):
 @app.post("/generate/riser")
 def gen_riser(req: GenerateRiserRequest):
     return generation.generate_riser(req.bpm, req.key, req.bars, req.intensity)
+
+
+@app.get("/files/stems/{job_path:path}")
+def download_stem(job_path: str):
+    p = separation.stem_path(job_path)
+    if not p:
+        raise HTTPException(404, f"Stem not found: {job_path}")
+    return FileResponse(str(p), media_type="audio/wav")
+
+
+@app.get("/files/generated/{filename}")
+def download_generated(filename: str):
+    p = generation.generated_path(filename)
+    if not p:
+        raise HTTPException(404, f"Generated file not found: {filename}")
+    return FileResponse(str(p), media_type="audio/wav")
 
 
 if __name__ == "__main__":

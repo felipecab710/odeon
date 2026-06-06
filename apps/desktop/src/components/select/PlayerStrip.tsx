@@ -104,7 +104,7 @@ export function PlayerStrip() {
       id:     entry.id,
     });
     if (entry.status === "ready" && entry.file_path) {
-      loadWaveformCache(entry.file_path).then(c => setCache(c)).catch(() => {});
+      loadWaveformCache(entry.file_path, entry.waveform_cache_path).then(c => setCache(c)).catch(() => {});
     }
     apiClient.select.listMarkers(entry.id).then(m => setMarkers(m)).catch(() => {});
   }, [entry?.id, entry?.status]);

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -53,6 +54,9 @@ from .metadata import read_file_metadata
 from ..ml.pipeline import (
     init_ml_db, embed_entry, embed_all_ready,
     semantic_search_runpod, get_all_vecs as ml_get_all_vecs,
+    similar_by_model, muq_similarity_map, get_analysis, get_stems,
+    analyze_entry_ml, separate_entry, plan_transition_for_set,
+    generate_bridge_for_set, generate_riser_for_entry, get_mert_features,
 )
 from ..ml.runpod_client import is_configured as runpod_configured, get_status as runpod_status
 
@@ -309,6 +313,17 @@ def _run_analysis(entry_id: str) -> None:
 
     upsert_entry(entry)
 
+    # Auto-embed on RunPod after successful analysis
+    if entry.status == CatalogEntryStatus.ready and runpod_configured():
+        import threading
+        def _auto_embed():
+            import asyncio
+            try:
+                asyncio.run(embed_entry(entry_id, models=["clap", "muq"]))
+            except Exception:
+                pass
+        threading.Thread(target=_auto_embed, daemon=True).start()
+
 
 async def _run_analysis_async(entry_id: str) -> None:
     """Submit one analysis job to the bounded thread pool with a hard timeout."""
@@ -553,7 +568,7 @@ async def search_status():
         active = "local_clap"
 
     return {
-        "clap_available": clap_ready,
+        "clap_available": active != "metadata",
         "clap_embedded_tracks": stored_clap,
         "muq_embedded_tracks": stored_muq,
         "mert_embedded_tracks": stored_mert,
@@ -603,7 +618,7 @@ async def embed_entry_remote(
 
 @router.post("/embed-remote-all")
 async def embed_remote_all(
-    models: str = Query(default="clap"),
+    models: str = Query(default="clap,muq"),
     background: bool = Query(default=True),
 ):
     """
@@ -670,8 +685,8 @@ def similar_tracks(
     exclude_ids: str = "",
 ):
     """
-    Return tracks most similar to entry_id using audio feature vectors.
-    No ML required — uses BPM/key/LUFS/energy cosine similarity.
+    Return tracks most similar to entry_id.
+    Priority: MuQ embedding → MERT → BPM/key/LUFS feature vectors.
     """
     anchor = get_entry(entry_id)
     if not anchor:
@@ -680,23 +695,39 @@ def similar_tracks(
     exclude = set(filter(None, exclude_ids.split(",")))
     exclude.add(entry_id)
 
-    candidates = list_entries(status="ready", limit=5000)
-    scored = similar_by_features(anchor, candidates, limit=limit, exclude_ids=exclude)
+    method = "features"
+    scored_pairs: list = []
 
-    return [
-        {
-            "entry_id": e.id,
-            "title": e.title or e.file_name,
-            "artist": e.artist,
-            "bpm": e.bpm,
-            "key": e.key,
-            "duration_seconds": e.duration_seconds,
-            "has_artwork": e.has_artwork,
-            "similarity": s,
-            "bpm_delta": abs(e.bpm - anchor.bpm) if e.bpm and anchor.bpm else None,
-        }
-        for s, e in scored
-    ]
+    for model in ("muq", "mert", "clap"):
+        pairs = similar_by_model(entry_id, model=model, limit=limit, exclude_ids=exclude)
+        if pairs:
+            scored_pairs = pairs
+            method = model
+            break
+
+    if not scored_pairs:
+        candidates = list_entries(status="ready", limit=5000)
+        feat = similar_by_features(anchor, candidates, limit=limit, exclude_ids=exclude)
+        scored_pairs = [(s, e.id) for s, e in feat]
+        method = "features"
+
+    results = []
+    for sim, eid in scored_pairs:
+        e = get_entry(eid)
+        if e:
+            results.append({
+                "entry_id": e.id,
+                "title": e.title or e.file_name,
+                "artist": e.artist,
+                "bpm": e.bpm,
+                "key": e.key,
+                "duration_seconds": e.duration_seconds,
+                "has_artwork": e.has_artwork,
+                "similarity": sim,
+                "method": method,
+                "bpm_delta": abs(e.bpm - anchor.bpm) if e.bpm and anchor.bpm else None,
+            })
+    return results
 
 
 # ─────────────────────────────────────────────
@@ -946,10 +977,16 @@ def suggest_next_track(
 
     candidates = [e for e in list_entries(status="ready", limit=2000) if e.id not in exclude]
 
+    muq_sims = muq_similarity_map(entry_id, [c.id for c in candidates])
+
     scored = []
     for c in candidates:
         s = compat_score(anchor, c)
         if s.overall is not None:
+            overall = s.overall
+            if c.id in muq_sims:
+                # Blend 60% harmonic/BPM + 40% sonic similarity
+                overall = 0.6 * overall + 0.4 * max(0.0, muq_sims[c.id])
             scored.append({
                 "entry_id": c.id,
                 "title": c.title or c.file_name,
@@ -958,10 +995,11 @@ def suggest_next_track(
                 "key": c.key,
                 "duration_seconds": c.duration_seconds,
                 "has_artwork": c.has_artwork,
-                "overall": s.overall,
+                "overall": overall,
                 "bpm_delta": s.bpm_delta,
                 "key_compat": s.key_compat,
                 "lufs_delta": s.lufs_delta,
+                "sonic_sim": muq_sims.get(c.id),
             })
 
     scored.sort(key=lambda x: x["overall"], reverse=True)
@@ -1035,6 +1073,122 @@ def set_flow(entry_ids: str):
             })
 
     return result
+
+
+# ─────────────────────────────────────────────
+#  ML pipeline — analyze, separate, plan, generate
+# ─────────────────────────────────────────────
+
+@router.post("/entries/{entry_id}/analyze-ml")
+async def analyze_entry_ml_endpoint(entry_id: str):
+    """Run Music Flamingo (or librosa fallback) analysis via RunPod."""
+    result = await analyze_entry_ml(entry_id)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.get("/entries/{entry_id}/analysis")
+def get_entry_analysis(entry_id: str):
+    """Return stored ML analysis JSON for a track."""
+    data = get_analysis(entry_id)
+    if not data:
+        raise HTTPException(404, "No analysis stored — run POST /analyze-ml first")
+    entry = get_entry(entry_id)
+    mert = get_mert_features(entry_id)
+    return {
+        "entry_id": entry_id,
+        "title": entry.title if entry else None,
+        **data,
+        "mert_features": mert,
+    }
+
+
+@router.post("/entries/{entry_id}/separate")
+async def separate_entry_endpoint(entry_id: str):
+    """Separate track into 4 stems via RunPod BS-RoFormer."""
+    if not runpod_configured():
+        raise HTTPException(400, "RUNPOD_URL not configured")
+    result = await separate_entry(entry_id)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.get("/entries/{entry_id}/stems")
+def get_entry_stems(entry_id: str):
+    stems = get_stems(entry_id)
+    if not stems:
+        raise HTTPException(404, "No stems stored — run POST /separate first")
+    return {"entry_id": entry_id, **stems}
+
+
+@router.post("/set/plan-transition")
+async def plan_set_transition(body: dict):
+    """
+    AI transition plan between two tracks.
+    body = { from_entry_id, to_entry_id }
+    """
+    from_id = body.get("from_entry_id")
+    to_id = body.get("to_entry_id")
+    if not from_id or not to_id:
+        raise HTTPException(400, "from_entry_id and to_entry_id required")
+    result = await plan_transition_for_set(from_id, to_id)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.post("/generate/bridge")
+async def generate_bridge_endpoint(body: dict):
+    """Generate transition bridge audio between two tracks."""
+    from_id = body.get("from_entry_id")
+    to_id = body.get("to_entry_id")
+    bars = int(body.get("bars", 8))
+    if not from_id or not to_id:
+        raise HTTPException(400, "from_entry_id and to_entry_id required")
+    if not runpod_configured():
+        raise HTTPException(400, "RUNPOD_URL not configured")
+    result = await generate_bridge_for_set(from_id, to_id, bars=bars)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.post("/generate/riser")
+async def generate_riser_endpoint(body: dict):
+    """Generate riser/impact audio for a track."""
+    entry_id = body.get("entry_id")
+    if not entry_id:
+        raise HTTPException(400, "entry_id required")
+    if not runpod_configured():
+        raise HTTPException(400, "RUNPOD_URL not configured")
+    result = await generate_riser_for_entry(
+        entry_id,
+        bars=int(body.get("bars", 4)),
+        intensity=float(body.get("intensity", 0.8)),
+    )
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.get("/generated/{gen_id}/audio")
+def serve_generated_audio(gen_id: str):
+    """Serve a locally stored generated audio file."""
+    import sqlite3
+    from ..db.repository import DB_PATH
+    conn = sqlite3.connect(str(DB_PATH))
+    row = conn.execute(
+        "SELECT file_path FROM generated_audio WHERE id = ?", (gen_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Generated audio not found")
+    path = row[0]
+    if not Path(path).is_file():
+        raise HTTPException(404, "Audio file missing on disk")
+    return FileResponse(path, media_type="audio/wav")
 
 
 # ─────────────────────────────────────────────

@@ -49,6 +49,32 @@ Upload reference → Odeon creates DAW-style tracks → play in sync → import 
 
 ---
 
+## Phase 1C — DJ Research (Mixxx + Studio Engine) — In Progress
+
+**Goal:** Set Builder, Booth twin (4× CDJ + DJM-A9), and Select preview use the same
+Mixxx-grade DJ technology on Odeon's multi-route native engine — not HTML audio.
+
+Reference: Mixxx 2.5 (`/Users/felipecab7/Downloads/mixxx-2.5`), `docs/ODEON_DJ_RESEARCH.md`
+
+- [x] Set Builder (nodes + studio arrangement timeline)
+- [x] Booth twin UI (4 CDJ + DJM-A9 schematic, Watch/Drive modes)
+- [x] MOSS transition plans → FX + automation in simulation
+- [x] Mixxx-aligned waveform modes in Select (RGB/HSV/Simple)
+- [x] Mixxx hot-cue/loop UI in `PlayerStrip` (browser audio — migrate to engine)
+- [x] Constant-power crossfader math (`deckMixEngine.ts`)
+- [x] Set preview via `useSetEngineSync` (timeline clips — interim)
+- [x] Engine ownership split: Studio vs Research sessions
+- [x] Shared DJ types (`packages/shared/src/dj-types.ts`)
+- [x] True 4-deck players in `OdeonSession` (Mixxx `EngineBuffer` model) — `createDjSession` / `loadDeck` / `deckSeek` / `deckSetRate`
+- [x] Booth preview via `useDjEngineSync` (replaces timeline-clip sync for Booth)
+- [ ] DJ mixer buses: main + headphones (PFL) + booth (`EngineMixer` model)
+- [ ] Per-deck EQ/filter effect chain (`EqualizerEffectChain`)
+- [ ] Beat sync coordinator (`EngineSync` leader/follower)
+- [ ] Retire HTML `<Audio>` in `PlayerStrip` → engine deck RPC
+- [ ] `VisualPlayPosition` playhead interpolation for CDJ screens
+
+---
+
 ## Phase 2 — Stems + Better Rendering
 
 - [ ] Demucs stem separation active end-to-end (install demucs, trigger on reference upload)

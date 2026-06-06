@@ -18,22 +18,23 @@ pip install -r requirements.txt
 export HF_HOME=/workspace/hf_cache
 export TRANSFORMERS_CACHE=/workspace/hf_cache
 
-# Start server (expose port 8001 in RunPod pod settings)
-uvicorn server:app --host 0.0.0.0 --port 8001
+# Start server (expose port 8002 in RunPod pod settings)
+bash start-ml.sh
+# or: python -m uvicorn server:app --host 0.0.0.0 --port 8002
 ```
 
 ## Expose to your Mac
 
-In RunPod pod settings → **TCP Port Mappings** → add port **8001**.
+In RunPod pod settings → **TCP Port Mappings** → add port **8002**.
 
 Copy the proxy URL, e.g.:
 ```
-https://<pod-id>-8001.proxy.runpod.net
+https://<pod-id>-8002.proxy.runpod.net
 ```
 
 On your Mac, in `apps/api/.env`:
 ```
-RUNPOD_URL=https://<pod-id>-8001.proxy.runpod.net
+RUNPOD_URL=https://<pod-id>-8002.proxy.runpod.net
 ```
 
 ## Smoke test
@@ -71,6 +72,23 @@ curl -X POST "http://localhost:8001/embed?models=clap" \
 6. **ACE-Step + Stable Audio** — Phase 6
 
 First CLAP embed will download ~400MB of weights to `/workspace/hf_cache`.
+
+## Troubleshooting
+
+**`import laion_clap` fails with `torch has no attribute float8_e8m0fnu`**
+
+Pip upgraded `transformers` past what the pod's PyTorch supports. Pin it:
+
+```bash
+pip install 'transformers==4.44.2' --force-reinstall
+python -c "import laion_clap; print('laion-clap OK')"
+```
+
+**Port 8002 already in use**
+
+```bash
+kill $(ss -tlnp | grep ':8002' | sed -n 's/.*pid=\([0-9]*\).*/\1/p')
+```
 
 ## Costs
 

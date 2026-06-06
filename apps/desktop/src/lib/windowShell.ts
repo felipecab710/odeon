@@ -32,6 +32,7 @@ async function configureNativeChrome() {
   try {
     const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     const win = getCurrentWebviewWindow();
+    document.documentElement.dataset.tauri = "true";
     await win.setTheme("dark");
     await win.setBackgroundColor(SHELL_CHROME_BG);
   } catch { /* browser dev */ }

@@ -143,6 +143,89 @@ export const engineClient = {
 
   disposeProject: () => _invoke("engine_dispose_project"),
 
+  createDjSession: (numDecks: number) =>
+    _invoke("engine_create_dj_session", { numDecks }),
+
+  loadDeck: (
+    deckIndex: number,
+    filePath: string,
+    name: string,
+    timelineStartSeconds: number
+  ) =>
+    _invoke("engine_load_deck", {
+      deckIndex,
+      filePath,
+      name,
+      timelineStartSeconds,
+    }),
+
+  unloadDeck: (deckIndex: number) =>
+    _invoke("engine_unload_deck", { deckIndex }),
+
+  deckSeek: (deckIndex: number, timelineStartSeconds: number) =>
+    _invoke("engine_deck_seek", { deckIndex, timelineStartSeconds }),
+
+  deckSetRate: (deckIndex: number, rate: number) =>
+    _invoke("engine_deck_set_rate", { deckIndex, rate }),
+
+  getDjState: () => _invoke("engine_get_dj_state"),
+
+  setDeckEq: (deckIndex: number, lowDb: number, midDb: number, highDb: number) =>
+    _invoke("engine_set_deck_eq", { deckIndex, lowDb, midDb, highDb }),
+
+  setDeckFilter: (deckIndex: number, filter: number) =>
+    _invoke("engine_set_deck_filter", { deckIndex, filter }),
+
+  setDeckChannelMix: (
+    deckIndex: number,
+    mix: {
+      trimDb: number;
+      faderDb: number;
+      lowDb: number;
+      midDb: number;
+      highDb: number;
+      filter: number;
+      orientation: string;
+      muted: boolean;
+      pfl: boolean;
+    },
+  ) =>
+    _invoke("engine_set_deck_channel_mix", { deckIndex, ...mix }),
+
+  setCrossfader: (position: number) =>
+    _invoke("engine_set_crossfader", { position }),
+
+  setDeckOrientation: (deckIndex: number, orientation: string) =>
+    _invoke("engine_set_deck_orientation", { deckIndex, orientation }),
+
+  setPflDeck: (deckIndex: number, enabled: boolean) =>
+    _invoke("engine_set_pfl_deck", { deckIndex, enabled }),
+
+  deckSetHotcue: (deckIndex: number, slot: number, timeSeconds: number) =>
+    _invoke("engine_deck_set_hotcue", { deckIndex, slot, timeSeconds }),
+
+  deckJumpHotcue: (deckIndex: number, slot: number) =>
+    _invoke("engine_deck_jump_hotcue", { deckIndex, slot }),
+
+  deckClearHotcue: (deckIndex: number, slot: number) =>
+    _invoke("engine_deck_clear_hotcue", { deckIndex, slot }),
+
+  deckSetLoop: (
+    deckIndex: number,
+    enabled: boolean,
+    inSeconds: number,
+    outSeconds: number,
+  ) =>
+    _invoke("engine_deck_set_loop", {
+      deckIndex,
+      enabled,
+      inSeconds,
+      outSeconds,
+    }),
+
+  deckSetSyncMode: (deckIndex: number, mode: string) =>
+    _invoke("engine_deck_set_sync_mode", { deckIndex, mode }),
+
   listAudioDevices: () =>
     _invoke("engine_list_audio_devices", {}).then(unwrapEngineResult),
 

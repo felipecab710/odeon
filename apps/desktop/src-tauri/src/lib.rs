@@ -386,6 +386,263 @@ async fn engine_notify_tracks_ready(
 }
 
 #[tauri::command]
+async fn engine_create_dj_session(
+    num_decks: u32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "createDjSession",
+        json!({ "numDecks": num_decks }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_load_deck(
+    deck_index: u32,
+    file_path: String,
+    name: String,
+    timeline_start_seconds: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "loadDeck",
+        json!({
+            "deckIndex": deck_index,
+            "filePath": file_path,
+            "name": name,
+            "timelineStartSeconds": timeline_start_seconds,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_unload_deck(
+    deck_index: u32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "unloadDeck", json!({ "deckIndex": deck_index })).await
+}
+
+#[tauri::command]
+async fn engine_deck_seek(
+    deck_index: u32,
+    timeline_start_seconds: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckSeek",
+        json!({
+            "deckIndex": deck_index,
+            "timelineStartSeconds": timeline_start_seconds,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_set_rate(
+    deck_index: u32,
+    rate: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckSetRate",
+        json!({ "deckIndex": deck_index, "rate": rate }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_get_dj_state(
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "getDjState", json!({})).await
+}
+
+#[tauri::command]
+async fn engine_set_deck_eq(
+    deck_index: u32,
+    low_db: f32,
+    mid_db: f32,
+    high_db: f32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setDeckEq",
+        json!({ "deckIndex": deck_index, "lowDb": low_db, "midDb": mid_db, "highDb": high_db }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_set_deck_filter(
+    deck_index: u32,
+    filter: f32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setDeckFilter",
+        json!({ "deckIndex": deck_index, "filter": filter }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_set_deck_channel_mix(
+    deck_index: u32,
+    trim_db: f32,
+    fader_db: f32,
+    low_db: f32,
+    mid_db: f32,
+    high_db: f32,
+    filter: f32,
+    orientation: String,
+    muted: bool,
+    pfl: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setDeckChannelMix",
+        json!({
+            "deckIndex": deck_index,
+            "trimDb": trim_db,
+            "faderDb": fader_db,
+            "lowDb": low_db,
+            "midDb": mid_db,
+            "highDb": high_db,
+            "filter": filter,
+            "orientation": orientation,
+            "muted": muted,
+            "pfl": pfl,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_set_crossfader(
+    position: f32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "setCrossfader", json!({ "position": position })).await
+}
+
+#[tauri::command]
+async fn engine_set_deck_orientation(
+    deck_index: u32,
+    orientation: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setDeckOrientation",
+        json!({ "deckIndex": deck_index, "orientation": orientation }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_set_pfl_deck(
+    deck_index: u32,
+    enabled: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setPflDeck",
+        json!({ "deckIndex": deck_index, "enabled": enabled }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_set_hotcue(
+    deck_index: u32,
+    slot: u32,
+    time_seconds: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckSetHotcue",
+        json!({ "deckIndex": deck_index, "slot": slot, "timeSeconds": time_seconds }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_jump_hotcue(
+    deck_index: u32,
+    slot: u32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckJumpHotcue",
+        json!({ "deckIndex": deck_index, "slot": slot }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_clear_hotcue(
+    deck_index: u32,
+    slot: u32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckClearHotcue",
+        json!({ "deckIndex": deck_index, "slot": slot }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_set_loop(
+    deck_index: u32,
+    enabled: bool,
+    in_seconds: f64,
+    out_seconds: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckSetLoop",
+        json!({
+            "deckIndex": deck_index,
+            "enabled": enabled,
+            "inSeconds": in_seconds,
+            "outSeconds": out_seconds,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_set_sync_mode(
+    deck_index: u32,
+    mode: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckSetSyncMode",
+        json!({ "deckIndex": deck_index, "mode": mode }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn engine_get_track_meters(
     engine: State<'_, SharedEngine>,
 ) -> Result<Value, String> {
@@ -560,6 +817,23 @@ pub fn run() {
             engine_set_master_volume,
             engine_move_clip,
             engine_notify_tracks_ready,
+            engine_create_dj_session,
+            engine_load_deck,
+            engine_unload_deck,
+            engine_deck_seek,
+            engine_deck_set_rate,
+            engine_get_dj_state,
+            engine_set_deck_eq,
+            engine_set_deck_filter,
+            engine_set_deck_channel_mix,
+            engine_set_crossfader,
+            engine_set_deck_orientation,
+            engine_set_pfl_deck,
+            engine_deck_set_hotcue,
+            engine_deck_jump_hotcue,
+            engine_deck_clear_hotcue,
+            engine_deck_set_loop,
+            engine_deck_set_sync_mode,
             engine_render_mix,
             engine_dispose_project,
             engine_list_audio_devices,

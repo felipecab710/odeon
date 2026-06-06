@@ -2,7 +2,7 @@
 Async HTTP client for the Odeon ML server on RunPod.
 
 Set RUNPOD_URL in apps/api/.env:
-  RUNPOD_URL=https://<pod-id>-8001.proxy.runpod.net
+  RUNPOD_URL=https://<pod-id>-8002.proxy.runpod.net
   RUNPOD_API_KEY=optional-bearer-token
 """
 from __future__ import annotations
@@ -175,3 +175,51 @@ async def plan_transition(
         )
         r.raise_for_status()
         return r.json()
+
+
+async def generate_bridge(
+    prompt: str,
+    bpm: int,
+    key: str,
+    bars: int,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not is_configured():
+        raise RuntimeError("RUNPOD_URL not configured")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"{RUNPOD_URL}/generate/bridge",
+            json={"prompt": prompt, "bpm": bpm, "key": key, "bars": bars, "extra": extra},
+            headers={**_headers(), "Content-Type": "application/json"},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+async def generate_riser(
+    bpm: int,
+    key: str,
+    bars: int,
+    intensity: float = 0.8,
+) -> Dict[str, Any]:
+    if not is_configured():
+        raise RuntimeError("RUNPOD_URL not configured")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"{RUNPOD_URL}/generate/riser",
+            json={"bpm": bpm, "key": key, "bars": bars, "intensity": intensity},
+            headers={**_headers(), "Content-Type": "application/json"},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+async def download_runpod_file(path: str, dest: Path) -> None:
+    """Download a file from RunPod ML server to local disk."""
+    if not is_configured():
+        raise RuntimeError("RUNPOD_URL not configured")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.get(f"{RUNPOD_URL}{path}", headers=_headers())
+        r.raise_for_status()
+        dest.write_bytes(r.content)

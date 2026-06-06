@@ -30,6 +30,22 @@ def get_device() -> str:
     return "cpu"
 
 
+def dependency_status() -> Dict[str, bool]:
+    """Report whether optional ML packages are importable (not yet loaded)."""
+    status: Dict[str, bool] = {}
+    try:
+        import laion_clap  # noqa: F401
+        status["laion_clap"] = True
+    except ImportError:
+        status["laion_clap"] = False
+    try:
+        import transformers  # noqa: F401
+        status["transformers"] = True
+    except ImportError:
+        status["transformers"] = False
+    return status
+
+
 def gpu_info() -> Dict[str, Any]:
     import torch
     info: Dict[str, Any] = {"device": get_device(), "cuda_available": torch.cuda.is_available()}

@@ -36,7 +36,24 @@ export type EngineRpcMethod =
   | "analyze"
   | "listAudioDevices"
   | "getPlaybackEngineSettings"
-  | "setPlaybackEngineSettings";
+  | "setPlaybackEngineSettings"
+  | "createDjSession"
+  | "loadDeck"
+  | "unloadDeck"
+  | "deckSeek"
+  | "deckSetRate"
+  | "getDjState"
+  | "setDeckEq"
+  | "setDeckFilter"
+  | "setDeckChannelMix"
+  | "setCrossfader"
+  | "setDeckOrientation"
+  | "setPflDeck"
+  | "deckSetHotcue"
+  | "deckJumpHotcue"
+  | "deckClearHotcue"
+  | "deckSetLoop"
+  | "deckSetSyncMode";
 
 export interface EngineRpcRequest {
   id: number;
@@ -60,6 +77,97 @@ export interface SetMasterVolumeParams { volumeDb: number }
 export interface MoveClipParams       { trackId: string; clipId: string; newStartTimeSeconds: number }
 export interface RenderMixParams      { outputFilePath: string }
 export interface AnalyzeParams        { trackId: string }
+
+export interface CreateDjSessionParams { numDecks: number }
+export interface LoadDeckParams {
+  deckIndex: number;
+  filePath: string;
+  name: string;
+  timelineStartSeconds: number;
+}
+export interface UnloadDeckParams     { deckIndex: number }
+export interface DeckSeekParams {
+  deckIndex: number;
+  timelineStartSeconds: number;
+}
+export interface DeckSetRateParams    { deckIndex: number; rate: number }
+
+export interface SetDeckEqParams {
+  deckIndex: number;
+  lowDb: number;
+  midDb: number;
+  highDb: number;
+}
+
+export interface SetDeckFilterParams {
+  deckIndex: number;
+  filter: number;
+}
+
+export interface SetDeckChannelMixParams {
+  deckIndex: number;
+  trimDb: number;
+  faderDb: number;
+  lowDb: number;
+  midDb: number;
+  highDb: number;
+  filter: number;
+  orientation: string;
+  muted: boolean;
+  pfl: boolean;
+}
+
+export interface SetCrossfaderParams { position: number }
+export interface SetDeckOrientationParams { deckIndex: number; orientation: string }
+export interface SetPflDeckParams { deckIndex: number; enabled: boolean }
+
+export interface DeckSetHotcueParams {
+  deckIndex: number;
+  slot: number;
+  timeSeconds: number;
+}
+
+export interface DeckJumpHotcueParams { deckIndex: number; slot: number }
+export interface DeckClearHotcueParams { deckIndex: number; slot: number }
+
+export interface DeckSetLoopParams {
+  deckIndex: number;
+  enabled: boolean;
+  inSeconds: number;
+  outSeconds: number;
+}
+
+export interface DeckSetSyncModeParams {
+  deckIndex: number;
+  mode: string;
+}
+
+export interface DjDeckHotcueState {
+  slot: number;
+  timeSeconds: number;
+}
+
+export interface DjDeckEngineState {
+  deckIndex: number;
+  trackId: string;
+  loaded: boolean;
+  filePath: string;
+  timelineStart: number;
+  durationSeconds: number;
+  localPositionSeconds: number;
+  rate: number;
+  bpm?: number;
+  syncFollower?: boolean;
+  loopActive?: boolean;
+  loopIn?: number;
+  loopOut?: number;
+  hotcues?: DjDeckHotcueState[];
+}
+
+export interface DjStateResult {
+  numDecks: number;
+  decks: DjDeckEngineState[];
+}
 
 // ---- Responses (engine -> frontend) ----
 

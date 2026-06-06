@@ -25,8 +25,11 @@
 
 #include "OdeonDomain.h"
 #include "OdeonRoute.h"
+#include "OdeonDjDeck.h"
 #include "OdeonEngineBehaviour.h"
 #include "PlaybackEngineConfig.h"
+
+#include <array>
 
 namespace odeon {
 
@@ -78,6 +81,32 @@ public:
     // ── Session readiness ────────────────────────────────────────────────────
     std::string notifyTracksReady();
 
+    // ── DJ deck players (Mixxx EngineBuffer model) ───────────────────────────
+    std::string createDjSession(int numDecks);
+    std::string loadDeck(int deckIndex, const std::string& filePath,
+                         const std::string& name, double timelineStartSeconds);
+    std::string unloadDeck(int deckIndex);
+    std::string deckSeek(int deckIndex, double timelineStartSeconds);
+    std::string deckSetRate(int deckIndex, double rate);
+    std::string getDjState();
+
+    // ── DJ mixer DSP (Phase C) ───────────────────────────────────────────────
+    std::string setDeckEq(int deckIndex, float lowDb, float midDb, float highDb);
+    std::string setDeckFilter(int deckIndex, float filter);
+    std::string setDeckChannelMix(int deckIndex, float trimDb, float faderDb,
+                                  float lowDb, float midDb, float highDb, float filter,
+                                  const std::string& orientation, bool muted, bool pfl);
+    std::string setCrossfader(float position);
+    std::string setDeckOrientation(int deckIndex, const std::string& orientation);
+    std::string setPflDeck(int deckIndex, bool enabled);
+
+    // ── DJ deck controls (Phase B) ─────────────────────────────────────────
+    std::string deckSetHotcue(int deckIndex, int slot, double timeSeconds);
+    std::string deckJumpHotcue(int deckIndex, int slot);
+    std::string deckClearHotcue(int deckIndex, int slot);
+    std::string deckSetLoop(int deckIndex, bool enabled, double inSeconds, double outSeconds);
+    std::string deckSetSyncMode(int deckIndex, const std::string& mode);
+
     // ── Render ──────────────────────────────────────────────────────────────────
     std::string renderMix(const std::string& outputFilePath);
 
@@ -103,6 +132,12 @@ public:
 
 private:
     OdeonRoute* findRoute(const std::string& trackId);
+    OdeonRoute* findDeckRoute(int deckIndex);
+    void        ensureDeckEqualiser(OdeonRoute& route);
+    float       crossfaderWeightDb(CfOrientation orient) const;
+    void        applyDjRouteMix(OdeonRoute& route);
+    void        clearDeckClips(OdeonDjDeck& deck);
+    te::WaveAudioClip* findDeckWaveClip(OdeonRoute* route);
     void        ensureProjectFolders(const juce::File& root);
     juce::File  projectFolder() const;
     std::string serializeProjectJson() const;
@@ -136,6 +171,12 @@ private:
 
     PlaybackEngineSettings playbackSettings_;
     PlaybackEngineConfig   behaviourConfig_;
+
+    bool djMode_ = false;
+    int  numDjDecks_ = 0;
+    std::array<OdeonDjDeck, 4> djDecks_{};
+    float crossfaderPos_ = 0.5f;
+    int   syncLeaderDeck_ = 0;
 
     static constexpr int kSchemaVersion = 1;
 };

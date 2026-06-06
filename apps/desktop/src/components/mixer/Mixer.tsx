@@ -37,7 +37,6 @@ const MIXER_TOOLBAR_H = 26;
 const DEFAULT_MIXER_H = FADER_AREA_H + 300;
 const MIN_MIXER_H = MIXER_TOOLBAR_H + 280;
 const BTN_H        =  14;   // standard button height
-const BTN_HALF     =  50;   // half-width button (each side)
 const BTN_GAP      =   2;   // gap between paired buttons / rows
 // Fader/meter layout — Pro Tools order: fader scale | fader | meter scale | meters
 const FADER_SCALE_X =  2;

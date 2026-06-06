@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback } from "react";
 import { useSelectStore } from "../../stores/selectStore";
-import { apiClient } from "../../lib/apiClient";
+import { apiClient, type TrackAnalysisData } from "../../lib/apiClient";
 import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
 import { ColoredWaveformCanvas } from "./ColoredWaveformCanvas";
 import { FieldTooltip, FIELD_TOOLTIPS } from "./FieldTooltip";
@@ -24,6 +24,14 @@ const MARKER_LABEL: Record<MarkerType, string> = {
   cue:     "Cue",
   loop:    "Loop",
 };
+
+function sectionColor(label: string): string {
+  const map: Record<string, string> = {
+    intro: "#6b7280", build: "#facc15", drop: "#f87171",
+    breakdown: "#a78bfa", bridge: "#38bdf8", outro: "#4ade80",
+  };
+  return map[label.toLowerCase()] ?? "#888";
+}
 
 function formatTime(s: number): string {
   const m = Math.floor(s / 60);
@@ -241,6 +249,8 @@ export function TrackProfilePanel() {
   const [entry, setEntry] = useState<CatalogEntry | null>(null);
   const [cache, setCache] = useState<WaveformCache | null>(null);
   const [markers, setMarkers] = useState<CatalogMarker[]>([]);
+  const [analysis, setAnalysis] = useState<TrackAnalysisData | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
     if (!selectedId) { setEntry(null); setCache(null); setMarkers([]); return; }
@@ -253,6 +263,7 @@ export function TrackProfilePanel() {
     }
     if (e) {
       apiClient.select.listMarkers(e.id).then(setMarkers).catch(() => {});
+      apiClient.select.getAnalysis(e.id).then(r => setAnalysis(r.analysis)).catch(() => setAnalysis(null));
     }
   }, [selectedId, entries]);
 
@@ -367,6 +378,56 @@ export function TrackProfilePanel() {
         <MetaRow label="RMS dB"   value={entry.rms_db != null ? entry.rms_db.toFixed(1) : null} />
         <MetaRow label="Channels" value={entry.channels} />
         <MetaRow label="Rate"     value={entry.sample_rate != null ? `${entry.sample_rate} Hz` : null} />
+
+        {/* ML Analysis */}
+        <SectionHeader>AI ANALYSIS</SectionHeader>
+        {analysis ? (
+          <div style={{ marginBottom: 8 }}>
+            {analysis.mood && <MetaRow label="Mood" value={analysis.mood} />}
+            {analysis.energy_arc && <MetaRow label="Energy" value={analysis.energy_arc} />}
+            {analysis.rhythm_pattern && <MetaRow label="Rhythm" value={analysis.rhythm_pattern} />}
+            {analysis.vocal_enters_seconds != null && (
+              <MetaRow label="Vocals at" value={`${analysis.vocal_enters_seconds}s`} />
+            )}
+            {analysis.sections && analysis.sections.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                {analysis.sections.map((s, i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", fontSize: 9,
+                    padding: "2px 0", borderBottom: "1px solid #1a1a1a",
+                  }}>
+                    <span style={{ color: sectionColor(s.label) }}>{s.label}</span>
+                    <span style={{ color: "#555" }}>{s.start_seconds}s–{s.end_seconds}s</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {analysis.transition_notes && (
+              <p style={{ color: "#555", fontSize: 9, marginTop: 6, lineHeight: 1.4 }}>{analysis.transition_notes}</p>
+            )}
+          </div>
+        ) : (
+          <p style={{ color: "#444", fontSize: 10, marginBottom: 6 }}>No AI analysis yet.</p>
+        )}
+        <button
+          disabled={analyzing || entry.status !== "ready"}
+          onClick={async () => {
+            if (!entry) return;
+            setAnalyzing(true);
+            try {
+              const r = await apiClient.select.analyzeMl(entry.id);
+              setAnalysis(r.analysis);
+            } catch { /* RunPod may be offline */ }
+            finally { setAnalyzing(false); }
+          }}
+          style={{
+            background: "#111", border: "1px solid #333", borderRadius: 4,
+            padding: "4px 8px", color: analyzing ? "#444" : "#888",
+            fontSize: 10, cursor: analyzing ? "default" : "pointer", width: "100%",
+          }}
+        >
+          {analyzing ? "Analyzing…" : "Run AI Analysis"}
+        </button>
 
         {/* Tags */}
         <SectionHeader>TAGS</SectionHeader>

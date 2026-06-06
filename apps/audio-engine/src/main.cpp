@@ -111,6 +111,58 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
     if (method == "getPlaybackEngineSettings") return s.getPlaybackEngineSettings();
     if (method == "setPlaybackEngineSettings") return s.setPlaybackEngineSettings(p);
 
+    if (method == "createDjSession")
+        return s.createDjSession(static_cast<int>(extractDouble(p, "numDecks", 4.0)));
+    if (method == "loadDeck")
+        return s.loadDeck(static_cast<int>(extractDouble(p, "deckIndex")),
+                          extractString(p, "filePath"),
+                          extractString(p, "name"),
+                          extractDouble(p, "timelineStartSeconds"));
+    if (method == "unloadDeck")
+        return s.unloadDeck(static_cast<int>(extractDouble(p, "deckIndex")));
+    if (method == "deckSeek")
+        return s.deckSeek(static_cast<int>(extractDouble(p, "deckIndex")),
+                          extractDouble(p, "timelineStartSeconds"));
+    if (method == "deckSetRate")
+        return s.deckSetRate(static_cast<int>(extractDouble(p, "deckIndex")),
+                             extractDouble(p, "rate", 1.0));
+    if (method == "getDjState") return s.getDjState();
+    if (method == "setDeckEq")
+        return s.setDeckEq(static_cast<int>(extractDouble(p, "deckIndex")),
+                         extractFloat(p, "lowDb"), extractFloat(p, "midDb"), extractFloat(p, "highDb"));
+    if (method == "setDeckFilter")
+        return s.setDeckFilter(static_cast<int>(extractDouble(p, "deckIndex")), extractFloat(p, "filter"));
+    if (method == "setDeckChannelMix")
+        return s.setDeckChannelMix(static_cast<int>(extractDouble(p, "deckIndex")),
+                                   extractFloat(p, "trimDb"), extractFloat(p, "faderDb"),
+                                   extractFloat(p, "lowDb"), extractFloat(p, "midDb"), extractFloat(p, "highDb"),
+                                   extractFloat(p, "filter"), extractString(p, "orientation", "THRU"),
+                                   extractBool(p, "muted"), extractBool(p, "pfl"));
+    if (method == "setCrossfader")
+        return s.setCrossfader(extractFloat(p, "position", 0.5f));
+    if (method == "setDeckOrientation")
+        return s.setDeckOrientation(static_cast<int>(extractDouble(p, "deckIndex")),
+                                  extractString(p, "orientation", "THRU"));
+    if (method == "setPflDeck")
+        return s.setPflDeck(static_cast<int>(extractDouble(p, "deckIndex")), extractBool(p, "enabled"));
+    if (method == "deckSetHotcue")
+        return s.deckSetHotcue(static_cast<int>(extractDouble(p, "deckIndex")),
+                               static_cast<int>(extractDouble(p, "slot")),
+                               extractDouble(p, "timeSeconds"));
+    if (method == "deckJumpHotcue")
+        return s.deckJumpHotcue(static_cast<int>(extractDouble(p, "deckIndex")),
+                               static_cast<int>(extractDouble(p, "slot")));
+    if (method == "deckClearHotcue")
+        return s.deckClearHotcue(static_cast<int>(extractDouble(p, "deckIndex")),
+                                static_cast<int>(extractDouble(p, "slot")));
+    if (method == "deckSetLoop")
+        return s.deckSetLoop(static_cast<int>(extractDouble(p, "deckIndex")),
+                             extractBool(p, "enabled"),
+                             extractDouble(p, "inSeconds"), extractDouble(p, "outSeconds"));
+    if (method == "deckSetSyncMode")
+        return s.deckSetSyncMode(static_cast<int>(extractDouble(p, "deckIndex")),
+                                 extractString(p, "mode", "off"));
+
     return jsonErr("Unknown method: " + method);
 }
 

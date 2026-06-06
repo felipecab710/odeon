@@ -188,7 +188,7 @@ function MarkerLane({ clipWidth, height, mode }: { clipWidth: number; height: nu
   );
 }
 
-function BlocksLane({ clipWidth, height, fileLabel, color }: {
+function BlocksLane({ fileLabel, color }: {
   clipWidth: number; height: number; fileLabel: string; color: string;
 }) {
   return (

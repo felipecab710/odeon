@@ -1,8 +1,6 @@
 import { useProjectStore } from "../../stores/projectStore";
-import { useTransportStore } from "../../stores/transportStore";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { usePlaybackEngineStore } from "../../stores/playbackEngineStore";
-import { useNavigationStore } from "../../stores/navigationStore";
 import { useEffect, useState } from "react";
 
 // Stages shown in sequence while any upload/analysis is running.
@@ -40,8 +38,6 @@ function useLoadingStage(isLoading: boolean, staticLabel: string | null) {
 export function TopBar() {
   const { project, isLoading, loadingLabel, uploadReference, uploadUserStems, analyzeProject, compareProject, exportBlueprint } =
     useProjectStore();
-  const { navigate } = useNavigationStore();
-  const { engineReady } = useTransportStore();
   const { compareUserTrackId, compareRefTrackId } = useSelectionStore();
   const openPlaybackEngine = usePlaybackEngineStore((s) => s.open);
   const displayLabel = useLoadingStage(isLoading, loadingLabel ?? null);
@@ -83,39 +79,12 @@ export function TopBar() {
   return (
     <div className="relative flex flex-col flex-shrink-0">
       {/* Main bar */}
-      <div className="flex items-center gap-2 h-11 px-4 bg-studio-surface border-b border-studio-border">
-        {/* Logo + Sessions button */}
-        <div className="flex items-center gap-2 mr-3">
-          <div className="w-6 h-6 rounded bg-studio-accent flex items-center justify-center">
-            <span className="text-white font-bold text-xs">O</span>
-          </div>
-          <button
-            onClick={() => navigate("studio")}
-            className="font-semibold text-studio-text tracking-wide text-sm hover:text-studio-accent transition-colors"
-            title="Open Studio"
-          >
-            ODEON
-          </button>
-        </div>
-
-        {/* Status */}
+      <div className="flex items-center gap-2 h-9 px-4 bg-studio-surface border-b border-studio-border">
         {project && (
           <span className="text-xxs px-1.5 py-0.5 rounded bg-studio-panel text-studio-text-faint uppercase tracking-wider">
             {isLoading ? (displayLabel ?? "processing…") : project.status.replace(/_/g, " ")}
           </span>
         )}
-
-        {/* Engine status */}
-        <div className="ml-1 flex items-center gap-1">
-          <div
-            className={`w-1.5 h-1.5 rounded-full ${
-              engineReady ? "bg-studio-meter" : "bg-studio-text-faint"
-            }`}
-          />
-          <span className="text-xxs text-studio-text-faint">
-            {engineReady ? "Engine" : "No audio"}
-          </span>
-        </div>
 
         <div className="flex-1" />
 

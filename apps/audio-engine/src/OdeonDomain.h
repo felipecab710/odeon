@@ -23,6 +23,7 @@ enum class RouteRole {
     user,        // the user's own stem/track
     analysis,    // native AI analysis tap route (no audible output by default)
     bus,         // a group/aux bus (v2+)
+    deck,        // DJ deck player (Mixxx EngineBuffer)
     master       // the master output
 };
 
@@ -42,6 +43,7 @@ inline std::string toString(RouteRole r) {
         case RouteRole::user:      return "user";
         case RouteRole::analysis:  return "analysis";
         case RouteRole::bus:       return "bus";
+        case RouteRole::deck:      return "deck";
         case RouteRole::master:    return "master";
     }
     return "user";
@@ -51,6 +53,7 @@ inline RouteRole roleFromString(const std::string& s) {
     if (s == "reference") return RouteRole::reference;
     if (s == "analysis")  return RouteRole::analysis;
     if (s == "bus")       return RouteRole::bus;
+    if (s == "deck")      return RouteRole::deck;
     if (s == "master")    return RouteRole::master;
     return RouteRole::user;
 }
@@ -103,12 +106,31 @@ struct AudioClip {
     double      gainDb       = 0.0;
 };
 
+// Crossfader bus orientation — Mixxx EngineChannel LEFT/CENTER/RIGHT
+enum class CfOrientation { A = 0, THRU = 1, B = 2 };
+
+inline CfOrientation cfFromString(const std::string& s) {
+    if (s == "A" || s == "a") return CfOrientation::A;
+    if (s == "B" || s == "b") return CfOrientation::B;
+    return CfOrientation::THRU;
+}
+
 // Mix parameters that persist per route.
 struct RouteMixState {
     float volumeDb = 0.0f;
     float pan      = 0.0f;   // -1..1
     bool  muted    = false;
     bool  soloed   = false;
+
+    // DJ channel strip (Phase C — Pioneer DJM-A9 model)
+    float trimDb  = 0.f;
+    float faderDb = 0.f;
+    float lowDb   = 0.f;
+    float midDb   = 0.f;
+    float highDb  = 0.f;
+    float filter  = 0.f;   // -12..12 (HP + / LP -)
+    CfOrientation cfOrient = CfOrientation::THRU;
+    bool pfl = false;
 };
 
 // Live meter snapshot (peak + smoothed/RMS), per channel.

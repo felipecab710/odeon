@@ -92,6 +92,57 @@
   .drag {
     -webkit-app-region: drag;
   }
+
+  /* Unified title bar — nav sits top-right in native overlay chrome (Cursor-style). */
+  .app-titlebar {
+    flex-shrink: 0;
+    height: 38px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #2a2a2a;
+    -webkit-app-region: drag;
+  }
+
+  html[data-tauri] .app-titlebar {
+    /* macOS traffic lights */
+    padding-left: 78px;
+  }
+
+  .app-titlebar-inner {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding-right: 12px;
+    gap: 8px;
+  }
+
+  .app-titlebar-drag {
+    -webkit-app-region: drag;
+    cursor: default;
+  }
+
+  .app-titlebar-nav-btn {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: #888;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+    -webkit-app-region: no-drag;
+  }
+
+  .app-titlebar-nav-btn:hover {
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .app-titlebar-nav-btn[data-active="true"] {
+    color: #fff;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.08);
+  }
 }
 
 @keyframes pulse {

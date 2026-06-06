@@ -169,16 +169,21 @@ function buildPixels(
   return pixels;
 }
 
-function buildOffscreen(
+/** Build waveform bitmap. Uses HTMLCanvasElement — OffscreenCanvas fails silently in Tauri WKWebView. */
+function buildBitmap(
   cache: WaveformCache, physW: number, physH: number, bg: string, mode: WaveformMode,
-): OffscreenCanvas {
+): HTMLCanvasElement {
   const [bgR, bgG, bgB] = hexToRgb(bg);
-  const oc  = new OffscreenCanvas(physW, physH);
-  const ctx = oc.getContext("2d")!;
-  const id  = ctx.createImageData(physW, physH);
-  id.data.set(buildPixels(cache, physW, physH, bgR, bgG, bgB, mode));
-  ctx.putImageData(id, 0, 0);
-  return oc;
+  const canvas = document.createElement("canvas");
+  canvas.width = physW;
+  canvas.height = physH;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const id = ctx.createImageData(physW, physH);
+    id.data.set(buildPixels(cache, physW, physH, bgR, bgG, bgB, mode));
+    ctx.putImageData(id, 0, 0);
+  }
+  return canvas;
 }
 
 // ─── StaticWaveform ───────────────────────────────────────────────────────────
@@ -194,7 +199,7 @@ export function StaticWaveform({
     const pH  = Math.round(height * dpr);
     canvas.width  = pW;
     canvas.height = pH;
-    canvas.getContext("2d")!.drawImage(buildOffscreen(cache, pW, pH, bg, mode), 0, 0);
+    canvas.getContext("2d")!.drawImage(buildBitmap(cache, pW, pH, bg, mode), 0, 0);
   }, [cache, width, height, bg, mode]);
   return <canvas ref={ref} style={{ display: "block", width, height }} />;
 }
@@ -220,12 +225,13 @@ interface OverviewProps {
   bg?:      string;
   mode?:    WaveformMode;
   onSeek?:  (ratio: number) => void;
+  hidePlayhead?: boolean;
 }
 
 export const OverviewWaveform = forwardRef<WaveformHandle, OverviewProps>(
-  function OverviewWaveform({ cache, width, height, markers, bg = "#0a0a0a", mode = "rgb", onSeek }, ref) {
+  function OverviewWaveform({ cache, width, height, markers, bg = "#0a0a0a", mode = "rgb", hidePlayhead, onSeek }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const offRef    = useRef<OffscreenCanvas | null>(null);
+    const offRef    = useRef<HTMLCanvasElement | null>(null);
     const syncRef   = useRef<SyncPoint>({ ...DEFAULT_SYNC });
     const rafId     = useRef(0);
 
@@ -237,7 +243,7 @@ export const OverviewWaveform = forwardRef<WaveformHandle, OverviewProps>(
     useEffect(() => {
       const canvas = canvasRef.current; if (!canvas) return;
       const { pW, pH } = setupCanvas(canvas, width, height);
-      offRef.current = cache ? buildOffscreen(cache, pW, pH, bg, mode) : null;
+      offRef.current = cache ? buildBitmap(cache, pW, pH, bg, mode) : null;
     }, [cache, width, height, bg, mode]);
 
     // RAF
@@ -269,24 +275,25 @@ export const OverviewWaveform = forwardRef<WaveformHandle, OverviewProps>(
           }
         }
 
-        // Playhead
-        const ph = dur > 0 ? t / dur : 0;
-        const px = Math.round(ph * pW);
-        ctx.fillStyle = "rgba(0,0,0,0.28)";
-        ctx.fillRect(0, 0, px, pH);
-        ctx.fillStyle = "rgba(255,255,255,0.12)";
-        ctx.fillRect(px - 2 * dpr, 0, 5 * dpr, pH);
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(px, 0, dpr, pH);
-        ctx.fillStyle = "#fff";
-        ctx.beginPath();
-        ctx.moveTo(px - 3 * dpr, 0); ctx.lineTo(px + 3 * dpr, 0); ctx.lineTo(px, 6 * dpr);
-        ctx.fill();
+        if (!hidePlayhead) {
+          const ph = dur > 0 ? t / dur : 0;
+          const px = Math.round(ph * pW);
+          ctx.fillStyle = "rgba(0,0,0,0.28)";
+          ctx.fillRect(0, 0, px, pH);
+          ctx.fillStyle = "rgba(255,255,255,0.12)";
+          ctx.fillRect(px - 2 * dpr, 0, 5 * dpr, pH);
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(px, 0, dpr, pH);
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.moveTo(px - 3 * dpr, 0); ctx.lineTo(px + 3 * dpr, 0); ctx.lineTo(px, 6 * dpr);
+          ctx.fill();
+        }
       };
 
       frame();
       return () => cancelAnimationFrame(rafId.current);
-    }, [cache, width, height, bg, markers, mode]);
+    }, [cache, width, height, bg, markers, hidePlayhead, mode]);
 
     return (
       <canvas ref={canvasRef} style={{ display: "block", width, height, cursor: "crosshair" }}
@@ -299,22 +306,13 @@ export const OverviewWaveform = forwardRef<WaveformHandle, OverviewProps>(
   }
 );
 
-// ─── ZoomedWaveform ───────────────────────────────────────────────────────────
+// ─── TrackNavWaveform — CDJ full-track navigation strip ───────────────────────
+// Full-track RGB overview with played-region dimming. Playhead drawn by parent.
 
-const ATLAS_SCALE = 4;
-
-interface ZoomedProps extends OverviewProps {
-  beatTimes?:   number[] | null;
-  zoomSeconds?: number;
-}
-
-export const ZoomedWaveform = forwardRef<WaveformHandle, ZoomedProps>(
-  function ZoomedWaveform(
-    { cache, width, height, markers, bg = "#080808", mode = "rgb", beatTimes, zoomSeconds = 15, onSeek },
-    ref,
-  ) {
+export const TrackNavWaveform = forwardRef<WaveformHandle, OverviewProps>(
+  function TrackNavWaveform({ cache, width, height, bg = "#030306", mode = "rgb" }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const offRef    = useRef<OffscreenCanvas | null>(null);
+    const offRef    = useRef<HTMLCanvasElement | null>(null);
     const syncRef   = useRef<SyncPoint>({ ...DEFAULT_SYNC });
     const rafId     = useRef(0);
 
@@ -325,7 +323,68 @@ export const ZoomedWaveform = forwardRef<WaveformHandle, ZoomedProps>(
     useEffect(() => {
       const canvas = canvasRef.current; if (!canvas) return;
       const { pW, pH } = setupCanvas(canvas, width, height);
-      offRef.current = cache ? buildOffscreen(cache, pW * ATLAS_SCALE, pH, bg, mode) : null;
+      offRef.current = cache ? buildBitmap(cache, pW, pH, bg, mode) : null;
+    }, [cache, width, height, bg, mode]);
+
+    useEffect(() => {
+      const canvas = canvasRef.current; if (!canvas) return;
+      const ctx = canvas.getContext("2d")!;
+
+      const frame = () => {
+        rafId.current = requestAnimationFrame(frame);
+        const pW = canvas.width;
+        const pH = canvas.height;
+        const s  = syncRef.current;
+        const t  = interpolate(s);
+        const dur = s.duration;
+
+        if (offRef.current) ctx.drawImage(offRef.current, 0, 0);
+        else { ctx.fillStyle = bg; ctx.fillRect(0, 0, pW, pH); }
+
+        if (dur > 0) {
+          const px = Math.round((t / dur) * pW);
+          ctx.fillStyle = "rgba(0,0,0,0.52)";
+          ctx.fillRect(0, 0, px, pH);
+        }
+      };
+
+      frame();
+      return () => cancelAnimationFrame(rafId.current);
+    }, [cache, width, height, bg, mode]);
+
+    return <canvas ref={canvasRef} style={{ display: "block", width, height }} />;
+  }
+);
+
+// ─── ZoomedWaveform ───────────────────────────────────────────────────────────
+
+const ATLAS_SCALE = 4;
+
+interface ZoomedProps extends OverviewProps {
+  beatTimes?:     number[] | null;
+  zoomSeconds?:   number;
+  /** Skip built-in center needle (e.g. CDJ screen overlays its own playhead). */
+  hidePlayhead?:  boolean;
+}
+
+export const ZoomedWaveform = forwardRef<WaveformHandle, ZoomedProps>(
+  function ZoomedWaveform(
+    { cache, width, height, markers, bg = "#080808", mode = "rgb", beatTimes, zoomSeconds = 15, hidePlayhead, onSeek },
+    ref,
+  ) {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const offRef    = useRef<HTMLCanvasElement | null>(null);
+    const syncRef   = useRef<SyncPoint>({ ...DEFAULT_SYNC });
+    const rafId     = useRef(0);
+
+    useImperativeHandle(ref, () => ({
+      sync(at, wm, dur, pl, rt = 1) { syncRef.current = { audioTime: at, wallMs: wm, duration: dur, playing: pl, rate: rt }; },
+    }));
+
+    useEffect(() => {
+      const canvas = canvasRef.current; if (!canvas) return;
+      const { pW, pH } = setupCanvas(canvas, width, height);
+      offRef.current = cache ? buildBitmap(cache, pW * ATLAS_SCALE, pH, bg, mode) : null;
     }, [cache, width, height, bg, mode]);
 
     useEffect(() => {
@@ -394,16 +453,17 @@ export const ZoomedWaveform = forwardRef<WaveformHandle, ZoomedProps>(
           }
         }
 
-        // Fixed center needle
-        const cx = pW / 2 | 0;
-        ctx.fillStyle = "rgba(0,0,0,0.45)";  ctx.fillRect(cx - 2 * dpr, 0, 5 * dpr, pH);
-        ctx.fillStyle = "rgba(255,255,255,0.10)"; ctx.fillRect(cx - dpr, 0, 3 * dpr, pH);
-        ctx.fillStyle = "#fff";               ctx.fillRect(cx, 0, dpr, pH);
+        if (!hidePlayhead) {
+          const cx = pW / 2 | 0;
+          ctx.fillStyle = "rgba(0,0,0,0.45)";  ctx.fillRect(cx - 2 * dpr, 0, 5 * dpr, pH);
+          ctx.fillStyle = "rgba(255,255,255,0.10)"; ctx.fillRect(cx - dpr, 0, 3 * dpr, pH);
+          ctx.fillStyle = "#fff";               ctx.fillRect(cx, 0, dpr, pH);
+        }
       };
 
       frame();
       return () => cancelAnimationFrame(rafId.current);
-    }, [cache, width, height, bg, markers, beatTimes, zoomSeconds, mode]);
+    }, [cache, width, height, bg, markers, beatTimes, zoomSeconds, hidePlayhead, mode]);
 
     return (
       <canvas ref={canvasRef} style={{ display: "block", width, height, cursor: "crosshair" }}
