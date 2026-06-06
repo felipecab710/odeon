@@ -6,7 +6,6 @@ import {
   type PlaybackEngineStatus,
 } from "@odeon/shared";
 import { engineClient } from "../lib/engineClient";
-import { webAudioEngine } from "../lib/webAudioEngine";
 
 const STORAGE_KEY = "odeon:playback-engine";
 
@@ -79,7 +78,6 @@ export const usePlaybackEngineStore = create<PlaybackEngineState>((set, get) => 
     const { draft } = get();
     set({ isSaving: true, error: null });
     saveLocalSettings(draft);
-    webAudioEngine.applyPlaybackSettings(draft);
 
     try {
       const status = (await engineClient.setPlaybackEngineSettings(

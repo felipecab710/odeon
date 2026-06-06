@@ -109,6 +109,7 @@ class TrackAnalysis(BaseModel):
     frequency_profile: Optional[FrequencyProfile] = None
     stereo_profile: Optional[StereoProfile] = None
     tempo: Optional[float] = None
+    beat_times: Optional[List[float]] = None  # seconds, from librosa.beat.beat_track
     section_energy: Optional[List[SectionEnergy]] = None
     warnings: List[str] = Field(default_factory=list)
     # Waveform display data — downsampled peak + RMS envelopes (~4096 points each)

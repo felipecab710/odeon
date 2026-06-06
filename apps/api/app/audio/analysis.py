@@ -287,13 +287,53 @@ def compute_stereo_profile(stereo: np.ndarray, sr: int) -> StereoProfile:
 #  Tempo
 # ─────────────────────────────────────────────
 
-def estimate_tempo(mono: np.ndarray, sr: int) -> Optional[float]:
+def estimate_tempo(mono: np.ndarray, sr: int) -> tuple[Optional[float], list[float]]:
+    """Return (bpm, beat_times_in_seconds)."""
     try:
-        tempo, _ = librosa.beat.beat_track(y=mono, sr=sr)
+        tempo, beat_frames = librosa.beat.beat_track(y=mono, sr=sr)
         val = float(tempo) if np.isscalar(tempo) else float(tempo[0])
-        return round(val, 1) if val > 0 else None
+        beat_times = [round(float(t), 3) for t in librosa.frames_to_time(beat_frames, sr=sr)]
+        return (round(val, 1) if val > 0 else None), beat_times
     except Exception:
-        return None
+        return None, []
+
+
+def compute_freq_colors(mono: np.ndarray, sr: int, num_cols: int = 256) -> np.ndarray:
+    """
+    Compute per-column frequency band weights for colored waveform display.
+
+    Returns (num_cols, 3) uint8 array — columns are [bass, mid, high] weights (0-255).
+    Bass: 20-300 Hz (→ blue in UI), Mid: 300-3000 Hz (→ green), High: 3000+ Hz (→ orange).
+    """
+    try:
+        if len(mono) < sr:
+            return np.zeros((num_cols, 3), dtype=np.uint8)
+
+        n_fft = 1024
+        hop = max(1, len(mono) // (num_cols * 8))
+        stft = np.abs(librosa.stft(mono, n_fft=n_fft, hop_length=hop))
+        freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+        bass_mask = (freqs >= 20) & (freqs < 300)
+        mid_mask  = (freqs >= 300) & (freqs < 3000)
+        high_mask = (freqs >= 3000)
+
+        bass_e = stft[bass_mask, :].sum(axis=0)
+        mid_e  = stft[mid_mask,  :].sum(axis=0)
+        high_e = stft[high_mask, :].sum(axis=0)
+
+        total = bass_e + mid_e + high_e + 1e-9
+        bass_w = (bass_e / total)
+        mid_w  = (mid_e  / total)
+        high_w = (high_e / total)
+
+        n_frames = bass_w.shape[0]
+        idx = np.linspace(0, n_frames - 1, num_cols).astype(int)
+
+        result = np.stack([bass_w[idx], mid_w[idx], high_w[idx]], axis=1)
+        return (result * 255).clip(0, 255).astype(np.uint8)
+    except Exception:
+        return np.zeros((num_cols, 3), dtype=np.uint8)
 
 
 # ─────────────────────────────────────────────
@@ -406,7 +446,7 @@ def analyze_track(file_path: str) -> TrackAnalysis:
     if stereo is None:
         warnings.append("Mono source: stereo profile unavailable.")
 
-    tempo = estimate_tempo(mono, sr)
+    tempo, beat_times = estimate_tempo(mono, sr)
     sections = detect_sections_placeholder(mono, sr)
     waveform_peaks, waveform_rms = compute_waveform_peaks(mono, num_points=4096)
     if stereo is not None and stereo.ndim == 2:
@@ -416,10 +456,13 @@ def analyze_track(file_path: str) -> TrackAnalysis:
         left_ch = right_ch = mono
     wpl, wpr, wrl, wrr = compute_stereo_waveform_peaks(left_ch, right_ch, num_points=4096)
 
+    freq_colors = compute_freq_colors(mono, sr)
+
     cache_path = ""
     try:
         _, cache_file = build_and_cache_from_arrays(
             file_path, left_ch, right_ch, sample_rate, duration, channels,
+            freq_colors=freq_colors,
         )
         cache_path = str(cache_file)
     except Exception:
@@ -442,6 +485,7 @@ def analyze_track(file_path: str) -> TrackAnalysis:
         frequency_profile=freq_profile,
         stereo_profile=stereo_profile,
         tempo=tempo,
+        beat_times=beat_times,
         section_energy=sections,
         warnings=warnings,
         waveform_peaks=waveform_peaks,
@@ -452,3 +496,34 @@ def analyze_track(file_path: str) -> TrackAnalysis:
         waveform_rms_r=wrr,
         waveform_cache_path=cache_path or str(cache_path_for(file_path)),
     )
+
+# ─────────────────────────────────────────────
+#  Key estimation (Select / catalog intelligence)
+# ─────────────────────────────────────────────
+
+def estimate_key_placeholder(mono: np.ndarray, sr: int) -> str | None:
+    """
+    Estimate musical key using librosa chroma energy aggregation.
+
+    Accuracy: ±1 semitone — suitable for catalog browsing, not mixing decisions.
+    Returns None if audio is too short or featureless.
+    """
+    try:
+        if len(mono) < sr * 2:
+            return None
+
+        chroma = librosa.feature.chroma_cqt(y=mono, sr=sr)
+        chroma_mean = chroma.mean(axis=1)
+
+        pitch_classes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        key_idx = int(np.argmax(chroma_mean))
+        key_name = pitch_classes[key_idx]
+
+        # Major 3rd = 4 semitones, minor 3rd = 3 semitones
+        major_3rd = (key_idx + 4) % 12
+        minor_3rd = (key_idx + 3) % 12
+        mode = "maj" if chroma_mean[major_3rd] >= chroma_mean[minor_3rd] else "min"
+
+        return f"{key_name} {mode}"
+    except Exception:
+        return None

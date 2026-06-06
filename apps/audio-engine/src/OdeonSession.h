@@ -57,7 +57,8 @@ public:
 
     // ── Transport ─────────────────────────────────────────────────────────────
     std::string play();
-    std::string stop();
+    std::string pause();   // stop clock, preserve playhead
+    std::string stop();    // stop clock, seek to 0
     std::string seek(double timeSeconds);
     std::string setLoop(bool enabled, double startSeconds, double endSeconds);
     std::string getTransportState();
@@ -67,7 +68,15 @@ public:
     std::string setTrackPan(const std::string& trackId, float pan);
     std::string muteTrack(const std::string& trackId, bool muted);
     std::string soloTrack(const std::string& trackId, bool soloed);
+    std::string setMasterVolume(float volumeDb);
     std::string getTrackMeters();
+
+    // ── Clip positioning ─────────────────────────────────────────────────────
+    std::string moveClip(const std::string& trackId, const std::string& clipId,
+                         double newStartTimeSeconds);
+
+    // ── Session readiness ────────────────────────────────────────────────────
+    std::string notifyTracksReady();
 
     // ── Render ──────────────────────────────────────────────────────────────────
     std::string renderMix(const std::string& outputFilePath);

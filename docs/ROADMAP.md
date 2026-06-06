@@ -23,12 +23,37 @@ Upload reference → Odeon creates DAW-style tracks → play in sync → import 
 
 ---
 
+## Phase 1B — Native Engine + Wavecache + Select (Shipped)
+
+- [x] `.odeon.wavecache` v2 binary sidecar (NumPy pyramid, all levels, no bucket cap)
+- [x] Binary parser on desktop (ArrayBuffer, `DataView`, LOD tile blitting)
+- [x] Throttled prefetch (max 3 concurrent sidecar loads)
+- [x] `shouldUseFinePeaks` threshold fixed (`spp < lodBlockSize`, not `spp < 8192`)
+- [x] Path2D envelope rendering (single fill + stroke per channel per tile)
+- [x] Tile-based bitmap cache (512px tiles, `blitVisibleTiles` scroll model)
+- [x] WaveformCanvas decoupled from `AudioBuffer` / `webAudioEngine`
+- [x] `bufferCache.ts` deleted; `useTrackBuffer.ts` deleted
+- [x] Native engine `pause` RPC (preserve playhead; distinct from `stop`)
+- [x] Native engine `moveClip`, `setMasterVolume`, `notifyTracksReady`
+- [x] `transportStore` routes play/pause/stop/seek/loop → `engineClient`
+- [x] `webAudioReady` gating removed; `engineTracksReady` gate added
+- [x] `webAudioEngine.ts` + `useWebAudioSync.ts` deleted
+- [x] `Mixer.tsx`, `TrackLane.tsx`, `trackGroupStore.ts` cleaned of Web Audio calls
+- [x] `useEngineSync` pushes initial mix state + handles clip position change
+- [x] `NavBar` + navigation shell (studio / select / research / settings)
+- [x] `SelectHome`, `CatalogTable`, `TrackProfilePanel` (waveform preview via v2 sidecar)
+- [x] `/select/*` FastAPI router (import, analyze, tags, collections, compatibility, stats)
+- [x] `estimate_key_placeholder` (chroma CQT key estimation)
+- [x] Placeholder `reference_stem` tracks with "Stem separation pending" label
+- [x] `WAVEFORM_CACHE.md` + `ODEON_SELECT.md` documentation
+
+---
+
 ## Phase 2 — Stems + Better Rendering
 
 - [ ] Demucs stem separation active end-to-end (install demucs, trigger on reference upload)
 - [ ] Reference stem tracks shown in timeline after separation
 - [ ] Stem-level analysis per separated stem
-- [ ] Actual waveform rendering (decode WAV in frontend, draw canvas waveform)
 - [ ] Timeline clip resize / move
 - [ ] Better section detection (onset-based, not just energy chunking)
 - [ ] Render output saved to audio/renders/ and playable in app

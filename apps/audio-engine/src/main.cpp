@@ -83,12 +83,14 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
     if (method == "addClip" || method == "loadAudioFile")
         return s.addClip(extractString(p, "trackId"), extractString(p, "clipId"),
                          extractString(p, "filePath"), extractDouble(p, "startTimeSeconds"));
-    if (method == "play")  return s.play();
-    if (method == "stop")  return s.stop();
-    if (method == "seek")  return s.seek(extractDouble(p, "timeSeconds"));
+    if (method == "play")   return s.play();
+    if (method == "pause")  return s.pause();
+    if (method == "stop")   return s.stop();
+    if (method == "seek")   return s.seek(extractDouble(p, "timeSeconds"));
     if (method == "setLoop")
         return s.setLoop(extractBool(p, "enabled"), extractDouble(p, "startSeconds"), extractDouble(p, "endSeconds"));
-    if (method == "getTransportState") return s.getTransportState();
+    if (method == "getTransportState")  return s.getTransportState();
+    if (method == "notifyTracksReady")  return s.notifyTracksReady();
     if (method == "setTrackVolume")
         return s.setTrackVolume(extractString(p, "trackId"), extractFloat(p, "volumeDb"));
     if (method == "setTrackPan")
@@ -97,6 +99,11 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
         return s.muteTrack(extractString(p, "trackId"), extractBool(p, "muted"));
     if (method == "soloTrack")
         return s.soloTrack(extractString(p, "trackId"), extractBool(p, "soloed"));
+    if (method == "setMasterVolume")
+        return s.setMasterVolume(extractFloat(p, "volumeDb"));
+    if (method == "moveClip")
+        return s.moveClip(extractString(p, "trackId"), extractString(p, "clipId"),
+                          extractDouble(p, "newStartTimeSeconds"));
     if (method == "getTrackMeters")  return s.getTrackMeters();
     if (method == "renderMix")       return s.renderMix(extractString(p, "outputFilePath"));
     if (method == "analyze")         return s.analyze(extractString(p, "trackId"));

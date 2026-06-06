@@ -247,6 +247,11 @@ async fn engine_play(engine: State<'_, SharedEngine>) -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn engine_pause(engine: State<'_, SharedEngine>) -> Result<Value, String> {
+    rpc_call(&engine, "pause", json!({})).await
+}
+
+#[tauri::command]
 async fn engine_stop(engine: State<'_, SharedEngine>) -> Result<Value, String> {
     rpc_call(&engine, "stop", json!({})).await
 }
@@ -348,6 +353,36 @@ async fn engine_solo_track(
         json!({ "trackId": track_id, "soloed": soloed }),
     )
     .await
+}
+
+#[tauri::command]
+async fn engine_set_master_volume(
+    volume_db: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "setMasterVolume", json!({ "volumeDb": volume_db })).await
+}
+
+#[tauri::command]
+async fn engine_move_clip(
+    track_id: String,
+    clip_id: String,
+    new_start_time_seconds: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "moveClip",
+        json!({ "trackId": track_id, "clipId": clip_id, "newStartTimeSeconds": new_start_time_seconds }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_notify_tracks_ready(
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "notifyTracksReady", json!({})).await
 }
 
 #[tauri::command]
@@ -510,6 +545,7 @@ pub fn run() {
             engine_add_clip,
             engine_remove_track,
             engine_play,
+            engine_pause,
             engine_stop,
             engine_seek,
             engine_set_loop,
@@ -521,6 +557,9 @@ pub fn run() {
             engine_mute_track,
             engine_solo_track,
             engine_get_track_meters,
+            engine_set_master_volume,
+            engine_move_clip,
+            engine_notify_tracks_ready,
             engine_render_mix,
             engine_dispose_project,
             engine_list_audio_devices,

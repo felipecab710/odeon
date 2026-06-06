@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .audio.analysis import analyze_track, quick_analyze
 from .audio.compare import generate_mix_moves
@@ -65,6 +65,10 @@ app.add_middleware(
 )
 
 
+from .select.router import router as select_router
+app.include_router(select_router)
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -91,18 +95,33 @@ def health():
 # ─────────────────────────────────────────────
 
 @app.get("/waveform-cache")
-def get_waveform_cache(path: str):
+def get_waveform_cache(path: str, format: str = Query(default="json", pattern="^(json|binary)$")):
+    """Return the `.odeon.wavecache` sidecar. Builds on first request if missing.
+
+    format=json   → JSON response (browser fallback)
+    format=binary → raw v2 binary bytes (Tauri desktop fast path)
     """
-    Return the `.odeon.wavecache` sidecar for an audio file.
-    Builds the cache on first request if missing.
-    """
-    from .audio.waveform_cache import build_and_cache_waveform, read_waveform_cache
+    from .audio.waveform_cache import (
+        build_and_cache_waveform,
+        cache_path_for,
+        read_waveform_cache,
+        read_waveform_cache_as_json,
+    )
 
     audio = Path(path)
     if not audio.is_file():
         raise HTTPException(status_code=404, detail=f"Audio file not found: {path}")
 
-    data = read_waveform_cache(path)
+    if format == "binary":
+        sidecar = cache_path_for(path)
+        if not sidecar.exists():
+            try:
+                build_and_cache_waveform(path)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Waveform cache build failed: {exc}")
+        return Response(content=sidecar.read_bytes(), media_type="application/octet-stream")
+
+    data = read_waveform_cache_as_json(path)
     if data is None:
         try:
             data, _ = build_and_cache_waveform(path)
@@ -110,6 +129,37 @@ def get_waveform_cache(path: str):
             raise HTTPException(status_code=500, detail=f"Waveform cache build failed: {exc}")
 
     return JSONResponse(data)
+
+
+@app.get("/waveform-cache/tile")
+def get_waveform_cache_tile(
+    path: str,
+    block_size: int = Query(..., description="Pyramid block size (64, 256, 1024, 4096, 16384)"),
+    chunk: int = Query(default=0, ge=0, description="Chunk index (0-based, 6000 buckets each)"),
+):
+    """Return a slice of one pyramid level — for partial loading of very long files."""
+    from .audio.waveform_cache import (
+        build_and_cache_waveform,
+        cache_path_for,
+        read_waveform_cache_tile,
+    )
+
+    audio = Path(path)
+    if not audio.is_file():
+        raise HTTPException(status_code=404, detail=f"Audio file not found: {path}")
+
+    sidecar = cache_path_for(path)
+    if not sidecar.exists():
+        try:
+            build_and_cache_waveform(path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Waveform cache build failed: {exc}")
+
+    tile = read_waveform_cache_tile(path, block_size, chunk)
+    if tile is None:
+        raise HTTPException(status_code=404, detail=f"No pyramid level {block_size} in cache")
+
+    return JSONResponse(tile)
 
 
 # ─────────────────────────────────────────────
@@ -331,7 +381,21 @@ def _separate_reference_stems(project: OdeonProject, project_id: str, track: Ode
     )
     separator = get_separator()
     if not separator.is_available():
-        logger.info("Stem separator unavailable — skipping for track %s", track.id)
+        logger.info("Stem separator unavailable — inserting placeholder stems for track %s", track.id)
+        project.tracks = [t for t in project.tracks if t.role != TrackRole.reference_stem]
+        for stem_type_name in ("drums", "bass", "vocals", "music"):
+            placeholder = OdeonTrack(
+                id=_uid(),
+                project_id=project_id,
+                name=f"{stem_type_name.capitalize()} (Stem separation pending)",
+                role=TrackRole.reference_stem,
+                stem_type=StemType(stem_type_name),
+                file_path=track.file_path,
+                color=_STEM_COLORS.get(stem_type_name, "#888888"),
+                analysis_status=AnalysisStatus.pending,
+                muted=True,
+            )
+            project.tracks.append(placeholder)
         return
 
     logger.info("Separating stems for reference track %s", track.id)

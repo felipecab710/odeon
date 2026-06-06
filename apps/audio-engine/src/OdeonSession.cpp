@@ -32,6 +32,7 @@ void OdeonSession::initialise() {
     // default CoreAudio output). Render works without a device; playback needs it.
     engine_->getDeviceManager().initialise(0, 2);
     applyDiskCacheSize();
+
     deviceReady_ = engine_->getDeviceManager().getNumWaveOutDevices() > 0;
     if (!deviceReady_)
         logEngineError("initialise", "No audio output device available.");
@@ -238,9 +239,17 @@ std::string OdeonSession::play() {
     return jsonOk();
 }
 
+std::string OdeonSession::pause() {
+    if (!transport_) return jsonErr("No active session.");
+    // Preserve playhead position (Ableton-style pause: stop clock, keep cursor)
+    transport_->stop(false, false);
+    return jsonOk();
+}
+
 std::string OdeonSession::stop() {
     if (!transport_) return jsonErr("No active session.");
     transport_->stop(false, false);
+    transport_->setPosition(tracktion::TimePosition::fromSeconds(0.0));
     return jsonOk();
 }
 
@@ -311,6 +320,57 @@ std::string OdeonSession::soloTrack(const std::string& trackId, bool soloed) {
     if (!route) return jsonErr("Track not found: " + trackId);
     route->track->setSolo(soloed);
     route->mix.soloed = soloed;
+    return jsonOk();
+}
+
+std::string OdeonSession::setMasterVolume(float volumeDb) {
+    if (!edit_) return jsonErr("No active session.");
+    if (auto vp = edit_->getMasterVolumePlugin())
+        vp->setVolumeDb(volumeDb);
+    return jsonOk("{\"masterVolumeDb\":" + std::to_string(volumeDb) + "}");
+}
+
+std::string OdeonSession::moveClip(const std::string& trackId, const std::string& clipId,
+                                   double newStartTimeSeconds) {
+    if (!edit_) return jsonErr("No active session.");
+
+    OdeonRoute* route = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        route = findRoute(trackId);
+    }
+    if (!route || !route->track) return jsonErr("Track not found: " + trackId);
+
+    // Find matching clip in stored metadata
+    AudioClip* storedClip = nullptr;
+    for (auto& ac : route->clips) {
+        if (ac.clipId == clipId) { storedClip = &ac; break; }
+    }
+    if (!storedClip) return jsonErr("Clip not found: " + clipId);
+
+    // Find the live Tracktion clip and reposition it
+    for (auto* clip : route->track->getClips()) {
+        if (auto* wac = dynamic_cast<te::WaveAudioClip*>(clip)) {
+            // Match by start time proximity (clipId isn't stored in Tracktion clip)
+            if (std::abs(wac->getPosition().getStart().inSeconds() - storedClip->startTime) < 0.001) {
+                const double dur = wac->getPosition().getLength().inSeconds();
+                te::ClipPosition pos;
+                pos.time = tracktion::TimeRange(
+                    tracktion::TimePosition::fromSeconds(newStartTimeSeconds),
+                    tracktion::TimeDuration::fromSeconds(dur));
+                wac->setPosition(pos);
+                storedClip->startTime = newStartTimeSeconds;
+                return jsonOk("{\"trackId\":" + jsonQuote(trackId) +
+                              ",\"clipId\":" + jsonQuote(clipId) +
+                              ",\"startTime\":" + std::to_string(newStartTimeSeconds) + "}");
+            }
+        }
+    }
+    return jsonErr("Clip " + clipId + " not found in Tracktion edit for track " + trackId);
+}
+
+std::string OdeonSession::notifyTracksReady() {
+    onEvent_(R"({"event":"tracksReady"})");
     return jsonOk();
 }
 

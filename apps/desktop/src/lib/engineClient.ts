@@ -1,6 +1,9 @@
 /**
  * Engine client — wraps Tauri commands to the native audio engine.
  * Falls back gracefully when running in browser (dev without Tauri).
+ *
+ * Race-condition fix: listen() calls made before Tauri loads are queued
+ * and replayed once the real listen function is available.
  */
 
 type InvokeFunc = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -10,21 +13,48 @@ type ListenFunc = (
 ) => Promise<() => void>;
 
 let _invoke: InvokeFunc = async () => null;
-let _listen: ListenFunc = async () => () => {};
+let _listen: ListenFunc | null = null;
 
-// Dynamically import Tauri at runtime to avoid breaking the Vite dev server
+// Queued listen calls registered before Tauri loaded
+const _pendingListens: Array<{
+  event: string;
+  handler: (e: { payload: unknown }) => void;
+  resolve: (unsub: () => void) => void;
+}> = [];
+
 async function loadTauri() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const { listen } = await import("@tauri-apps/api/event");
     _invoke = invoke as InvokeFunc;
     _listen = listen as ListenFunc;
+
+    // Replay any listen calls that arrived before Tauri was ready
+    for (const pending of _pendingListens) {
+      _listen(pending.event, pending.handler).then(pending.resolve);
+    }
+    _pendingListens.length = 0;
   } catch {
     console.warn("[engineClient] Tauri not available — running in browser mode.");
+    // Resolve all pending listens with a no-op unsub so callers don't hang
+    for (const pending of _pendingListens) {
+      pending.resolve(() => {});
+    }
+    _pendingListens.length = 0;
   }
 }
 
 loadTauri();
+
+function safeListenImpl(event: string, handler: (e: { payload: unknown }) => void): Promise<() => void> {
+  if (_listen) {
+    return _listen(event, handler);
+  }
+  // Queue it — will be replayed once Tauri loads
+  return new Promise<() => void>((resolve) => {
+    _pendingListens.push({ event, handler, resolve });
+  });
+}
 
 // ─────────────────────────────────────────────
 //  RPC unwrap
@@ -73,6 +103,7 @@ export const engineClient = {
     _invoke("engine_remove_track", { trackId }),
 
   play: () => _invoke("engine_play"),
+  pause: () => _invoke("engine_pause"),
   stop: () => _invoke("engine_stop"),
   seek: (timeSeconds: number) => _invoke("engine_seek", { timeSeconds }),
 
@@ -96,6 +127,14 @@ export const engineClient = {
 
   soloTrack: (trackId: string, soloed: boolean) =>
     _invoke("engine_solo_track", { trackId, soloed }),
+
+  setMasterVolume: (volumeDb: number) =>
+    _invoke("engine_set_master_volume", { volumeDb }),
+
+  moveClip: (trackId: string, clipId: string, newStartTimeSeconds: number) =>
+    _invoke("engine_move_clip", { trackId, clipId, newStartTimeSeconds }),
+
+  notifyTracksReady: () => _invoke("engine_notify_tracks_ready"),
 
   getTrackMeters: () => _invoke("engine_get_track_meters"),
 
@@ -121,17 +160,20 @@ export const engineClient = {
       positionSeconds: number;
       bpm: number;
     }) => void
-  ) => _listen("engine:transportState", (e) => cb(e.payload as never)),
+  ) => safeListenImpl("engine:transportState", (e) => cb(e.payload as never)),
 
   onTrackMeters: (
     cb: (data: {
       meters: Record<string, { leftDb: number; rightDb: number }>;
     }) => void
-  ) => _listen("engine:trackMeters", (e) => cb(e.payload as never)),
+  ) => safeListenImpl("engine:trackMeters", (e) => cb(e.payload as never)),
 
   onEngineReady: (cb: () => void) =>
-    _listen("engine:engineReady", () => cb()),
+    safeListenImpl("engine:engineReady", () => cb()),
+
+  onTracksReady: (cb: () => void) =>
+    safeListenImpl("engine:tracksReady", () => cb()),
 
   onEngineUnavailable: (cb: (reason: string) => void) =>
-    _listen("engine:unavailable", (e) => cb(e.payload as string)),
+    safeListenImpl("engine:unavailable", (e) => cb(e.payload as string)),
 };

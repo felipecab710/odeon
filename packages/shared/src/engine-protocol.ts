@@ -18,15 +18,19 @@ export type EngineRpcMethod =
   | "loadAudioFile"
   | "addClip"
   | "removeTrack"
+  | "moveClip"
   | "play"
+  | "pause"
   | "stop"
   | "seek"
   | "setLoop"
   | "getTransportState"
+  | "notifyTracksReady"
   | "setTrackVolume"
   | "setTrackPan"
   | "muteTrack"
   | "soloTrack"
+  | "setMasterVolume"
   | "getTrackMeters"
   | "renderMix"
   | "analyze"
@@ -52,6 +56,8 @@ export interface SetTrackVolumeParams { trackId: string; volumeDb: number }
 export interface SetTrackPanParams    { trackId: string; pan: number }
 export interface MuteTrackParams      { trackId: string; muted: boolean }
 export interface SoloTrackParams      { trackId: string; soloed: boolean }
+export interface SetMasterVolumeParams { volumeDb: number }
+export interface MoveClipParams       { trackId: string; clipId: string; newStartTimeSeconds: number }
 export interface RenderMixParams      { outputFilePath: string }
 export interface AnalyzeParams        { trackId: string }
 
@@ -69,7 +75,10 @@ export type EngineEventType =
   | "transportState"
   | "trackMeters"
   | "engineReady"
-  | "engineError";
+  | "engineError"
+  | "tracksReady"
+  | "analysisRequested"
+  | "terminated";
 
 export interface TransportStateEvent {
   event: "transportState";
@@ -103,8 +112,13 @@ export interface EngineErrorEvent {
   message: string;
 }
 
+export interface TracksReadyEvent {
+  event: "tracksReady";
+}
+
 export type EngineEvent =
   | TransportStateEvent
   | TrackMetersEvent
   | EngineReadyEvent
-  | EngineErrorEvent;
+  | EngineErrorEvent
+  | TracksReadyEvent;

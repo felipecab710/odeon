@@ -20,7 +20,6 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useEngineStore } from "../../stores/engineStore";
 import { useTrackGroupStore } from "../../stores/trackGroupStore";
 import { engineClient } from "../../lib/engineClient";
-import { webAudioEngine } from "../../lib/webAudioEngine";
 import { MixerGroupStrip, MIXER_GROUP_ROW_H } from "./MixerGroupStrip";
 import {
   ProToolsMeterCanvas, ProToolsMeterScale, ProToolsFaderScale, MeterPeakReadout,
@@ -174,7 +173,6 @@ function ArdourPanner({ trackId, pan }: { trackId: string; pan: number }) {
   const applyPan = useCallback((v: number) => {
     const snapped = Math.abs(v) < 0.04 ? 0 : v;
     setTrackState(trackId, { pan: snapped });
-    webAudioEngine.setPan(trackId, snapped);
     engineClient.setTrackPan(trackId, snapped);
   }, [trackId, setTrackState]);
 
@@ -348,7 +346,6 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
     e.stopPropagation();
     const n = !muted;
     setTrackState(track.id, { muted: n });
-    webAudioEngine.setMute(track.id, n);
     engineClient.muteTrack(track.id, n);
     applyGroupedMute(track.id, n);
   };
@@ -356,14 +353,12 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
     e.stopPropagation();
     const n = !soloed;
     setTrackState(track.id, { soloed: n });
-    webAudioEngine.setSolo(track.id, n);
     engineClient.soloTrack(track.id, n);
     applyGroupedSolo(track.id, n);
   };
   const handleVolume = (db: number) => {
     const prev = volumeDb;
     setTrackState(track.id, { volumeDb: db });
-    webAudioEngine.setVolume(track.id, db);
     engineClient.setTrackVolume(track.id, db);
     applyGroupedGain(track.id, db, prev);
   };
@@ -371,12 +366,10 @@ function ChannelStrip({ track }: { track: OdeonTrack }) {
     e.stopPropagation();
     if (trackGroup) openEditDialog(trackGroup.id);
   };
-  const handleResetClip = () => { resetClip(track.id); webAudioEngine.resetClip(track.id); };
+  const handleResetClip = () => { resetClip(track.id); };
   const handleMeterPost = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const n = !meterPost;
-    setTrackState(track.id, { meterPost: n });
-    webAudioEngine.setMeterPost(track.id, n);
+    setTrackState(track.id, { meterPost: !meterPost });
   };
 
   const P = "2px";  // row padding
@@ -544,8 +537,8 @@ function MasterStrip() {
   const resetClip    = useEngineStore((s) => s.resetClip);
   const [vol, setVol] = useState(0);
 
-  const handleMasterVol = (db: number) => { setVol(db); webAudioEngine.setMasterVolume(db); };
-  const handleResetClip = () => { resetClip("__master__"); webAudioEngine.resetClip("__master__"); };
+  const handleMasterVol = (db: number) => { setVol(db); engineClient.setMasterVolume(db); };
+  const handleResetClip = () => { resetClip("__master__"); };
   const P = "2px";
   const G = "1px";
 

@@ -2,6 +2,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useTransportStore } from "../../stores/transportStore";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { usePlaybackEngineStore } from "../../stores/playbackEngineStore";
+import { useNavigationStore } from "../../stores/navigationStore";
 import { useEffect, useState } from "react";
 
 // Stages shown in sequence while any upload/analysis is running.
@@ -36,14 +37,11 @@ function useLoadingStage(isLoading: boolean, staticLabel: string | null) {
   return UPLOAD_STAGES[Math.min(stage, UPLOAD_STAGES.length - 1)].label;
 }
 
-interface TopBarProps {
-  onOpenSessionLauncher?: () => void;
-}
-
-export function TopBar({ onOpenSessionLauncher }: TopBarProps) {
+export function TopBar() {
   const { project, isLoading, loadingLabel, uploadReference, uploadUserStems, analyzeProject, compareProject, exportBlueprint } =
     useProjectStore();
-  const { engineReady, webAudioReady } = useTransportStore();
+  const { navigate } = useNavigationStore();
+  const { engineReady } = useTransportStore();
   const { compareUserTrackId, compareRefTrackId } = useSelectionStore();
   const openPlaybackEngine = usePlaybackEngineStore((s) => s.open);
   const displayLabel = useLoadingStage(isLoading, loadingLabel ?? null);
@@ -92,9 +90,9 @@ export function TopBar({ onOpenSessionLauncher }: TopBarProps) {
             <span className="text-white font-bold text-xs">O</span>
           </div>
           <button
-            onClick={onOpenSessionLauncher}
+            onClick={() => navigate("studio")}
             className="font-semibold text-studio-text tracking-wide text-sm hover:text-studio-accent transition-colors"
-            title="Sessions"
+            title="Open Studio"
           >
             ODEON
           </button>
@@ -111,11 +109,11 @@ export function TopBar({ onOpenSessionLauncher }: TopBarProps) {
         <div className="ml-1 flex items-center gap-1">
           <div
             className={`w-1.5 h-1.5 rounded-full ${
-              engineReady ? "bg-studio-meter" : webAudioReady ? "bg-studio-accent" : "bg-studio-text-faint"
+              engineReady ? "bg-studio-meter" : "bg-studio-text-faint"
             }`}
           />
           <span className="text-xxs text-studio-text-faint">
-            {engineReady ? "Engine" : webAudioReady ? "Web Audio" : "No audio"}
+            {engineReady ? "Engine" : "No audio"}
           </span>
         </div>
 

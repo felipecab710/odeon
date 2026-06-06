@@ -1,9 +1,19 @@
 /**
- * Engine store — per-track and master mix state synced from webAudioEngine.
- * Extended to carry Ardour-style peak hold + clip latch per channel.
+ * Engine store — per-track and master mix state synced from the native engine.
+ * Carries Ardour-style peak hold + clip latch per channel.
  */
 import { create } from "zustand";
-import type { MeterData } from "../lib/webAudioEngine";
+
+/** Per-track meter snapshot from a single poll interval. */
+export interface MeterData {
+  leftDb:      number;
+  rightDb:     number;
+  peakLeftDb:  number;
+  peakRightDb: number;
+  clipping:    boolean;
+  rmsLeftDb?:  number;
+  rmsRightDb?: number;
+}
 
 export interface TrackEngineState {
   volumeDb:    number;

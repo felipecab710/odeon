@@ -1,15 +1,19 @@
 import type { StereoPeakBucket } from "./types";
 
-/** Max samples/pixel before per-pixel AudioBuffer scan becomes too costly. */
-export const MAX_FINE_PEAK_SPP = 8192;
-
 export function samplesPerPixel(sampleRate: number, pps: number): number {
   return sampleRate / Math.max(pps, 1);
 }
 
 /**
- * Use raw AudioBuffer samples when each pixel spans less than one LOD bucket
- * (or when buckets are very coarse, e.g. analysis-only cache).
+ * Use raw AudioBuffer samples only when zoomed in beyond the finest LOD bucket.
+ *
+ * Previously this used a hardcoded threshold of 8192, which forced expensive
+ * per-pixel AudioBuffer scans at almost all zoom levels once a buffer was decoded.
+ * Correct logic: switch to fine peaks only when spp < lodBlockSize (i.e. each
+ * pixel represents less than one peak bucket, so LOD data isn't fine enough).
+ *
+ * This restores O(viewport × buckets_per_pixel) LOD path for normal/overview zoom,
+ * reserving the costly per-sample scan for extreme close-ups only.
  */
 export function shouldUseFinePeaks(
   sampleRate: number,
@@ -19,17 +23,13 @@ export function shouldUseFinePeaks(
 ): boolean {
   if (!hasBuffer) return false;
   const spp = samplesPerPixel(sampleRate, pps);
-  // Use raw samples whenever zoom exceeds LOD resolution.
-  return spp < MAX_FINE_PEAK_SPP;
-}
-
-/** @deprecated use shouldUseFinePeaks */
-export function needsFinePeaks(sampleRate: number, pps: number): boolean {
-  return samplesPerPixel(sampleRate, pps) < 64;
+  // Only scan raw samples when zoom exceeds finest LOD bucket resolution
+  return spp < lodBlockSize;
 }
 
 /**
  * Per-pixel min/max from decoded audio — sample-accurate at high zoom.
+ * Only called when shouldUseFinePeaks() returns true.
  */
 export function peakForPixelFromBuffer(
   left: Float32Array,
@@ -48,7 +48,7 @@ export function peakForPixelFromBuffer(
   const norm = globalPeak > 1e-9 ? globalPeak : 1;
 
   // Init to ±Infinity — starting at 0 makes lm stick at 0 when all samples are
-  // positive, which draws fill only above the centre line (lighter top / darker bottom).
+  // positive, which draws fill only above the centre line.
   let lm = Infinity, lx = -Infinity, rm = Infinity, rx = -Infinity;
   for (let i = s0; i < s1 && i < total; i++) {
     const lv = left[i];

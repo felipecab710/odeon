@@ -34,7 +34,7 @@ import { useTransportStore } from "../../stores/transportStore";
 import { useEngineStore } from "../../stores/engineStore";
 import { useTrackGroupStore } from "../../stores/trackGroupStore";
 import { engineClient } from "../../lib/engineClient";
-import { webAudioEngine, ardourDbToPos, ardourPosToDb } from "../../lib/webAudioEngine";
+import { ardourDbToPos, ardourPosToDb } from "../../lib/ardourFader";
 import {
   PT_SELECT_OUTLINE,
   TL_TRACK_DIVIDER,
@@ -328,6 +328,9 @@ export const TrackLane = memo(function TrackLane({
   const isFailed    = track.analysis_status === "failed";
   const isPending   = track.analysis_status === "pending";
   const isReference = track.role === "reference_full_mix";
+  // Placeholder stem: reference_stem created before Demucs is available
+  const isStemPlaceholder =
+    track.role === "reference_stem" && track.muted === true && isPending;
   const accentColor = trackColor(track);
   const clipColor   = resolveTrackClipColor(track.color, trackGroup);
 
@@ -335,7 +338,6 @@ export const TrackLane = memo(function TrackLane({
     e.stopPropagation();
     const next = !muted;
     setTrackState(track.id, { muted: next });
-    webAudioEngine.setMute(track.id, next);
     engineClient.muteTrack(track.id, next);
     applyGroupedMute(track.id, next);
   };
@@ -343,7 +345,6 @@ export const TrackLane = memo(function TrackLane({
     e.stopPropagation();
     const next = !soloed;
     setTrackState(track.id, { soloed: next });
-    webAudioEngine.setSolo(track.id, next);
     engineClient.soloTrack(track.id, next);
     applyGroupedSolo(track.id, next);
   };
@@ -469,8 +470,7 @@ export const TrackLane = memo(function TrackLane({
       }
 
       setClipStart(track.id, snapped);
-      webAudioEngine.setClipStart(track.id, snapped);
-      engineClient.addClip(track.id, track.file_path, snapped).catch(() => {});
+      engineClient.moveClip(track.id, track.id, snapped).catch(() => {});
     };
 
     window.addEventListener("mousemove", onMove);
@@ -634,7 +634,6 @@ export const TrackLane = memo(function TrackLane({
             onChange={(db) => {
               const prev = volDb;
               setTrackState(track.id, { volumeDb: db });
-              webAudioEngine.setVolume(track.id, db);
               engineClient.setTrackVolume(track.id, db);
               applyGroupedGain(track.id, db, prev);
             }}
@@ -646,7 +645,12 @@ export const TrackLane = memo(function TrackLane({
 
         {/* Row 5 – Analyze status */}
         <div className="flex items-center min-h-[14px]">
-          {(isPending || isFailed) && (
+          {isStemPlaceholder && (
+            <span className="text-xxs" style={{ color: "#888", fontStyle: "italic" }}>
+              Stem separation pending
+            </span>
+          )}
+          {!isStemPlaceholder && (isPending || isFailed) && (
             <button
               onClick={handleAnalyze}
               className="text-xxs font-semibold px-1.5 py-0.5 rounded transition-colors"

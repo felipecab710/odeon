@@ -13,10 +13,31 @@ export function seedProjectWaveformCaches(project: OdeonProject) {
   }
 }
 
-/** Background — upgrade to full-resolution sidecar caches in parallel. */
+/** Background — load full sidecar caches from disk with max 3 concurrent I/O operations.
+ *
+ * Throttled to avoid spiking disk I/O and main-thread JSON parse on session open.
+ * Prioritizes tracks in order (top = first in timeline).
+ */
 export function prefetchProjectWaveformCaches(project: OdeonProject) {
   const paths = project.tracks
     .map((t) => t.file_path)
-    .filter((p): p is string => !!p);
-  void Promise.all(paths.map((p) => loadWaveformCache(p)));
+    .filter((p): p is string => !!p && !isFullWaveformCache(getCachedWaveform(p) ?? { levels: {}, block_sizes: [], version: 0, sample_rate: 0, channels: 0, duration_seconds: 0, global_peak: 0 }));
+
+  if (!paths.length) return;
+  void throttledFetch(paths, 3);
+}
+
+async function throttledFetch(paths: string[], concurrency: number) {
+  let index = 0;
+
+  async function worker() {
+    while (index < paths.length) {
+      const path = paths[index++];
+      await loadWaveformCache(path);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, paths.length) }, worker)
+  );
 }

@@ -1,6 +1,10 @@
 /**
  * Waveform canvas renderer — LOD pyramid for overview, sample peaks at high zoom.
- * fastMode: coarsest LOD only (used during zoom gestures).
+ *
+ * Key improvements over v1:
+ * - Path2D single-stroke envelopes instead of per-column fillRect + 4 strokes
+ * - Tile-based LRU bitmap cache: tiles of TILE_WIDTH px, keyed by (track, tile, pps, blockSize)
+ * - fastMode: coarsest LOD only (used during zoom gestures)
  */
 import type { WaveformCache } from "./types";
 import { getCoarsestPeaks, getLodPeaks, peakForPixel } from "./lod";
@@ -8,55 +12,106 @@ import { peakForPixelFromBuffer, shouldUseFinePeaks } from "./finePeaks";
 import { waveformColorsFromClip } from "../clipColorPresets";
 import { PT_TRACK_BG, PT_CENTER_LINE } from "./colors";
 
+export const TILE_WIDTH = 512; // pixels per tile (CSS pixels)
+const COLOR_REV = "v11";
+const BITMAP_CACHE_MAX = 256;
+
 export interface RenderKey {
   trackId: string;
+  /** Full clip width in pixels at current pps */
   width: number;
   height: number;
   pps: number;
   clipStartSec: number;
   clipBgColor?: string;
+  /** Viewport start within the clip (for direct paint mode) */
   offsetX?: number;
+  /** Viewport width (for direct paint mode) */
   renderWidth?: number;
   audioBuffer?: AudioBuffer | null;
   fastMode?: boolean;
 }
 
-const bitmapCache = new Map<string, HTMLCanvasElement>();
-const COLOR_REV = "v10";
+// ── Tile bitmap cache ──────────────────────────────────────────────────────
 
-function cacheKey(k: RenderKey, blockSize: number, fine: boolean): string {
-  const ox = k.offsetX ?? 0;
-  const rw = k.renderWidth ?? k.width;
-  const bg = k.clipBgColor ?? PT_TRACK_BG;
-  return `${COLOR_REV}:${bg}:${k.trackId}:${k.width}x${k.height}:${k.pps.toFixed(2)}:${k.clipStartSec.toFixed(3)}:ox${ox}:rw${rw}:bs${blockSize}:f${fine ? 1 : 0}`;
+const tileCache = new Map<string, HTMLCanvasElement>();
+
+function tileCacheKey(
+  trackId: string,
+  tileIndex: number,
+  height: number,
+  blockSize: number,
+  pps: number,
+  clipBgColor: string,
+): string {
+  return `${COLOR_REV}:${clipBgColor}:${trackId}:${height}:${pps.toFixed(2)}:bs${blockSize}:t${tileIndex}`;
 }
 
-function drawColumn(
+export function getTileCache() { return tileCache; }
+
+export function invalidateWaveformBitmap(trackId: string) {
+  const needle = `:${trackId}:`;
+  for (const k of tileCache.keys()) {
+    if (k.includes(needle)) tileCache.delete(k);
+  }
+}
+
+export function clearWaveformBitmapCache() {
+  tileCache.clear();
+}
+
+function evictIfNeeded() {
+  if (tileCache.size > BITMAP_CACHE_MAX) {
+    const iter = tileCache.keys();
+    for (let i = 0; i < 16; i++) {
+      const key = iter.next().value;
+      if (key) tileCache.delete(key);
+    }
+  }
+}
+
+// ── Path2D envelope drawing ────────────────────────────────────────────────
+
+/** Draw filled waveform body + outline strokes for one channel using Path2D.
+ *
+ * Replaces per-column fillRect (renderW draw calls) with two Path2D passes
+ * (one fill, one stroke) — typically 5–10× fewer Canvas2D operations.
+ */
+function drawChannelPath2D(
   ctx: CanvasRenderingContext2D,
-  col: number,
-  center: number,
-  halfAmp: number,
-  lm: number,
-  lx: number,
+  peaks: { top: Float32Array; bot: Float32Array },
+  renderW: number,
   fill: string,
+  outline: string,
 ) {
-  const yTop = center - lx * halfAmp;
-  const yBot = center - lm * halfAmp;
-  const y = Math.min(yTop, yBot);
-  const barH = Math.max(0.5, Math.abs(yBot - yTop));
+  const { top, bot } = peaks;
+
+  // Fill path: top edge left→right, bottom edge right→left
+  const fillPath = new Path2D();
+  fillPath.moveTo(0, top[0]);
+  for (let x = 1; x < renderW; x++) fillPath.lineTo(x, top[x]);
+  for (let x = renderW - 1; x >= 0; x--) fillPath.lineTo(x, bot[x]);
+  fillPath.closePath();
+
   ctx.fillStyle = fill;
-  ctx.fillRect(col, y, 1, barH);
+  ctx.fill(fillPath);
+
+  // Outline: top edge only (bottom mirrors)
+  const outPath = new Path2D();
+  outPath.moveTo(0, top[0]);
+  for (let x = 1; x < renderW; x++) outPath.lineTo(x, top[x]);
+
+  const outPathBot = new Path2D();
+  outPathBot.moveTo(0, bot[0]);
+  for (let x = 1; x < renderW; x++) outPathBot.lineTo(x, bot[x]);
+
+  ctx.strokeStyle = outline;
+  ctx.lineWidth = 0.75;
+  ctx.stroke(outPath);
+  ctx.stroke(outPathBot);
 }
 
-function strokeEnvelope(ctx: CanvasRenderingContext2D, ys: ArrayLike<number>, color: string) {
-  if (ys.length < 2) return;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, ys[0]);
-  for (let col = 1; col < ys.length; col++) ctx.lineTo(col, ys[col]);
-  ctx.stroke();
-}
+// ── Core paint ─────────────────────────────────────────────────────────────
 
 export function paintWaveform(
   ctx: CanvasRenderingContext2D,
@@ -90,45 +145,41 @@ export function paintWaveform(
   const offsetX = key.offsetX ?? 0;
   const totalSamples = cache.duration_seconds * cache.sample_rate;
 
+  const leftCenter = mid / 2;
+  const rightCenter = mid + mid / 2;
+  const norm = cache.global_peak > 1e-9 ? cache.global_peak : 1;
+
+  // Allocate envelope arrays
+  const lTop = new Float32Array(renderW);
+  const lBot = new Float32Array(renderW);
+  const rTop = new Float32Array(renderW);
+  const rBot = new Float32Array(renderW);
+
   const left = key.audioBuffer?.getChannelData(0);
   const right = key.audioBuffer && key.audioBuffer.numberOfChannels > 1
     ? key.audioBuffer.getChannelData(1)
     : left;
 
-  const leftCenter = mid / 2;
-  const rightCenter = mid + mid / 2;
-  const norm = cache.global_peak > 1e-9 ? cache.global_peak : 1;
+  for (let col = 0; col < renderW; col++) {
+    const x = offsetX + col;
+    let p: { lm: number; lx: number; rm: number; rx: number };
 
-  if (useFine && left) {
-    const lMax = new Float32Array(renderW);
-    const lMin = new Float32Array(renderW);
-    const rMax = new Float32Array(renderW);
-    const rMin = new Float32Array(renderW);
-
-    for (let col = 0; col < renderW; col++) {
-      const x = offsetX + col;
-      const p = peakForPixelFromBuffer(left, right!, x, fullW, norm);
-      lMax[col] = leftCenter - p.lx * halfH;
-      lMin[col] = leftCenter - p.lm * halfH;
-      rMax[col] = rightCenter - p.rx * halfH;
-      rMin[col] = rightCenter - p.rm * halfH;
-      drawColumn(ctx, col, leftCenter, halfH, p.lm, p.lx, waveFill);
-      drawColumn(ctx, col, rightCenter, halfH, p.rm, p.rx, waveFill);
+    if (useFine && left) {
+      p = peakForPixelFromBuffer(left, right!, x, fullW, norm);
+    } else {
+      p = peakForPixel(peaks, x, fullW, totalSamples, blockSize);
     }
 
-    strokeEnvelope(ctx, lMax, waveOutline);
-    strokeEnvelope(ctx, lMin, waveOutline);
-    strokeEnvelope(ctx, rMax, waveOutline);
-    strokeEnvelope(ctx, rMin, waveOutline);
-  } else {
-    for (let col = 0; col < renderW; col++) {
-      const x = offsetX + col;
-      const p = peakForPixel(peaks, x, fullW, totalSamples, blockSize);
-      drawColumn(ctx, col, leftCenter, halfH, p.lm, p.lx, waveFill);
-      drawColumn(ctx, col, rightCenter, halfH, p.rm, p.rx, waveFill);
-    }
+    lTop[col] = leftCenter - p.lx * halfH;
+    lBot[col] = leftCenter - p.lm * halfH;
+    rTop[col] = rightCenter - p.rx * halfH;
+    rBot[col] = rightCenter - p.rm * halfH;
   }
 
+  drawChannelPath2D(ctx, { top: lTop, bot: lBot }, renderW, waveFill, waveOutline);
+  drawChannelPath2D(ctx, { top: rTop, bot: rBot }, renderW, waveFill, waveOutline);
+
+  // Centre line
   ctx.strokeStyle = PT_CENTER_LINE;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -137,54 +188,116 @@ export function paintWaveform(
   ctx.stroke();
 }
 
+// ── Tile-based bitmap cache ────────────────────────────────────────────────
+
+/**
+ * Get or render one TILE_WIDTH-px tile of the waveform at the given offsetX.
+ *
+ * The tile is positioned within the clip by tileIndex × TILE_WIDTH.
+ * Only visible tiles are rendered; cached tiles are returned in O(1).
+ */
+export function getOrRenderTile(
+  cache: WaveformCache,
+  key: Omit<RenderKey, "offsetX" | "renderWidth">,
+  tileIndex: number,
+): HTMLCanvasElement {
+  const { blockSize } = getLodPeaks(cache, key.pps, key.width);
+  const clipBg = key.clipBgColor ?? PT_TRACK_BG;
+  const ck = tileCacheKey(key.trackId, tileIndex, key.height, blockSize, key.pps, clipBg);
+
+  const cached = tileCache.get(ck);
+  if (cached) return cached;
+
+  const offsetX = tileIndex * TILE_WIDTH;
+  // Last tile may be narrower
+  const tileW = Math.min(TILE_WIDTH, key.width - offsetX);
+
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(tileW * dpr);
+  canvas.height = Math.floor(key.height * dpr);
+  canvas.style.width = `${tileW}px`;
+  canvas.style.height = `${key.height}px`;
+
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    paintWaveform(ctx, cache, { ...key, offsetX, renderWidth: tileW }, tileW, key.height);
+  }
+
+  tileCache.set(ck, canvas);
+  evictIfNeeded();
+  return canvas;
+}
+
+/**
+ * Paint visible tiles onto ctx using drawImage (blit from cache).
+ *
+ * On scroll: tiles already in cache → zero per-pixel work, just blit.
+ * On zoom-end: tile cache is stale → getOrRenderTile rebuilds at new pps.
+ */
+export function blitVisibleTiles(
+  ctx: CanvasRenderingContext2D,
+  cache: WaveformCache,
+  key: Omit<RenderKey, "offsetX" | "renderWidth">,
+  viewportOffsetX: number,
+  viewportWidth: number,
+  h: number,
+) {
+  const dpr = window.devicePixelRatio || 1;
+  const firstTile = Math.floor(viewportOffsetX / TILE_WIDTH);
+  const lastTile = Math.ceil((viewportOffsetX + viewportWidth) / TILE_WIDTH);
+
+  const clipBg = key.clipBgColor ?? PT_TRACK_BG;
+  ctx.fillStyle = clipBg;
+  ctx.fillRect(0, 0, viewportWidth, h);
+
+  for (let ti = firstTile; ti <= lastTile; ti++) {
+    const tileStartX = ti * TILE_WIDTH;
+    if (tileStartX >= key.width) break;
+
+    const tile = getOrRenderTile(cache, key, ti);
+    const tileW = Math.min(TILE_WIDTH, key.width - tileStartX);
+
+    // Destination x in the viewport canvas
+    const destX = tileStartX - viewportOffsetX;
+
+    ctx.drawImage(
+      tile,
+      0, 0, tileW * dpr, key.height * dpr,
+      destX, 0, tileW, h,
+    );
+  }
+
+  // Centre line over blitted tiles
+  ctx.strokeStyle = PT_CENTER_LINE;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, h / 2);
+  ctx.lineTo(viewportWidth, h / 2);
+  ctx.stroke();
+}
+
+// ── Legacy bitmap render (kept for compatibility) ──────────────────────────
+
 export function renderWaveformBitmap(
   cache: WaveformCache,
   key: RenderKey,
 ): HTMLCanvasElement {
-  const { blockSize } = getLodPeaks(cache, key.pps, key.width);
-  const useFine = shouldUseFinePeaks(
-    cache.sample_rate,
-    key.pps,
-    blockSize,
-    !!key.audioBuffer,
-  );
-  const ck = cacheKey(key, blockSize, useFine);
-  const cached = bitmapCache.get(ck);
-  if (cached) return cached;
-
   const renderW = key.renderWidth ?? key.width;
-  const h = key.height;
-
-  const canvas = document.createElement("canvas");
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const canvas = document.createElement("canvas");
   canvas.width = Math.floor(renderW * dpr);
-  canvas.height = Math.floor(h * dpr);
+  canvas.height = Math.floor(key.height * dpr);
   canvas.style.width = `${renderW}px`;
-  canvas.style.height = `${h}px`;
+  canvas.style.height = `${key.height}px`;
 
   const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-
-  paintWaveform(ctx, cache, key, renderW, h);
-
-  bitmapCache.set(ck, canvas);
-  if (bitmapCache.size > 80) {
-    const first = bitmapCache.keys().next().value;
-    if (first) bitmapCache.delete(first);
+  if (ctx) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    paintWaveform(ctx, cache, key, renderW, key.height);
   }
-
   return canvas;
-}
-
-export function invalidateWaveformBitmap(trackId: string) {
-  const needle = `:${trackId}:`;
-  for (const k of bitmapCache.keys()) {
-    if (k.includes(needle)) bitmapCache.delete(k);
-  }
-}
-
-export function clearWaveformBitmapCache() {
-  bitmapCache.clear();
 }

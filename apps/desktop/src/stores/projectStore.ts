@@ -9,7 +9,6 @@ import { useSelectionStore } from "./selectionStore";
 import { useTimelineStore } from "./timelineStore";
 import { useEngineStore } from "./engineStore";
 import { useTrackGroupStore } from "./trackGroupStore";
-import { webAudioEngine } from "../lib/webAudioEngine";
 import { engineClient } from "../lib/engineClient";
 import { invalidateWaveformBitmap } from "../lib/waveformEngine";
 import { ensureReferenceStemBusGroup } from "../lib/referenceStemGroup";
@@ -155,7 +154,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({ project: syncTrackGroupsFromProject(updated), error: null });
 
       for (const id of removedIds) {
-        webAudioEngine.removeTrack(id);
         engineClient.removeTrack(id).catch(() => {});
         invalidateWaveformBitmap(id);
         useEngineStore.getState().removeTrack(id);

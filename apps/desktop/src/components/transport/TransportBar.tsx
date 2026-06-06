@@ -309,7 +309,7 @@ export function TransportBar() {
   const {
     isPlaying, positionSeconds, cursorSeconds, cursorTrackId,
     mainTimebase, showSubCounter, bpm, isLoopEnabled,
-    webAudioReady, play, pause, stop, toggleLoop,
+    engineTracksReady, play, pause, stop, toggleLoop,
     setMainTimebase, toggleShowSubCounter,
   } = useTransportStore();
   const project = useProjectStore((s) => s.project);
@@ -332,7 +332,7 @@ export function TransportBar() {
   };
 
   const sampleRate = project?.sample_rate ?? 48000;
-  const canPlay = webAudioReady || tracks.length > 0;
+  const canPlay = engineTracksReady || tracks.length > 0;
   const playhead   = formatPosition(positionSeconds, mainTimebase, meter, sampleRate);
   const selStart   = formatPosition(startSeconds, mainTimebase, meter, sampleRate);
   const selEnd     = formatPosition(endSeconds, mainTimebase, meter, sampleRate);

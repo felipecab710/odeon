@@ -12,7 +12,6 @@ import {
 import { useEngineStore } from "./engineStore";
 import { useProjectStore } from "./projectStore";
 import { useSelectionStore } from "./selectionStore";
-import { webAudioEngine } from "../lib/webAudioEngine";
 import { engineClient } from "../lib/engineClient";
 let groupIdCounter = 0;
 function newGroupId() {
@@ -164,7 +163,6 @@ export const useTrackGroupStore = create<TrackGroupState>((set, get) => ({
     for (const id of group.trackIds) {
       if (id === sourceTrackId) continue;
       setTrackState(id, { muted });
-      webAudioEngine.setMute(id, muted);
       engineClient.muteTrack(id, muted).catch(() => {});
     }
   },
@@ -177,7 +175,6 @@ export const useTrackGroupStore = create<TrackGroupState>((set, get) => ({
     for (const id of group.trackIds) {
       if (id === sourceTrackId) continue;
       setTrackState(id, { soloed });
-      webAudioEngine.setSolo(id, soloed);
       engineClient.soloTrack(id, soloed).catch(() => {});
     }
   },
@@ -195,7 +192,6 @@ export const useTrackGroupStore = create<TrackGroupState>((set, get) => ({
       const cur = trackStates[id]?.volumeDb ?? 0;
       const next = absolute !== null ? absolute : Math.max(-60, Math.min(6, cur + delta));
       setTrackState(id, { volumeDb: next });
-      webAudioEngine.setVolume(id, next);
       engineClient.setTrackVolume(id, next).catch(() => {});
     }
   },
