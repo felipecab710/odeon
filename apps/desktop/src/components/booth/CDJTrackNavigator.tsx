@@ -7,6 +7,7 @@
 import { useEffect, useRef } from "react";
 import type { WaveformCache } from "../../lib/waveformEngine/types";
 import { TrackNavWaveform, type WaveformHandle } from "../select/WaveformRenderer";
+import { ThreeBandOverview, hasOverview } from "./ThreeBandOverview";
 
 const HOT_CUE_COLORS = [
   "#ff2244", "#00c8ea", "#22bb44", "#aa44ff",
@@ -118,14 +119,25 @@ export function CDJTrackNavigator({
 
         {/* Full-track nav waveform */}
         <div style={{ height: WAVE_H, position: "relative" }}>
-          <TrackNavWaveform
-            ref={navRef}
-            cache={cache}
-            width={navW}
-            height={WAVE_H}
-            bg="#030306"
-            mode="rgb"
-          />
+          {hasOverview(cache) ? (
+            <ThreeBandOverview
+              cache={cache}
+              width={navW}
+              height={WAVE_H}
+              bg="#030306"
+              baseline={0.78}
+              reflect={0.3}
+            />
+          ) : (
+            <TrackNavWaveform
+              ref={navRef}
+              cache={cache}
+              width={navW}
+              height={WAVE_H}
+              bg="#030306"
+              mode="rgb"
+            />
+          )}
           {dur > 0 && (
             <>
               {/* Playhead line */}

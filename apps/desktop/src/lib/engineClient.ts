@@ -31,7 +31,12 @@ async function loadTauri() {
 
     // Replay any listen calls that arrived before Tauri was ready
     for (const pending of _pendingListens) {
-      _listen(pending.event, pending.handler).then(pending.resolve);
+      void _listen(pending.event, pending.handler)
+        .then(pending.resolve)
+        .catch((err) => {
+          console.warn(`[engineClient] listen failed for ${pending.event}:`, err);
+          pending.resolve(() => {});
+        });
     }
     _pendingListens.length = 0;
   } catch {

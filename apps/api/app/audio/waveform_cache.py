@@ -29,6 +29,18 @@ _MAGIC = b"ODWC"
 _COLR_MAGIC = b"COLR"
 FREQ_COLOR_COLS = 256  # columns in COLR section
 
+# Optional trailing section: three-band structural overview ('OVW3')
+_OVW_MAGIC = b"OVW3"
+# Bins per overview resolution level (client picks closest to canvasWidth*DPR)
+OVERVIEW_LEVELS = (512, 1024, 2048, 4096)
+# Fields per overview bin (interleaved float32): minPeak, maxPeak, rms, low, mid, high
+OVERVIEW_FIELDS = 6
+# Default 3-band split (Hz) — configurable via compute_overview()
+DEFAULT_OVERVIEW_BANDS = ((20.0, 250.0), (250.0, 2500.0), (2500.0, 20000.0))
+# Log-compression gain (6–12); temporal smoothing window for envelopes
+OVERVIEW_GAIN = 8.0
+OVERVIEW_SMOOTH_MS = 200.0
+
 # Samples per peak bucket at each pyramid level (finest → coarsest)
 PYRAMID_BLOCK_SIZES = [64, 256, 1024, 4096, 16384]
 
@@ -151,6 +163,180 @@ def build_stereo_pyramid(
 
 
 # ─────────────────────────────────────────────
+#  Three-band structural overview (OVW3)
+# ─────────────────────────────────────────────
+
+def _gaussian_smooth(x: np.ndarray, radius: int) -> np.ndarray:
+    """Normalised Gaussian smoothing (reveals sections, not transients)."""
+    radius = int(max(0, radius))
+    if radius < 1 or x.size == 0:
+        return x
+    t = np.arange(-radius, radius + 1, dtype=np.float64)
+    sigma = max(radius / 2.0, 1e-6)
+    k = np.exp(-(t * t) / (2.0 * sigma * sigma))
+    k /= k.sum()
+    return np.convolve(x, k, mode="same")
+
+
+def _bin_reduce_minmax_rms(
+    mono: np.ndarray, n_bins: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-bin min peak, max peak, RMS computed directly from samples."""
+    total = len(mono)
+    edges = (np.arange(n_bins + 1, dtype=np.int64) * total // max(n_bins, 1))
+    minp = np.zeros(n_bins, dtype=np.float64)
+    maxp = np.zeros(n_bins, dtype=np.float64)
+    rms = np.zeros(n_bins, dtype=np.float64)
+    for i in range(n_bins):
+        a, b = int(edges[i]), int(edges[i + 1])
+        if b <= a:
+            continue
+        seg = mono[a:b]
+        minp[i] = float(seg.min())
+        maxp[i] = float(seg.max())
+        rms[i] = float(np.sqrt(np.mean(seg * seg)))
+    return minp, maxp, rms
+
+
+def _resample_mean(frame_vals: np.ndarray, n_bins: int) -> np.ndarray:
+    """Average STFT-frame values into n_bins (energy-preserving bucket mean)."""
+    n = frame_vals.shape[0]
+    if n == 0:
+        return np.zeros(n_bins, dtype=np.float64)
+    idx = (np.arange(n, dtype=np.int64) * n_bins // n)
+    out = np.zeros(n_bins, dtype=np.float64)
+    cnt = np.zeros(n_bins, dtype=np.float64)
+    np.add.at(out, idx, frame_vals)
+    np.add.at(cnt, idx, 1.0)
+    cnt[cnt == 0] = 1.0
+    return out / cnt
+
+
+def compute_overview(
+    left: np.ndarray,
+    right: np.ndarray,
+    sample_rate: int,
+    duration_seconds: float,
+    levels: tuple[int, ...] = OVERVIEW_LEVELS,
+    bands: tuple[tuple[float, float], ...] = DEFAULT_OVERVIEW_BANDS,
+    gain: float = OVERVIEW_GAIN,
+    smooth_ms: float = OVERVIEW_SMOOTH_MS,
+) -> dict[str, Any] | None:
+    """Multi-resolution three-band structural overview.
+
+    Each bin: minPeak, maxPeak, rms, low, mid, high — all in normalised,
+    log-compressed units. Normalisation is robust (98th percentile), NOT
+    absolute-max. Band energies + RMS are temporally smoothed so the overview
+    reveals musical sections rather than individual transients.
+    """
+    try:
+        import librosa
+
+        if len(left) == 0:
+            return None
+        mono = (left + right) * 0.5 if len(left) == len(right) else left
+        mono = np.asarray(mono, dtype=np.float32)
+
+        # ── 3-band STFT energy per frame ──────────────────────────────────
+        n_fft = 2048
+        hop = 512
+        spec = np.abs(librosa.stft(mono, n_fft=n_fft, hop_length=hop))
+        freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+        band_frames: list[np.ndarray] = []
+        for lo, hi in bands:
+            mask = (freqs >= lo) & (freqs < hi)
+            band_frames.append(
+                spec[mask, :].sum(axis=0) if mask.any() else np.zeros(spec.shape[1])
+            )
+
+        # Robust references (98th percentile) — shared across all levels
+        amp_ref = float(np.percentile(np.abs(mono), 98)) or 1.0
+        combined = band_frames[0] + band_frames[1] + band_frames[2] + 1e-12
+        band_ref = float(np.percentile(combined, 98)) or 1.0
+        log_den = np.log1p(gain)
+
+        def compress(v: np.ndarray) -> np.ndarray:
+            return np.log1p(gain * np.clip(v, 0.0, 1.0)) / log_den
+
+        result_levels: dict[str, np.ndarray] = {}
+        for n_bins in levels:
+            minp, maxp, rms = _bin_reduce_minmax_rms(mono, n_bins)
+
+            # Robust + log compression (sign preserved for min/max peak)
+            maxp_c = compress(maxp / amp_ref)
+            minp_c = -compress(np.abs(minp) / amp_ref)
+
+            smooth_radius = int(round(smooth_ms / 1000.0 * n_bins / max(duration_seconds, 1e-6)))
+            rms_c = compress(_gaussian_smooth(rms / amp_ref, smooth_radius))
+
+            low = compress(_gaussian_smooth(_resample_mean(band_frames[0], n_bins) / band_ref, smooth_radius))
+            mid = compress(_gaussian_smooth(_resample_mean(band_frames[1], n_bins) / band_ref, smooth_radius))
+            high = compress(_gaussian_smooth(_resample_mean(band_frames[2], n_bins) / band_ref, smooth_radius))
+
+            inter = np.empty(n_bins * OVERVIEW_FIELDS, dtype=np.float32)
+            inter[0::OVERVIEW_FIELDS] = minp_c
+            inter[1::OVERVIEW_FIELDS] = maxp_c
+            inter[2::OVERVIEW_FIELDS] = rms_c
+            inter[3::OVERVIEW_FIELDS] = low
+            inter[4::OVERVIEW_FIELDS] = mid
+            inter[5::OVERVIEW_FIELDS] = high
+            result_levels[str(n_bins)] = inter
+
+        return {
+            "levels": result_levels,
+            "bands": [list(b) for b in bands],
+            "gain": gain,
+            "smooth_ms": smooth_ms,
+        }
+    except Exception:
+        return None
+
+
+def _build_ovw_section(overview: dict[str, Any]) -> bytes:
+    """Encode overview as OVW3 binary section.
+
+    Layout:
+        magic        4 bytes  b'OVW3'
+        n_levels     uint32 LE
+        per level:   bin_count uint32 LE            (× n_levels)
+        per level:   float32[bin_count*6] interleaved (× n_levels, same order)
+    """
+    levels = overview["levels"]
+    keys = [str(k) for k in OVERVIEW_LEVELS if str(k) in levels]
+    header = _OVW_MAGIC + struct.pack("<I", len(keys))
+    for k in keys:
+        bin_count = len(levels[k]) // OVERVIEW_FIELDS
+        header += struct.pack("<I", bin_count)
+    body = bytearray()
+    for k in keys:
+        body.extend(np.asarray(levels[k], dtype=np.float32).tobytes())
+    return header + bytes(body)
+
+
+def _parse_ovw_section(data: bytes, offset: int) -> tuple[dict[str, Any] | None, int]:
+    """Read an OVW3 section at offset. Returns (overview, new_offset) or (None, offset)."""
+    if offset + 8 > len(data) or data[offset:offset + 4] != _OVW_MAGIC:
+        return None, offset
+    n_levels = struct.unpack_from("<I", data, offset + 4)[0]
+    pos = offset + 8
+    bin_counts: list[int] = []
+    for _ in range(n_levels):
+        if pos + 4 > len(data):
+            return None, offset
+        bin_counts.append(struct.unpack_from("<I", data, pos)[0])
+        pos += 4
+    levels: dict[str, list[float]] = {}
+    for i, bin_count in enumerate(bin_counts):
+        byte_len = bin_count * OVERVIEW_FIELDS * 4
+        if pos + byte_len > len(data):
+            return None, offset
+        arr = np.frombuffer(data[pos:pos + byte_len], dtype=np.float32).copy()
+        levels[str(OVERVIEW_LEVELS[i]) if i < len(OVERVIEW_LEVELS) else str(bin_count)] = arr.tolist()
+        pos += byte_len
+    return {"levels": levels}, pos
+
+
+# ─────────────────────────────────────────────
 #  Binary sidecar write / read (v2)
 # ─────────────────────────────────────────────
 
@@ -178,7 +364,12 @@ def _parse_colr_section(data: bytes, offset: int) -> tuple[np.ndarray | None, in
     return np.stack([bass, mid, high], axis=1), offset + needed
 
 
-def _pyramid_to_binary(pyramid: dict[str, Any], audio_path: Path, freq_colors: np.ndarray | None = None) -> bytes:
+def _pyramid_to_binary(
+    pyramid: dict[str, Any],
+    audio_path: Path,
+    freq_colors: np.ndarray | None = None,
+    overview: dict[str, Any] | None = None,
+) -> bytes:
     """Encode pyramid as compact binary v2 sidecar.
 
     Layout:
@@ -218,6 +409,8 @@ def _pyramid_to_binary(pyramid: dict[str, Any], audio_path: Path, freq_colors: n
     result = header + meta_json + bytes(body)
     if freq_colors is not None and freq_colors.shape == (FREQ_COLOR_COLS, 3):
         result += _build_colr_section(freq_colors)
+    if overview is not None and overview.get("levels"):
+        result += _build_ovw_section(overview)
     return result
 
 
@@ -267,7 +460,8 @@ def _binary_to_pyramid(data: bytes) -> dict[str, Any] | None:
             })
         levels[str(block_size)] = buckets
 
-    freq_colors, _ = _parse_colr_section(data, offset)
+    freq_colors, offset = _parse_colr_section(data, offset)
+    overview, offset = _parse_ovw_section(data, offset)
 
     return {
         "version": CACHE_VERSION,
@@ -279,6 +473,7 @@ def _binary_to_pyramid(data: bytes) -> dict[str, Any] | None:
         "levels": levels,
         "source_hash": meta.get("source_hash"),
         "freq_colors": freq_colors,  # (256, 3) uint8 or None
+        "overview": overview,        # {"levels": {...}} or None
     }
 
 
@@ -290,11 +485,12 @@ def write_waveform_cache(
     audio_path: str | Path,
     pyramid: dict[str, Any],
     freq_colors: np.ndarray | None = None,
+    overview: dict[str, Any] | None = None,
 ) -> Path:
     """Write v2 binary sidecar next to audio_path."""
     audio_path = Path(audio_path)
     dest = cache_path_for(audio_path)
-    dest.write_bytes(_pyramid_to_binary(pyramid, audio_path, freq_colors))
+    dest.write_bytes(_pyramid_to_binary(pyramid, audio_path, freq_colors, overview))
     return dest
 
 
@@ -385,9 +581,14 @@ def build_and_cache_from_arrays(
     channels: int,
     freq_colors: np.ndarray | None = None,
 ) -> tuple[dict[str, Any], Path]:
-    """Build v2 pyramid from in-memory channels and write binary sidecar."""
+    """Build v2 pyramid from in-memory channels and write binary sidecar.
+
+    Also computes the OVW3 three-band structural overview (RMS + low/mid/high
+    energy, robustly normalised + smoothed) used by the CDJ overview displays.
+    """
     pyramid = build_stereo_pyramid(left, right, sample_rate, duration_seconds, channels)
-    path = write_waveform_cache(audio_path, pyramid, freq_colors)
+    overview = compute_overview(left, right, sample_rate, duration_seconds)
+    path = write_waveform_cache(audio_path, pyramid, freq_colors, overview)
     return pyramid, path
 
 

@@ -139,14 +139,18 @@ export function PioneerRoundBtn({
 
 export function PioneerKnob({
   value, min = -12, max = 12, label, size = 28, large, onChange,
+  ticks = 0, accent = PIONEER.white, labelColor,
 }: {
   value: number;
   min?: number;
   max?: number;
-  label: string;
+  label?: string;
   size?: number;
   large?: boolean;
   onChange?: (v: number) => void;
+  ticks?: number;
+  accent?: string;
+  labelColor?: string;
 }) {
   const dragging = useRef(false);
   const startY = useRef(0);
@@ -177,8 +181,30 @@ export function PioneerKnob({
   const angle = -135 + norm * 270;
   const s = large ? size * 1.15 : size;
 
+  const tickRing = ticks > 0 ? (
+    <div style={{
+      position: "absolute", inset: -Math.round(s * 0.18), pointerEvents: "none",
+    }}>
+      {Array.from({ length: ticks }, (_, i) => {
+        const a = -135 + (i / (ticks - 1)) * 270;
+        const lit = i / (ticks - 1) <= norm + 0.0001;
+        return (
+          <div key={i} style={{
+            position: "absolute", top: "50%", left: "50%",
+            width: 1.5, height: i % ((ticks - 1) / 2) === 0 ? 4 : 2.5,
+            background: lit ? "#6a6a6a" : "#2a2a2a",
+            transform: `translate(-50%, -50%) rotate(${a}deg) translateY(-${s * 0.62}px)`,
+            transformOrigin: "center center",
+            borderRadius: 1,
+          }} />
+        );
+      })}
+    </div>
+  ) : null;
+
   return (
-    <div style={{ textAlign: "center" }}>
+    <div style={{ textAlign: "center", position: "relative" }}>
+      {tickRing}
       <div
         onMouseDown={onMouseDown}
         onDoubleClick={() => onChange?.(0)}
@@ -210,19 +236,21 @@ export function PioneerKnob({
         <div style={{
           position: "absolute", top: "50%", left: "50%",
           width: 2, height: s * 0.32,
-          background: PIONEER.white,
+          background: accent,
           transform: `translate(-50%,-92%) rotate(${angle}deg)`,
           transformOrigin: "bottom center",
           borderRadius: 1,
-          boxShadow: "0 0 2px rgba(255,255,255,0.5)",
+          boxShadow: `0 0 2px ${accent}99`,
         }} />
       </div>
-      <div style={{
-        fontSize: 6, color: PIONEER.label, fontWeight: 700,
-        letterSpacing: "0.08em", marginTop: 2,
-      }}>
-        {label}
-      </div>
+      {label && (
+        <div style={{
+          fontSize: 6, color: labelColor ?? PIONEER.label, fontWeight: 700,
+          letterSpacing: "0.08em", marginTop: 2,
+        }}>
+          {label}
+        </div>
+      )}
     </div>
   );
 }

@@ -10,6 +10,8 @@ import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
 import type { WaveformCache } from "../../lib/waveformEngine/types";
 import { CDJWaveformScreen } from "./CDJWaveformScreen";
 import { FIGMA_CDJ, FIGMA_CDJ_SIZE } from "./figmaCdjAssets";
+import { JogWheelCenterDisplay } from "./JogWheelCenterDisplay";
+import { JogWheelGripRing } from "./JogWheelGripRing";
 
 const HOT_CUE_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
 
@@ -19,6 +21,7 @@ const HOT_CUE_PAD_BG = `url("data:image/svg+xml;utf8,<svg viewBox='0 0 30 17' xm
 interface Props {
   deck: CDJDeckState;
   entry: CatalogEntry | null;
+  timelineStartSec?: number;
   interactive?: boolean;
   onCue?: () => void;
   onHotcue?: (slot: number, shift: boolean) => void;
@@ -166,7 +169,9 @@ function LoopCueBtn() {
   );
 }
 
-export function FigmaCDJ3000({ deck, entry, interactive, onCue, onHotcue }: Props) {
+export function FigmaCDJ3000({
+  deck, entry, timelineStartSec = 0, interactive, onCue, onHotcue,
+}: Props) {
   const [cache, setCache] = useState<WaveformCache | null>(null);
   const dur = cache?.duration_seconds || deck.durationSec || 0;
 
@@ -194,7 +199,7 @@ export function FigmaCDJ3000({ deck, entry, interactive, onCue, onHotcue }: Prop
         position: "relative",
         width: FIGMA_CDJ_SIZE.width,
         height: FIGMA_CDJ_SIZE.height,
-        background: "#363636",
+        background: "#323232",
         paddingBottom: 8,
         flexShrink: 0,
         overflow: "visible",
@@ -208,7 +213,7 @@ export function FigmaCDJ3000({ deck, entry, interactive, onCue, onHotcue }: Prop
           position: "absolute", left: 0, top: -5,
           width: 485, height: 595, borderRadius: 2.5,
           border: "1px solid rgba(121,121,121,0.2)",
-          background: "linear-gradient(155.601deg, rgb(50,50,52) 5.9553%, rgb(27,27,27) 44.272%)",
+          background: "linear-gradient(155.601deg, rgb(44,44,46) 5.9553%, rgb(22,22,22) 44.272%)",
           pointerEvents: "none",
         }}
       />
@@ -282,11 +287,7 @@ export function FigmaCDJ3000({ deck, entry, interactive, onCue, onHotcue }: Prop
           padding: "35px 34px", boxSizing: "border-box",
         }}
       >
-        <img src={FIGMA_CDJ.diskOuter} alt="" style={{
-          position: "absolute", left: 0, top: 0, width: 309, height: 309,
-          transform: `rotate(${deck.jogAngle}deg)`,
-          transformOrigin: "center center",
-        }} />
+        <JogWheelGripRing size={309} />
         <img src={FIGMA_CDJ.ellipse11} alt="" style={{
           position: "absolute", left: 34, top: 35, width: 239, height: 239,
         }} />
@@ -294,38 +295,25 @@ export function FigmaCDJ3000({ deck, entry, interactive, onCue, onHotcue }: Prop
           data-node-id="392:2227"
           style={{
             position: "absolute", left: 102, top: 102, width: 97, height: 97,
-            padding: "12px 12px 13px 13px", boxSizing: "border-box", borderRadius: 48.5,
-            background: "#222",
+            borderRadius: 48.5,
+            background: "#1a1a1a",
             boxShadow: "inset 0px 1px 4px 0px rgba(0,0,0,0.8)",
-            overflow: "hidden",
+            overflow: "visible",
           }}
         >
-          {/* Dynamic cover art — 392:2230 (replaces static ellipse14) */}
-          {artworkUrl ? (
-            <img
-              key={entry?.id}
-              src={artworkUrl}
-              alt=""
-              style={{
-                position: "absolute", left: 24, top: 24, width: 49, height: 49,
-                borderRadius: "50%", objectFit: "cover", display: "block",
-              }}
-            />
-          ) : (
-            <div style={{
-              position: "absolute", left: 24, top: 24, width: 49, height: 49,
-              borderRadius: "50%",
-              background: "radial-gradient(circle at 35% 30%, #3a3a3a 0%, #111 70%)",
-            }} />
-          )}
-          <img src={FIGMA_CDJ.ellipse13} alt="" style={{
-            position: "absolute", left: 20, top: 20, width: 57, height: 57,
-            pointerEvents: "none",
-          }} />
-          <img src={FIGMA_CDJ.ellipse12} alt="" style={{
-            position: "absolute", left: 13, top: 12, width: 72, height: 72,
-            pointerEvents: "none",
-          }} />
+          <JogWheelCenterDisplay
+            deckIndex={deck.deckIndex}
+            timelineStartSec={timelineStartSec}
+            durationSec={dur || deck.durationSec}
+            isLoaded={deck.isLoaded}
+            isPlaying={deck.isPlaying}
+            loopActive={deck.loopActive}
+            artworkUrl={artworkUrl}
+            artist={deck.artist}
+            title={deck.title}
+            hotCueSlots={deck.hotCueSlots}
+            hotCueTimes={deck.hotCueTimes}
+          />
         </div>
       </div>
 

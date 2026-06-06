@@ -1,7 +1,10 @@
 /** Scale the full Pioneer booth to fit the viewport while preserving pixel layout. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { FIGMA_CDJ_SIZE } from "./figmaCdjAssets";
+import { DJM_WIDTH } from "./SchematicDJM";
 
-const BOOTH_NATURAL_WIDTH = 485 * 4 + 600; // 4× Figma CDJ-3000X + DJM
+const BOOTH_NATURAL_WIDTH = FIGMA_CDJ_SIZE.width * 4 + DJM_WIDTH; // 4× CDJ + DJM-V10
+export const BOOTH_FACEPLATE_HEIGHT = FIGMA_CDJ_SIZE.height;
 
 export function BoothScale({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -34,6 +37,7 @@ export function BoothScale({ children }: { children: ReactNode }) {
         display: "flex",
         gap: 0,
         alignItems: "flex-end",
+        minHeight: BOOTH_FACEPLATE_HEIGHT + 72,
         padding: "72px 12px 8px",
         background: "linear-gradient(180deg, #161616 0%, #0c0c0c 100%)",
         borderRadius: 6,

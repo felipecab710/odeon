@@ -12,15 +12,20 @@ import {
   type WaveformHandle,
 } from "../select/WaveformRenderer";
 import { CDJTrackNavigator } from "./CDJTrackNavigator";
+import { ThreeBandOverview, hasOverview } from "./ThreeBandOverview";
 
 const SCREEN_BG = "#000000";
-const W = 320;
+const SCREEN_W = 320;
+const SCREEN_H = 223;
+/** Inset UI from display edges — black bezel padding (Pioneer reference) */
+const SCREEN_PAD = 10;
+const W = SCREEN_W - SCREEN_PAD * 2;
 
 const HEADER_H = 30;
 const TOP_OVERVIEW_H = 17;
-const MAIN_WAVE_H = 100;
+const MAIN_WAVE_SECTION_H = 54;
+const MAIN_WAVE_H = 36;
 const FOOTER_H = 48;
-const NAV_H = 29;
 
 interface Props {
   cache: WaveformCache | null;
@@ -151,11 +156,17 @@ export function CDJWaveformScreen({
 
   return (
     <div style={{
-      width: W, height: HEADER_H + TOP_OVERVIEW_H + MAIN_WAVE_H + FOOTER_H + NAV_H,
-      background: SCREEN_BG, color: "#fff",
-      fontFamily: "Inter, Helvetica Neue, Arial, sans-serif",
-      overflow: "hidden", position: "relative",
+      width: SCREEN_W, height: SCREEN_H,
+      background: SCREEN_BG, position: "relative", overflow: "hidden",
     }}>
+      <div style={{
+        position: "absolute",
+        left: SCREEN_PAD, top: SCREEN_PAD,
+        width: W, height: SCREEN_H - SCREEN_PAD * 2,
+        color: "#fff",
+        fontFamily: "Inter, Helvetica Neue, Arial, sans-serif",
+        overflow: "hidden",
+      }}>
       {/* ── Header ─────────────────────────────────────────────── */}
       <div style={{
         height: HEADER_H, display: "flex", alignItems: "center",
@@ -226,15 +237,26 @@ export function CDJWaveformScreen({
             background: "#2a8a3a", padding: "1px 3px", borderRadius: 1,
           }}>D</span>
         </div>
-        <OverviewWaveform
-          ref={topOverRef}
-          cache={cache}
-          width={W}
-          height={TOP_OVERVIEW_H}
-          bg={SCREEN_BG}
-          mode="rgb"
-          hidePlayhead
-        />
+        {hasOverview(cache) ? (
+          <ThreeBandOverview
+            cache={cache}
+            width={W}
+            height={TOP_OVERVIEW_H}
+            bg={SCREEN_BG}
+            baseline={0.7}
+            reflect={0.5}
+          />
+        ) : (
+          <OverviewWaveform
+            ref={topOverRef}
+            cache={cache}
+            width={W}
+            height={TOP_OVERVIEW_H}
+            bg={SCREEN_BG}
+            mode="rgb"
+            hidePlayhead
+          />
+        )}
         {dur > 0 && (
           <div style={{
             position: "absolute", left: (positionSec / dur) * W, top: 0, bottom: 0,
@@ -243,20 +265,26 @@ export function CDJWaveformScreen({
         )}
       </div>
 
-      {/* ── Main scrolling waveform ────────────────────────────── */}
-      <div style={{ height: MAIN_WAVE_H, position: "relative", borderBottom: "1px solid #111" }}>
-        <ZoomedWaveform
-          ref={zoomRef}
-          cache={cache}
-          width={W}
-          height={MAIN_WAVE_H}
-          bg={SCREEN_BG}
-          mode="rgb"
-          beatTimes={beatTimes}
-          zoomSeconds={8}
-          hidePlayhead
-        />
-        <CdJPlayhead thick />
+      {/* ── Main scrolling waveform (short band — Pioneer reference) ─ */}
+      <div style={{
+        height: MAIN_WAVE_SECTION_H, position: "relative",
+        borderBottom: "1px solid #111",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <div style={{ position: "relative", width: W, height: MAIN_WAVE_H }}>
+          <ZoomedWaveform
+            ref={zoomRef}
+            cache={cache}
+            width={W}
+            height={MAIN_WAVE_H}
+            bg={SCREEN_BG}
+            mode="rgb"
+            beatTimes={beatTimes}
+            zoomSeconds={8}
+            hidePlayhead
+          />
+          <CdJPlayhead thick />
+        </div>
         <div style={{
           position: "absolute", bottom: 2, right: 4,
           fontSize: 4, color: "#4af", fontWeight: 600, zIndex: 5,
@@ -343,6 +371,7 @@ export function CDJWaveformScreen({
         hotCueSlots={hotCueSlots}
         hotCueTimes={hotCueTimes}
       />
+      </div>
     </div>
   );
 }

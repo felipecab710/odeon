@@ -127,10 +127,12 @@ export function BoothTwin({
       <BoothScale>
         <SchematicCDJ
           deck={decks[0]} entry={entryFor(decks[0].entryId)} accent="#c8e650"
+          timelineStartSec={decks[0].entryId ? getTimelineStart?.(decks[0].entryId) ?? 0 : 0}
           interactive={interactive} {...deckDriveHandlers(0)}
         />
         <SchematicCDJ
           deck={decks[1]} entry={entryFor(decks[1].entryId)} accent="#b39ddb"
+          timelineStartSec={decks[1].entryId ? getTimelineStart?.(decks[1].entryId) ?? 0 : 0}
           interactive={interactive} {...deckDriveHandlers(1)}
         />
         <SchematicDJM
@@ -142,10 +144,12 @@ export function BoothTwin({
         />
         <SchematicCDJ
           deck={decks[2]} entry={entryFor(decks[2].entryId)} accent="#4fc3f7"
+          timelineStartSec={decks[2].entryId ? getTimelineStart?.(decks[2].entryId) ?? 0 : 0}
           interactive={interactive} {...deckDriveHandlers(2)}
         />
         <SchematicCDJ
           deck={decks[3]} entry={entryFor(decks[3].entryId)} accent="#ffab40"
+          timelineStartSec={decks[3].entryId ? getTimelineStart?.(decks[3].entryId) ?? 0 : 0}
           interactive={interactive} {...deckDriveHandlers(3)}
         />
       </BoothScale>

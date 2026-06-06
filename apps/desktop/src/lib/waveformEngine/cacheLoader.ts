@@ -1,4 +1,5 @@
-import type { FreqColors, WaveformCache } from "./types";
+import { OVERVIEW_FIELDS, OVERVIEW_LEVELS } from "./types";
+import type { FreqColors, WaveformCache, WaveformOverview } from "./types";
 
 const memoryCache = new Map<string, WaveformCache>();
 const inflight = new Map<string, Promise<WaveformCache | null>>();
@@ -90,8 +91,11 @@ function parseBinaryV2(buf: ArrayBuffer): WaveformCache | null {
         mid:  new Uint8Array(buf.slice(base + n,     base + 2 * n)),
         high: new Uint8Array(buf.slice(base + 2 * n, base + 3 * n)),
       };
+      offset = base + n * 3;
     }
   }
+
+  const overview = parseOverviewSection(buf, view, offset);
 
   return {
     version: CACHE_VERSION_V2,
@@ -103,7 +107,39 @@ function parseBinaryV2(buf: ArrayBuffer): WaveformCache | null {
     levels,
     source_hash: meta.source_hash,
     freqColors,
+    overview,
   };
+}
+
+/** Parse optional OVW3 three-band overview section. */
+function parseOverviewSection(
+  buf: ArrayBuffer,
+  view: DataView,
+  offset: number,
+): WaveformOverview | undefined {
+  const OVW3 = 0x3357564f; // 'OVW3' LE (bytes 4F 56 57 33)
+  if (offset + 8 > buf.byteLength || view.getUint32(offset, true) !== OVW3) {
+    return undefined;
+  }
+  const nLevels = view.getUint32(offset + 4, true);
+  let pos = offset + 8;
+  const binCounts: number[] = [];
+  for (let i = 0; i < nLevels; i++) {
+    if (pos + 4 > buf.byteLength) return undefined;
+    binCounts.push(view.getUint32(pos, true));
+    pos += 4;
+  }
+  const levels: Record<string, Float32Array> = {};
+  for (let i = 0; i < binCounts.length; i++) {
+    const byteLen = binCounts[i] * OVERVIEW_FIELDS * 4;
+    if (pos + byteLen > buf.byteLength) return undefined;
+    // slice for guaranteed 4-byte alignment
+    levels[String(OVERVIEW_LEVELS[i] ?? binCounts[i])] = new Float32Array(
+      buf.slice(pos, pos + byteLen),
+    );
+    pos += byteLen;
+  }
+  return { levels };
 }
 
 /** Read sidecar from disk (Tauri) or API (browser dev). Handles v1 JSON and v2 binary. */

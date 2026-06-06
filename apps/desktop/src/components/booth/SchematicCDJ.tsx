@@ -9,6 +9,7 @@ interface Props {
   deck: CDJDeckState;
   entry: CatalogEntry | null;
   accent: string;
+  timelineStartSec?: number;
   interactive?: boolean;
   onHotcue?: (slot: number, shift: boolean) => void;
   onCue?: () => void;
@@ -16,12 +17,13 @@ interface Props {
 }
 
 export function SchematicCDJ({
-  deck, entry, interactive, onCue, onHotcue,
+  deck, entry, timelineStartSec, interactive, onCue, onHotcue,
 }: Props) {
   return (
     <FigmaCDJ3000
       deck={deck}
       entry={entry}
+      timelineStartSec={timelineStartSec}
       interactive={interactive}
       onCue={onCue}
       onHotcue={onHotcue}
