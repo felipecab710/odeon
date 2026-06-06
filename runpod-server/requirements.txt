@@ -1,0 +1,26 @@
+# Odeon ML Server — RunPod A100
+# Install: pip install -r requirements.txt
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+pydantic>=2.0.0
+
+# Core ML
+torch>=2.2.0
+torchaudio>=2.2.0
+transformers>=4.40.0
+numpy>=1.26.0
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Embeddings — Phase 2
+laion-clap>=1.1.0
+
+# HuggingFace model hub (MuQ, MERT, Music Flamingo, etc.)
+huggingface-hub>=0.23.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+
+# Stem separation — Phase 3 (uncomment when wiring BS-RoFormer)
+# audio-separator>=0.17.0

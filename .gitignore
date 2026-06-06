@@ -68,6 +68,9 @@ research/experiments/**/.ipynb_checkpoints
 *.swo
 *~
 
+# Cursor IDE state
+.cursor/
+
 # Environment
 .env
 .env.local

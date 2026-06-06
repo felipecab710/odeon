@@ -50,6 +50,11 @@ from .repository import (
 )
 from .scanner import scan_folder
 from .metadata import read_file_metadata
+from ..ml.pipeline import (
+    init_ml_db, embed_entry, embed_all_ready,
+    semantic_search_runpod, get_all_vecs as ml_get_all_vecs,
+)
+from ..ml.runpod_client import is_configured as runpod_configured, get_status as runpod_status
 
 router = APIRouter(prefix="/select", tags=["select"])
 
@@ -58,6 +63,7 @@ init_select_db()
 init_markers_db()
 init_embeddings_db()
 init_transition_db()
+init_ml_db()
 
 # Bounded thread pool: max 2 concurrent analyses to leave headroom for
 # the audio engine and Studio API calls. librosa/numpy release the GIL
@@ -435,12 +441,11 @@ def remove_marker(entry_id: str, marker_id: str):
 # ─────────────────────────────────────────────
 
 @router.get("/search")
-def semantic_search(q: str, limit: int = Query(default=20, le=100)):
+async def semantic_search(q: str, limit: int = Query(default=20, le=100)):
     """
     Natural-language search across the library.
     
-    When CLAP is available: uses audio-text embedding cosine similarity.
-    Fallback: parses the query for BPM/key/energy keywords and scores metadata.
+    Priority: RunPod CLAP → local CLAP → metadata keyword parser.
     
     Examples:
       ?q=dark+minimal+groover+126+bpm
@@ -450,6 +455,12 @@ def semantic_search(q: str, limit: int = Query(default=20, le=100)):
     all_entries = list_entries(status="ready", limit=5000)
     if not all_entries:
         return []
+
+    # RunPod CLAP (GPU) — best quality when embeddings are stored
+    if runpod_configured():
+        runpod_results = await semantic_search_runpod(q, limit=limit)
+        if runpod_results:
+            return runpod_results
 
     clap_available = _clap_status()
 
@@ -507,26 +518,114 @@ def semantic_search(q: str, limit: int = Query(default=20, le=100)):
 
 
 @router.get("/search/status")
-def search_status():
-    """Returns which embedding mode is active and CLAP readiness."""
+async def search_status():
+    """Returns which embedding mode is active and CLAP/RunPod readiness."""
     clap_ready = _clap_status()
     stored_clap  = 0
+    stored_muq   = 0
+    stored_mert  = 0
     stored_feats = 0
     try:
-        stored_clap  = len(get_clap_vecs_all())
+        stored_clap  = len(get_clap_vecs_all()) or len(ml_get_all_vecs("clap"))
+        stored_muq   = len(ml_get_all_vecs("muq"))
+        stored_mert  = len(ml_get_all_vecs("mert"))
         stored_feats = len(get_feature_vecs_all())
     except Exception:
         pass
+
+    runpod = None
+    if runpod_configured():
+        runpod = await runpod_status()
+        runpod = {
+            "configured": True,
+            "ok": runpod.ok,
+            "gpu": runpod.gpu,
+            "models_loaded": runpod.models_loaded,
+            "error": runpod.error,
+        }
+    else:
+        runpod = {"configured": False, "hint": "Set RUNPOD_URL in apps/api/.env"}
+
+    active = "metadata"
+    if runpod.get("configured") and stored_clap > 0:
+        active = "runpod_clap"
+    elif clap_ready and stored_clap > 0:
+        active = "local_clap"
+
     return {
         "clap_available": clap_ready,
         "clap_embedded_tracks": stored_clap,
+        "muq_embedded_tracks": stored_muq,
+        "mert_embedded_tracks": stored_mert,
         "feature_embedded_tracks": stored_feats,
-        "active_mode": "clap" if (clap_ready and stored_clap > 0) else "metadata",
+        "active_mode": active,
+        "runpod": runpod,
         "install_hint": (
-            None if clap_ready else
-            "pip install laion-clap  # then restart API — enables text-to-audio semantic search"
+            None if (clap_ready or runpod.get("configured")) else
+            "Set RUNPOD_URL or pip install laion-clap for semantic search"
         ),
     }
+
+
+@router.get("/ml/status")
+async def ml_status():
+    """RunPod ML server connectivity and GPU info."""
+    if not runpod_configured():
+        return {"configured": False, "hint": "Set RUNPOD_URL in apps/api/.env"}
+    status = await runpod_status()
+    return {
+        "configured": True,
+        "ok": status.ok,
+        "gpu": status.gpu,
+        "models_loaded": status.models_loaded,
+        "phases": status.phases,
+        "error": status.error,
+    }
+
+
+@router.post("/entries/{entry_id}/embed-remote")
+async def embed_entry_remote(
+    entry_id: str,
+    models: str = Query(default="clap", description="Comma-separated: clap,muq,mert"),
+):
+    """
+    Upload track audio to RunPod GPU and store embedding vectors locally.
+    Requires RUNPOD_URL to be set.
+    """
+    if not runpod_configured():
+        raise HTTPException(400, "RUNPOD_URL not configured — set it in apps/api/.env")
+    model_list = [m.strip() for m in models.split(",") if m.strip()]
+    result = await embed_entry(entry_id, models=model_list)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.post("/embed-remote-all")
+async def embed_remote_all(
+    models: str = Query(default="clap"),
+    background: bool = Query(default=True),
+):
+    """
+    Embed all ready tracks missing vectors via RunPod.
+    Runs in background by default (can take minutes for large libraries).
+    """
+    if not runpod_configured():
+        raise HTTPException(400, "RUNPOD_URL not configured")
+
+    model_list = [m.strip() for m in models.split(",") if m.strip()]
+
+    if background:
+        import threading
+        def _run():
+            import asyncio
+            asyncio.run(embed_all_ready(models=model_list))
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        entries = list_entries(status="ready", limit=5000)
+        return {"queued": len(entries), "models": model_list, "background": True}
+
+    return await embed_all_ready(models=model_list)
 
 
 @router.post("/embed/all")
