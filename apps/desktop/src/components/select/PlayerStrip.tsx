@@ -15,11 +15,22 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useSelectStore } from "../../stores/selectStore";
 import type { WaveformMode } from "../../stores/selectStore";
+import { useTransportStore } from "../../stores/transportStore";
 import { apiClient } from "../../lib/apiClient";
 import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { resolveTrackDuration, snapToBeatGrid } from "../../lib/trackTime";
+import { VisualPlayPosition } from "../../lib/visualPlayPosition";
+import { subscribeWaveformFrame } from "../../lib/waveformSync";
+import {
+  SELECT_DECK_INDEX,
+  useSelectEngineSync,
+  volumeLinearToFaderDb,
+} from "../../lib/useSelectEngineSync";
+import { engineClient, unwrapEngineResult } from "../../lib/engineClient";
+import { applyDeckMixBySlot, defaultDeckMix } from "../../lib/deckMixEngine";
 import { OverviewWaveform, ZoomedWaveform, type WaveformHandle } from "./WaveformRenderer";
 import type { WaveformCache } from "../../lib/waveformEngine/types";
-import type { CatalogEntry, CatalogMarker, CreateMarkerRequest } from "@odeon/shared";
+import type { CatalogMarker, CreateMarkerRequest } from "@odeon/shared";
 
 // ─── Hot cue palette (Mixxx defaults) ────────────────────────────────────────
 
@@ -34,17 +45,20 @@ export const HOT_CUE_COLORS = [
   "#ff44aa", // 8  pink
 ];
 
-// ─── Audio singleton ──────────────────────────────────────────────────────────
-
-let _audio: HTMLAudioElement | null = null;
-function getAudio(): HTMLAudioElement {
-  if (!_audio) {
-    _audio = new Audio();
-    _audio.preload = "auto"; // Mixxx equivalent: CachingReader pre-buffers the full track
-    _audio.crossOrigin = "anonymous";
-  }
-  return _audio;
+async function pushLoopToEngine(
+  active: boolean,
+  inSec: number | null,
+  outSec: number | null,
+) {
+  if (inSec == null || outSec == null) return;
+  try {
+    await unwrapEngineResult(
+      await engineClient.deckSetLoop(SELECT_DECK_INDEX, active, inSec, outSec),
+    );
+  } catch { /* ignore */ }
 }
+
+// ─── PlayerStrip ─────────────────────────────────────────────────────────────
 
 function fmt(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -53,18 +67,31 @@ function fmt(s: number): string {
   return `${m}:${ss}`;
 }
 
-// ─── PlayerStrip ─────────────────────────────────────────────────────────────
-
 export function PlayerStrip() {
   const { entries, selectedId, waveformMode, setWaveformMode } = useSelectStore();
-  const [entry,     setEntry]   = useState<CatalogEntry | null>(null);
+  const transportPosition = useTransportStore(s => s.positionSeconds);
+  const transportPlaying = useTransportStore(s => s.isPlaying);
+
+  const entry = useMemo(
+    () => (selectedId ? entries.find(e => e.id === selectedId) ?? null : null),
+    [selectedId, entries],
+  );
+
   const [cache,     setCache]   = useState<WaveformCache | null>(null);
   const [markers,   setMarkers] = useState<CatalogMarker[]>([]);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [volume,    setVolume]    = useState(0.8);
   const [trackMeta, setTrackMeta] = useState({
     title: "", artist: "", album: "", bpm: 0, key: "", lufs: 0, dur: 0, hasArt: false, id: "",
   });
+
+  const { syncing, syncError, engineReady, canPlay, deckPlay, deckToggle, deckSeekTo } =
+    useSelectEngineSync(entry, !!selectedId);
+  const transportPlay = deckPlay;
+  const transportToggle = deckToggle;
+  const transportSeek = deckSeekTo;
+
+  const visualPosRef = useRef(new VisualPlayPosition());
+  const deckRateRef = useRef(1);
 
   // ── Loop state (mirrors Mixxx LoopingControl) ─────────────────────────────
   const [loopIn,  setLoopIn]  = useState<number | null>(null);
@@ -77,12 +104,48 @@ export function PlayerStrip() {
   const overviewRef    = useRef<WaveformHandle>(null);
   const zoomedRef      = useRef<WaveformHandle>(null);
   const waveContainerRef = useRef<HTMLDivElement>(null);
+  const trackDurationRef = useRef(0);
   const [waveW, setWaveW] = useState(900);
 
-  // ── Entry sync ──────────────────────────────────────────────────────────────
+  const trackDurationSec = useMemo(
+    () => resolveTrackDuration({
+      cache,
+      entryDuration: entry?.duration_seconds,
+    }),
+    [cache, entry?.duration_seconds],
+  );
+  trackDurationRef.current = trackDurationSec;
+
+  const getLoopBounds = useCallback(() => {
+    const { in: inSec, out: outSec, active } = loopRef.current;
+    if (active && inSec != null && outSec != null) return { inSec, outSec };
+    return null;
+  }, []);
+
+  /** Sync anchor once per engine tick / seek — renderers extrapolate at 60fps internally. */
+  const syncWaveforms = useCallback((anchorSec?: number) => {
+    const dur = trackDurationRef.current;
+    const anchor = anchorSec ?? transportPosition;
+    const wall = performance.now();
+    const loop = getLoopBounds();
+    visualPosRef.current.sync(anchor, transportPlaying, deckRateRef.current, loop);
+    overviewRef.current?.sync(anchor, wall, dur, transportPlaying, deckRateRef.current);
+    zoomedRef.current?.sync(anchor, wall, dur, transportPlaying, deckRateRef.current);
+    if (timeDisplayRef.current) {
+      const t = transportPlaying ? visualPosRef.current.interpolate(wall) : anchor;
+      timeDisplayRef.current.textContent = fmt(t);
+    }
+  }, [transportPosition, transportPlaying, getLoopBounds]);
+
   useEffect(() => {
-    setEntry(entries.find(e => e.id === selectedId) ?? null);
-  }, [selectedId, entries]);
+    if (!engineReady) return;
+    syncWaveforms();
+  }, [engineReady, transportPosition, transportPlaying, syncWaveforms]);
+
+  useEffect(() => {
+    if (!engineReady) return;
+    syncWaveforms();
+  }, [engineReady, loopIn, loopOut, loopActive, syncWaveforms]);
 
   // ── Load waveform + markers on entry change ─────────────────────────────────
   useEffect(() => {
@@ -107,77 +170,56 @@ export function PlayerStrip() {
       loadWaveformCache(entry.file_path, entry.waveform_cache_path, entry.id).then(c => setCache(c)).catch(() => {});
     }
     apiClient.select.listMarkers(entry.id).then(m => setMarkers(m)).catch(() => {});
-  }, [entry?.id, entry?.status]);
-
-  // ── Load audio ──────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!entry) return;
-    const audio = getAudio();
-    const url   = apiClient.select.previewUrl(entry.id);
-    if (audio.src !== url) {
-      audio.pause();
-      audio.src    = url;
-      audio.volume = volume;
-      setIsPlaying(false);
-      if (timeDisplayRef.current) timeDisplayRef.current.textContent = "0:00";
-    }
   }, [entry?.id]);
 
-  // ── Wire audio events (wall-clock sync for 60fps interpolation) ─────────────
+  const getPlayheadForSet = useCallback((): number => {
+    const pos = transportPlaying
+      ? visualPosRef.current.interpolate()
+      : transportPosition;
+    return Math.round(pos * 1000) / 1000;
+  }, [transportPlaying, transportPosition]);
+
+  const quantizeTime = useCallback((raw: number): number => {
+    return snapToBeatGrid(raw, entry?.beat_times);
+  }, [entry?.beat_times]);
+
+  // ── Waveform cache + playhead timing ────────────────────────────────────────
   useEffect(() => {
-    const audio = getAudio();
+    if (!cache?.sample_rate || !cache.duration_seconds) return;
+    const samples = Math.round(cache.duration_seconds * cache.sample_rate);
+    visualPosRef.current.setTrackSamples(samples, cache.duration_seconds);
+    visualPosRef.current.setTiming({ bufferMs: (512 / cache.sample_rate) * 1000 });
+  }, [cache]);
 
-    const syncWaveforms = (playing: boolean) => {
-      const wall = performance.now();
-      const t    = audio.currentTime;
-      const dur  = audio.duration || 0;
-      overviewRef.current?.sync(t, wall, dur, playing, audio.playbackRate);
-      zoomedRef.current?.sync(t,  wall, dur, playing, audio.playbackRate);
-    };
-
-    const onTime   = () => {
-      // Loop enforcement — checked on every timeupdate (Mixxx does this per audio frame)
-      const loop = loopRef.current;
-      if (loop.active && loop.in != null && loop.out != null) {
-        if (audio.currentTime >= loop.out) {
-          if (typeof audio.fastSeek === "function") audio.fastSeek(loop.in);
-          else audio.currentTime = loop.in;
-        }
+  // ── 60fps time readout while playing (shared waveform RAF bus) ──────────────
+  useEffect(() => {
+    if (!entry || !transportPlaying) return;
+    const unsub = subscribeWaveformFrame(() => {
+      if (timeDisplayRef.current) {
+        timeDisplayRef.current.textContent = fmt(visualPosRef.current.interpolate());
       }
-      syncWaveforms(!audio.paused);
-      if (timeDisplayRef.current) timeDisplayRef.current.textContent = fmt(audio.currentTime);
-    };
-    const onMeta   = () => { const d = audio.duration || 0; if (durDisplayRef.current) durDisplayRef.current.textContent = fmt(d); syncWaveforms(!audio.paused); };
-    const onPlay   = () => { syncWaveforms(true);  setIsPlaying(true);  };
-    const onPause  = () => { syncWaveforms(false); setIsPlaying(false); };
-    const onSeeked = () => syncWaveforms(!audio.paused);
-    const onEnded  = () => {
-      setIsPlaying(false);
-      const dur = audio.duration || 0;
-      overviewRef.current?.sync(0, performance.now(), dur, false);
-      zoomedRef.current?.sync(0,  performance.now(), dur, false);
-      if (timeDisplayRef.current) timeDisplayRef.current.textContent = "0:00";
-    };
+    });
+    return unsub;
+  }, [entry?.id, transportPlaying]);
+  useEffect(() => {
+    if (!engineReady || !entry) return;
+    for (const m of markers) {
+      if (m.type !== "hot_cue" || !m.label) continue;
+      const slot = parseInt(m.label, 10) - 1;
+      if (slot < 0 || slot > 7) continue;
+      void engineClient.deckSetHotcue(SELECT_DECK_INDEX, slot, m.time_seconds).catch(() => {});
+    }
+  }, [engineReady, entry?.id, markers]);
 
-    audio.addEventListener("timeupdate",     onTime);
-    audio.addEventListener("durationchange", onMeta);
-    audio.addEventListener("loadedmetadata", onMeta);
-    audio.addEventListener("play",           onPlay);
-    audio.addEventListener("pause",          onPause);
-    audio.addEventListener("seeked",         onSeeked);
-    audio.addEventListener("ended",          onEnded);
-    return () => {
-      audio.removeEventListener("timeupdate",     onTime);
-      audio.removeEventListener("durationchange", onMeta);
-      audio.removeEventListener("loadedmetadata", onMeta);
-      audio.removeEventListener("play",           onPlay);
-      audio.removeEventListener("pause",          onPause);
-      audio.removeEventListener("seeked",         onSeeked);
-      audio.removeEventListener("ended",          onEnded);
-    };
-  }, []);
+  useEffect(() => {
+    if (durDisplayRef.current) durDisplayRef.current.textContent = fmt(trackDurationSec);
+  }, [trackDurationSec]);
 
-  useEffect(() => { getAudio().volume = volume; }, [volume]);
+  useEffect(() => {
+    if (!engineReady) return;
+    const mix = { ...defaultDeckMix(), faderDb: volumeLinearToFaderDb(volume) };
+    applyDeckMixBySlot(SELECT_DECK_INDEX, mix, 0.5);
+  }, [volume, engineReady]);
 
   // ── Container width tracking ────────────────────────────────────────────────
   useEffect(() => {
@@ -189,75 +231,80 @@ export function PlayerStrip() {
 
   // ── Playback controls ───────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
-    const audio = getAudio();
-    if (!entry) return;
-    isPlaying ? audio.pause() : audio.play().catch(() => {});
-  }, [isPlaying, entry]);
+    if (!entry || !canPlay) return;
+    void transportToggle();
+  }, [entry, canPlay, transportToggle]);
 
   const seek = useCallback((ratio: number) => {
-    const audio = getAudio();
-    if (!audio.duration) return;
-    const t = ratio * audio.duration;
-    if (typeof audio.fastSeek === "function") audio.fastSeek(t);
-    else audio.currentTime = t;
-  }, []);
+    if (!canPlay) return;
+    const dur = trackDurationRef.current;
+    if (!dur) return;
+    const t = ratio * dur;
+    void transportSeek(t).then(() => syncWaveforms(t));
+  }, [canPlay, transportSeek, syncWaveforms]);
 
   // ─── Loop control (mirrors Mixxx LoopingControl) ─────────────────────────────
 
   const setLoopInPoint = useCallback(() => {
-    const t = getAudio().currentTime;
+    if (!canPlay) return;
+    const t = quantizeTime(getPlayheadForSet());
     setLoopIn(t);
     loopRef.current.in = t;
-  }, []);
+  }, [getPlayheadForSet, quantizeTime]);
 
   const setLoopOutPoint = useCallback(() => {
-    const t = getAudio().currentTime;
+    if (!canPlay) return;
+    const t = quantizeTime(getPlayheadForSet());
     if (loopRef.current.in != null && t > loopRef.current.in) {
       setLoopOut(t);
       loopRef.current.out = t;
-      // Activating loop out also enables the loop (Mixxx behavior)
       setLoopActive(true);
       loopRef.current.active = true;
+      void pushLoopToEngine(true, loopRef.current.in, t);
     }
-  }, []);
+  }, [canPlay, getPlayheadForSet, quantizeTime]);
 
   const toggleLoop = useCallback(() => {
+    if (!canPlay) return;
     setLoopActive(prev => {
       const next = !prev;
       loopRef.current.active = next;
+      void pushLoopToEngine(next, loopRef.current.in, loopRef.current.out);
       if (next && loopRef.current.in != null) {
-        // Jump to loop start on re-enable
-        const audio = getAudio();
-        if (audio.currentTime < loopRef.current.in || (loopRef.current.out != null && audio.currentTime >= loopRef.current.out)) {
-          if (typeof audio.fastSeek === "function") audio.fastSeek(loopRef.current.in);
-          else audio.currentTime = loopRef.current.in;
+        const pos = getPlayheadForSet();
+        if (loopRef.current.out != null && (pos < loopRef.current.in || pos >= loopRef.current.out)) {
+          void transportSeek(loopRef.current.in).then(() => syncWaveforms(loopRef.current.in!));
         }
       }
       return next;
     });
-  }, []);
+  }, [canPlay, getPlayheadForSet, transportSeek, syncWaveforms]);
 
   const clearLoop = useCallback(() => {
     setLoopIn(null); setLoopOut(null); setLoopActive(false);
     loopRef.current = { in: null, out: null, active: false };
+    void engineClient.deckSetLoop(SELECT_DECK_INDEX, false, 0, 0).catch(() => {});
   }, []);
 
-  // Auto-loop: sets a loop of N bars based on BPM
   const autoLoop = useCallback((bars: number) => {
+    if (!canPlay) return;
     const bpm = entry?.bpm;
     if (!bpm) return;
-    const secPerBar = (60 / bpm) * 4; // 4/4 time
-    const audio = getAudio();
-    const inPoint = audio.currentTime;
-    const outPoint = inPoint + secPerBar * bars;
+    const secPerBar = (60 / bpm) * 4;
+    const inPoint = quantizeTime(getPlayheadForSet());
+    const dur = trackDurationRef.current;
+    const span = secPerBar * bars;
+    const outPoint = dur > 0 ? Math.min(dur, inPoint + span) : inPoint + span;
     setLoopIn(inPoint); setLoopOut(outPoint); setLoopActive(true);
     loopRef.current = { in: inPoint, out: outPoint, active: true };
-  }, [entry?.bpm]);
+    void pushLoopToEngine(true, inPoint, outPoint);
+  }, [canPlay, entry?.bpm, getPlayheadForSet, quantizeTime]);
 
   // Reset loop when track changes
   useEffect(() => {
     setLoopIn(null); setLoopOut(null); setLoopActive(false);
     loopRef.current = { in: null, out: null, active: false };
+    void engineClient.deckSetLoop(SELECT_DECK_INDEX, false, 0, 0).catch(() => {});
   }, [entry?.id]);
 
   // ─── Hot cue system (mirrors Mixxx CueControl) ───────────────────────────────
@@ -274,61 +321,70 @@ export function PlayerStrip() {
   }, [markers]);
 
   const setCue = useCallback(async (slot: number) => {
-    if (!entry) return;
-    const audio = getAudio();
-    const t = audio.currentTime;
+    if (!entry || !canPlay) return;
+    const t = quantizeTime(getPlayheadForSet());
+    const label = String(slot + 1);
 
-    // Optimistic UI: show the cue immediately (Mixxx-style — visual is instant, persist follows)
+    try {
+      await unwrapEngineResult(
+        await engineClient.deckSetHotcue(SELECT_DECK_INDEX, slot, t),
+      );
+    } catch { /* ignore */ }
+
     const optimisticId = `__optimistic_${slot}`;
     const optimistic: CatalogMarker = {
       id: optimisticId,
       entry_id: entry.id,
       type: "hot_cue",
       time_seconds: t,
-      label: String(slot + 1),
+      label,
       color: HOT_CUE_COLORS[slot],
       created_at: new Date().toISOString(),
     };
+    let existingId: string | null = null;
     setMarkers(prev => {
-      const filtered = prev.filter(m => !(m.type === "hot_cue" && m.label === String(slot + 1)));
+      const existing = prev.find(m => m.type === "hot_cue" && m.label === label);
+      existingId = existing?.id && !existing.id.startsWith("__optimistic_") ? existing.id : null;
+      const filtered = prev.filter(m => !(m.type === "hot_cue" && m.label === label));
       return [...filtered, optimistic];
     });
 
-    // Persist in background
-    const existing = hotCueSlots[slot];
-    if (existing && !existing.id.startsWith("__optimistic_")) {
-      await apiClient.select.deleteMarker(entry.id, existing.id).catch(() => {});
+    if (existingId) {
+      await apiClient.select.deleteMarker(entry.id, existingId).catch(() => {});
     }
     const req: CreateMarkerRequest = {
       type: "hot_cue",
       time_seconds: t,
-      label: String(slot + 1),
+      label,
       color: HOT_CUE_COLORS[slot],
     };
     const created = await apiClient.select.createMarker(entry.id, req).catch(() => null);
     if (created) {
-      // Replace optimistic marker with real one
       setMarkers(prev => prev.map(m => m.id === optimisticId ? created : m));
     }
-  }, [entry, hotCueSlots]);
+  }, [entry, canPlay, getPlayheadForSet, quantizeTime]);
 
   const jumpToCue = useCallback((slot: number) => {
     const cue = hotCueSlots[slot];
-    if (!cue) return;
-    const audio = getAudio();
-    // fastSeek() — seeks to nearest I-frame, lowest possible latency (like Mixxx's EngineBuffer seek)
-    // Falls back to currentTime for browsers that don't support it
-    if (typeof audio.fastSeek === "function") {
-      audio.fastSeek(cue.time_seconds);
-    } else {
-      audio.currentTime = cue.time_seconds;
-    }
-    if (audio.paused) audio.play().catch(() => {});
-  }, [hotCueSlots]);
+    if (!cue || !canPlay) return;
+    void engineClient.deckJumpHotcue(SELECT_DECK_INDEX, slot)
+      .then(res => unwrapEngineResult(res))
+      .then(() => {
+        useTransportStore.getState().setPosition(cue.time_seconds);
+        if (!transportPlaying) void transportPlay();
+        syncWaveforms(cue.time_seconds);
+      })
+      .catch(() => {});
+  }, [hotCueSlots, canPlay, transportPlaying, transportPlay, syncWaveforms]);
 
   const deleteCue = useCallback(async (slot: number) => {
     const cue = hotCueSlots[slot];
     if (!cue || !entry) return;
+    try {
+      await unwrapEngineResult(
+        await engineClient.deckClearHotcue(SELECT_DECK_INDEX, slot),
+      );
+    } catch { /* ignore */ }
     await apiClient.select.deleteMarker(entry.id, cue.id).catch(() => {});
     setMarkers(prev => prev.filter(m => m.id !== cue.id));
   }, [entry, hotCueSlots]);
@@ -336,7 +392,9 @@ export function PlayerStrip() {
   const handleCueButton = useCallback((slot: number, e: React.MouseEvent) => {
     e.preventDefault();
     if (e.shiftKey || e.button === 2) { deleteCue(slot); return; }
-    hotCueSlots[slot] ? jumpToCue(slot) : setCue(slot);
+    // Ctrl/Cmd+click on set slot = re-set at playhead (Mixxx hotcue_X_set)
+    if ((e.metaKey || e.ctrlKey) && hotCueSlots[slot]) { void setCue(slot); return; }
+    hotCueSlots[slot] ? jumpToCue(slot) : void setCue(slot);
   }, [hotCueSlots, jumpToCue, setCue, deleteCue]);
 
   // Keyboard shortcuts 1-8 (skip when focus is in an input)
@@ -388,15 +446,21 @@ export function PlayerStrip() {
 
         {/* Play button */}
         <div style={{ display: "flex", alignItems: "center", padding: "0 12px", borderLeft: "1px solid #1a1a1a", gap: 6 }}>
-          <button onClick={togglePlay} disabled={!entry} style={{
+          {(syncError || syncing) && (
+            <span style={{ fontSize: 8, color: syncError ? "#f87171" : "#888", maxWidth: 140, lineHeight: 1.2 }}>
+              {syncError ?? "Loading track…"}
+            </span>
+          )}
+          <button onClick={togglePlay} disabled={!entry || !canPlay} style={{
             width: 34, height: 34, borderRadius: "50%",
-            background: isPlaying ? "rgba(74,222,128,0.12)" : "rgba(59,130,246,0.12)",
-            border: `1.5px solid ${isPlaying ? "#4ade80" : "#3b82f6"}`,
-            color: isPlaying ? "#4ade80" : "#60a5fa", fontSize: 12,
-            cursor: entry ? "pointer" : "default",
+            background: transportPlaying ? "rgba(74,222,128,0.12)" : "rgba(59,130,246,0.12)",
+            border: `1.5px solid ${transportPlaying ? "#4ade80" : "#3b82f6"}`,
+            color: transportPlaying ? "#4ade80" : "#60a5fa", fontSize: 12,
+            cursor: entry && canPlay ? "pointer" : "default",
             display: "flex", alignItems: "center", justifyContent: "center",
+            opacity: entry && canPlay ? 1 : 0.4,
           }}>
-            {isPlaying ? "⏸" : "▶"}
+            {transportPlaying ? "⏸" : "▶"}
           </button>
         </div>
 
@@ -562,8 +626,8 @@ export function PlayerStrip() {
         {/* Memory cue button (like Rekordbox memory points) */}
         <button
           onClick={async () => {
-            if (!entry) return;
-            const t = getAudio().currentTime;
+            if (!entry || !canPlay) return;
+            const t = quantizeTime(getPlayheadForSet());
             const created = await apiClient.select.createMarker(entry.id, {
               type: "memory", time_seconds: t, label: "M", color: "#3b82f6",
             });
@@ -644,11 +708,15 @@ export function PlayerStrip() {
       <div ref={waveContainerRef} style={{ lineHeight: 0, borderTop: "1px solid #111" }}>
         <OverviewWaveform
           ref={overviewRef} cache={cache} width={waveW} height={40}
-          markers={markers} bg="#090909" mode={waveformMode} onSeek={seek}
+          markers={markers} trackDurationSec={trackDurationSec}
+          loopIn={loopIn} loopOut={loopOut} loopActive={loopActive}
+          bg="#090909" mode={waveformMode} onSeek={seek}
         />
         <ZoomedWaveform
           ref={zoomedRef} cache={cache} width={waveW} height={72}
-          markers={markers} beatTimes={entry?.beat_times}
+          markers={markers} trackDurationSec={trackDurationSec}
+          loopIn={loopIn} loopOut={loopOut} loopActive={loopActive}
+          beatTimes={entry?.beat_times}
           bg="#070707" mode={waveformMode} zoomSeconds={15} onSeek={seek}
         />
       </div>

@@ -4,6 +4,8 @@
  * Each deck owns one route (deck:N) with a single wave clip on the timeline.
  */
 
+#include "OdeonDeckPlayer.h"
+
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 #include <string>
@@ -28,9 +30,10 @@ struct OdeonDjDeck {
     std::string trackId;          // "deck:0" … "deck:3"
     std::string filePath;
     std::string clipId;
-    double      timelineStart = 0.0;
+    double      timelineStart = 0.0;  // set-layout schedule hint (UI), not clip position
     double      duration      = 0.0;
     double      rate          = 1.0;
+    OdeonDeckPlayer player;
     double      bpm           = 128.0;
     bool        loaded        = false;
     bool        syncFollower  = false;

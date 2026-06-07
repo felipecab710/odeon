@@ -1,7 +1,7 @@
 /**
  * Booth simulation driver — maps set arrangement + transport → Pioneer twin state.
  */
-import type { CatalogEntry } from "@odeon/shared";
+import type { CatalogEntry, CatalogMarker } from "@odeon/shared";
 import type { SetCard } from "../stores/setBuilderStore";
 import type { BoothSnapshot, CDJDeckState, DJMChannelState } from "../stores/boothStore";
 import { DECK_COLORS } from "../stores/boothStore";
@@ -42,6 +42,7 @@ import {
 } from "./boothTransportSim";
 import { useStudioAutomationStore } from "../stores/studioAutomationStore";
 import { applyLaneAutomation } from "./applyLaneAutomation";
+import { resolveDeckHotCues } from "./markerUtils";
 
 const GAIN_TO_DB = (g: number) => (g <= 0.001 ? -60 : 20 * Math.log10(g));
 
@@ -135,6 +136,7 @@ function buildDeckState(
   bpm: number,
   prevDeck: CDJDeckState | undefined,
   playRate = 1,
+  catalogMarkers?: CatalogMarker[],
 ): CDJDeckState {
   if (!lane) {
     return {
@@ -176,6 +178,11 @@ function buildDeckState(
   const loopOut = prevDeck?.loopOutSec ?? Math.min(dur, loopIn + 16);
   localPos = applyLoopWrap(localPos, loopActive && laneActive, loopIn, loopOut);
   const deckPlaying = isPlaying && laneActive;
+  const { hotCueSlots, hotCueTimes } = resolveDeckHotCues(
+    lane.card.entryId,
+    prevDeck,
+    catalogMarkers,
+  );
 
   return {
     deckIndex,
@@ -192,8 +199,8 @@ function buildDeckState(
     pitchPercent: (playRate - 1) * 100,
     playLit: deckPlaying,
     cueLit: false,
-    hotCueSlots: prevDeck?.hotCueSlots ?? Array(8).fill(false),
-    hotCueTimes: prevDeck?.hotCueTimes ?? Array(8).fill(null),
+    hotCueSlots,
+    hotCueTimes,
     loopActive,
     loopInSec: loopIn,
     loopOutSec: loopOut,
@@ -285,6 +292,8 @@ export interface SimulationInput {
   interactiveChannels: DJMChannelState[] | null;
   engineRoute?: "set" | "dj";
   waveCaches?: Record<string, WaveformCache | null>;
+  /** Select catalog markers keyed by entry id — drives booth hot-cue pads. */
+  entryMarkers?: Record<string, CatalogMarker[]>;
   /** Timeline lane mixes keyed by lane index — drives Pioneer booth + engine. */
   laneMixes?: Record<number, DeckMix>;
   /** Wall clock for Pioneer LED blink phases (Mixxx ControlIndicator). */
@@ -297,6 +306,7 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
   const {
     sorted, entryMap, playheadSec, isPlaying, prevSnapshot,
     mode, transitionPlans, interactiveChannels, engineRoute = "dj", waveCaches,
+    entryMarkers,
     laneMixes,
     nowMs = performance.now(),
     deckRates,
@@ -374,6 +384,7 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
       layout.lanes[0]?.entry.bpm ?? 128,
       prevDecks[i],
       playRate,
+      lane ? entryMarkers?.[lane.card.entryId] : undefined,
     );
     const cueSec = firstCueSec(base.hotCueTimes, base.hotCueSlots);
     const indicators = pioneerIndicators({

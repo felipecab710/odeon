@@ -20,7 +20,7 @@ enum class DiskCacheSize {
 /** Full playback-engine settings mirrored from @odeon/shared. */
 struct PlaybackEngineSettings {
     std::string outputDeviceName;
-    int         bufferSizeSamples  = 256;
+    int         bufferSizeSamples  = 512;
     double      sampleRate         = 48000.0;
 
     ErrorRecoveryPolicy cpuOverload      = ErrorRecoveryPolicy::continue_;

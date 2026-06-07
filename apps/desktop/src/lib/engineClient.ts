@@ -71,13 +71,22 @@ interface EngineRpcEnvelope {
 
 export function unwrapEngineResult<T>(response: unknown): T {
   const envelope = response as EngineRpcEnvelope;
-  const inner = envelope?.result;
-  if (!inner?.ok) {
+  const inner = envelope?.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
+  if (inner?.ok) {
+    return inner.result as T;
+  }
+  if (inner?.ok === false) {
     throw new Error(
-      typeof inner?.error === "string" ? inner.error : "Engine RPC failed"
+      typeof inner.error === "string" ? inner.error : "Engine RPC failed",
     );
   }
-  return inner.result as T;
+  // Legacy/raw payloads (should not happen after engine envelope fix).
+  if (inner && typeof inner === "object" && "numDecks" in inner) {
+    return inner as T;
+  }
+  throw new Error(
+    typeof inner?.error === "string" ? inner.error : "Engine RPC failed",
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -167,8 +176,14 @@ export const engineClient = {
   unloadDeck: (deckIndex: number) =>
     _invoke("engine_unload_deck", { deckIndex }),
 
-  deckSeek: (deckIndex: number, timelineStartSeconds: number) =>
-    _invoke("engine_deck_seek", { deckIndex, timelineStartSeconds }),
+  deckSeek: (deckIndex: number, localSeconds: number) =>
+    _invoke("engine_deck_seek", { deckIndex, localSeconds }),
+
+  deckPlay: (deckIndex: number) =>
+    _invoke("engine_deck_play", { deckIndex }),
+
+  deckPause: (deckIndex: number) =>
+    _invoke("engine_deck_pause", { deckIndex }),
 
   deckSetRate: (deckIndex: number, rate: number) =>
     _invoke("engine_deck_set_rate", { deckIndex, rate }),

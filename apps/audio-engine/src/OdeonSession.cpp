@@ -275,7 +275,7 @@ std::string OdeonSession::setLoop(bool enabled, double startSeconds, double endS
 
 std::string OdeonSession::getTransportState() {
     if (!transport_)
-        return "{\"isPlaying\":false,\"positionSeconds\":0.0,\"bpm\":120.0,\"looping\":false}";
+        return jsonOk("{\"isPlaying\":false,\"positionSeconds\":0.0,\"bpm\":120.0,\"looping\":false}");
 
     std::ostringstream ss;
     ss << "{\"isPlaying\":" << (transport_->isPlaying() ? "true" : "false")
@@ -283,7 +283,7 @@ std::string OdeonSession::getTransportState() {
        << ",\"bpm\":120.0"
        << ",\"looping\":" << (transport_->looping ? "true" : "false")
        << "}";
-    return ss.str();
+    return jsonOk(ss.str());
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -378,11 +378,15 @@ std::string OdeonSession::moveClip(const std::string& trackId, const std::string
 //  DJ deck players
 // ─────────────────────────────────────────────────────────────────────────
 
-te::WaveAudioClip* OdeonSession::findDeckWaveClip(OdeonRoute* route) {
+te::WaveAudioClip* OdeonSession::findDeckWaveClip(OdeonRoute* route, const juce::File& expectedFile) {
     if (!route || !route->track) return nullptr;
+
+    const auto expectedPath = expectedFile.getFullPathName();
     for (auto* clip : route->track->getClips()) {
-        if (auto* wac = dynamic_cast<te::WaveAudioClip*>(clip))
-            return wac;
+        if (auto* wac = dynamic_cast<te::WaveAudioClip*>(clip)) {
+            if (wac->getSourceFileReference().getFile().getFullPathName() == expectedPath)
+                return wac;
+        }
     }
     return nullptr;
 }
@@ -406,6 +410,7 @@ void OdeonSession::clearDeckClips(OdeonDjDeck& deck) {
     deck.timelineStart = 0.0;
     deck.duration = 0.0;
     deck.rate = 1.0;
+    deck.player = OdeonDeckPlayer{};
 }
 
 std::string OdeonSession::createDjSession(int numDecks) {
@@ -441,8 +446,16 @@ std::string OdeonSession::loadDeck(int deckIndex, const std::string& filePath,
     if (deckIndex < 0 || deckIndex >= numDjDecks_)
         return jsonErr("Invalid deck index: " + std::to_string(deckIndex));
 
+    juce::File file(filePath);
+    if (!file.existsAsFile())
+        return jsonErr("File not found: " + filePath);
+
+    te::AudioFile audioFile(*engine_, file);
+    if (!audioFile.isValid())
+        return jsonErr("Cannot read audio file: " + filePath);
+
+    const double duration = audioFile.getLength();
     auto& deck = djDecks_[(size_t) deckIndex];
-    clearDeckClips(deck);
 
     OdeonRoute* route = nullptr;
     {
@@ -455,22 +468,101 @@ std::string OdeonSession::loadDeck(int deckIndex, const std::string& filePath,
     if (!name.empty())
         route->track->setName(name);
 
-    const std::string added = addClip(deck.trackId, "", filePath, timelineStartSeconds);
+    auto updateRouteClipMeta = [&]() {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        route->clips.clear();
+        AudioClip ac;
+        ac.clipId       = file.getFileNameWithoutExtension().toStdString();
+        ac.sourceId     = file.getFullPathName().hashCode64() != 0
+                              ? std::to_string(file.getFullPathName().hashCode64()) : ac.clipId;
+        ac.trackId      = deck.trackId;
+        ac.startTime    = 0.0;
+        ac.sourceOffset = 0.0;
+        ac.duration     = duration;
+        route->clips.push_back(ac);
+    };
+
+    auto finishLoad = [&]() -> std::string {
+        deck.filePath      = filePath;
+        deck.timelineStart = timelineStartSeconds;
+        deck.clipId        = file.getFileNameWithoutExtension().toStdString();
+        deck.rate          = 1.0;
+        deck.loaded        = true;
+        deck.duration      = duration;
+        if (deck.waveClip)
+            deck.duration = deck.waveClip->getPosition().getLength().inSeconds();
+
+        deck.player.durationSeconds = deck.duration;
+        deck.player.rate            = 1.0;
+        deck.player.isPlaying       = false;
+        deck.player.localPositionSeconds = 0.0;
+
+        if (transport_)
+            transport_->setPosition(tracktion::TimePosition::fromSeconds(0.0));
+
+        updateRouteClipMeta();
+        edit_->dispatchPendingUpdatesSynchronously();
+        syncDeckClipToPlayer(deck);
+        updateDjTransport();
+
+        return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                      ",\"trackId\":" + jsonQuote(deck.trackId) +
+                      ",\"filePath\":" + jsonQuote(deck.filePath) +
+                      ",\"durationSeconds\":" + std::to_string(deck.duration) + "}");
+    };
+
+    const auto clipMatchesFile = [&]() -> bool {
+        return deck.waveClip != nullptr
+            && deck.waveClip->getSourceFileReference().getFile().getFullPathName()
+                   == file.getFullPathName();
+    };
+
+    // Same file — update schedule metadata only; preserve local playhead.
+    if (deck.loaded && deck.filePath == filePath && clipMatchesFile()) {
+        deck.timelineStart = timelineStartSeconds;
+        syncDeckClipToPlayer(deck);
+        return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                      ",\"trackId\":" + jsonQuote(deck.trackId) +
+                      ",\"filePath\":" + jsonQuote(deck.filePath) +
+                      ",\"durationSeconds\":" + std::to_string(deck.duration) + "}");
+    }
+
+    // Fast path — swap source on existing clip (Rekordbox hot-load; no graph rebuild).
+    if (deck.waveClip != nullptr) {
+        deck.player.isPlaying = false;
+        deck.player.localPositionSeconds = 0.0;
+        deck.player.rate = 1.0;
+        deck.rate = 1.0;
+
+        deck.waveClip->getSourceFileReference().setToDirectFileReference(file, false);
+
+        te::ClipPosition pos;
+        pos.time = tracktion::TimeRange(
+            tracktion::TimePosition::fromSeconds(0.0),
+            tracktion::TimeDuration::fromSeconds(duration));
+        pos.offset = tracktion::TimeDuration::fromSeconds(0.0);
+        deck.waveClip->setPosition(pos);
+
+        edit_->dispatchPendingUpdatesSynchronously();
+
+        if (!clipMatchesFile())
+            return jsonErr("Deck source swap failed for: " + filePath);
+
+        return finishLoad();
+    }
+
+    // Cold path — first clip on this deck.
+    clearDeckClips(deck);
+
+    const std::string added = addClip(deck.trackId, "", filePath, 0.0);
     if (added.find("\"ok\":false") != std::string::npos)
         return added;
 
-    deck.filePath      = filePath;
-    deck.timelineStart = timelineStartSeconds;
-    deck.clipId        = juce::File(filePath).getFileNameWithoutExtension().toStdString();
-    deck.rate          = 1.0;
-    deck.loaded        = true;
-    deck.waveClip      = findDeckWaveClip(route);
-    if (deck.waveClip)
-        deck.duration = deck.waveClip->getPosition().getLength().inSeconds();
+    deck.waveClip = findDeckWaveClip(route, file);
+    if (!deck.waveClip)
+        return jsonErr("Deck clip missing after load for: " + filePath);
 
-    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
-                  ",\"trackId\":" + jsonQuote(deck.trackId) +
-                  ",\"durationSeconds\":" + std::to_string(deck.duration) + "}");
+    return finishLoad();
 }
 
 std::string OdeonSession::unloadDeck(int deckIndex) {
@@ -483,7 +575,7 @@ std::string OdeonSession::unloadDeck(int deckIndex) {
     return jsonOk();
 }
 
-std::string OdeonSession::deckSeek(int deckIndex, double timelineStartSeconds) {
+std::string OdeonSession::deckSeek(int deckIndex, double localSeconds) {
     if (!djMode_)
         return jsonErr("Not in DJ session mode.");
     if (deckIndex < 0 || deckIndex >= numDjDecks_)
@@ -493,28 +585,77 @@ std::string OdeonSession::deckSeek(int deckIndex, double timelineStartSeconds) {
     if (!deck.loaded || !deck.waveClip)
         return jsonErr("Deck not loaded.");
 
-    const double dur = deck.waveClip->getPosition().getLength().inSeconds();
-    te::ClipPosition pos;
-    pos.time = tracktion::TimeRange(
-        tracktion::TimePosition::fromSeconds(timelineStartSeconds),
-        tracktion::TimeDuration::fromSeconds(dur));
-    deck.waveClip->setPosition(pos);
-    deck.timelineStart = timelineStartSeconds;
+    deck.player.seek(localSeconds, deck.duration);
 
-    {
-        std::lock_guard<std::mutex> lk(routesMutex_);
-        if (auto* route = findRoute(deck.trackId)) {
-            for (auto& ac : route->clips) {
-                if (ac.clipId == deck.clipId) {
-                    ac.startTime = timelineStartSeconds;
-                    break;
-                }
-            }
-        }
+    if (usesDirectTransportDeckMode()) {
+        syncDeckClipToPlayer(deck);
+        if (transport_)
+            transport_->setPosition(
+                tracktion::TimePosition::fromSeconds(deck.player.localPositionSeconds));
+    } else {
+        syncDeckClipToPlayer(deck);
     }
 
     return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
-                  ",\"timelineStart\":" + std::to_string(timelineStartSeconds) + "}");
+                  ",\"localPositionSeconds\":" + std::to_string(deck.player.localPositionSeconds) + "}");
+}
+
+std::string OdeonSession::deckPlay(int deckIndex) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded || !deck.waveClip)
+        return jsonErr("Deck not loaded.");
+
+    deck.player.isPlaying = true;
+
+    if (usesDirectTransportDeckMode()) {
+        syncDeckClipToPlayer(deck);
+        if (transport_) {
+            transport_->ensureContextAllocated();
+            transport_->setPosition(
+                tracktion::TimePosition::fromSeconds(deck.player.localPositionSeconds));
+            transport_->play(false);
+        }
+    } else {
+        syncDeckClipToPlayer(deck);
+        updateDjTransport();
+    }
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"localPositionSeconds\":" + std::to_string(deck.player.localPositionSeconds) + "}");
+}
+
+std::string OdeonSession::deckPause(int deckIndex) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded)
+        return jsonErr("Deck not loaded.");
+
+    if (usesDirectTransportDeckMode() && transport_ && deck.player.isPlaying)
+        deck.player.localPositionSeconds = positionSeconds();
+
+    deck.player.isPlaying = false;
+
+    if (usesDirectTransportDeckMode()) {
+        if (transport_)
+            transport_->stop(false, false);
+        if (deck.waveClip)
+            deck.waveClip->setMuted(true);
+    } else {
+        syncDeckClipToPlayer(deck);
+        updateDjTransport();
+    }
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"localPositionSeconds\":" + std::to_string(deck.player.localPositionSeconds) + "}");
 }
 
 std::string OdeonSession::deckSetRate(int deckIndex, double rate) {
@@ -528,8 +669,9 @@ std::string OdeonSession::deckSetRate(int deckIndex, double rate) {
         return jsonErr("Deck not loaded.");
 
     const double clamped = std::clamp(rate, 0.5, 2.0);
-    deck.waveClip->setSpeedRatio(clamped);
     deck.rate = clamped;
+    deck.player.rate = clamped;
+    syncDeckClipToPlayer(deck);
 
     return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
                   ",\"rate\":" + std::to_string(clamped) + "}");
@@ -541,11 +683,6 @@ std::string OdeonSession::getDjState() {
     for (int i = 0; i < numDjDecks_; ++i) {
         if (i > 0) ss << ",";
         const auto& d = djDecks_[(size_t) i];
-        double localPos = 0.0;
-        if (d.loaded && transport_) {
-            localPos = std::max(0.0, positionSeconds() - d.timelineStart);
-            if (localPos > d.duration) localPos = d.duration;
-        }
         ss << "{"
            << "\"deckIndex\":" << i
            << ",\"trackId\":" << jsonQuote(d.trackId)
@@ -553,8 +690,9 @@ std::string OdeonSession::getDjState() {
            << ",\"filePath\":" << jsonQuote(d.filePath)
            << ",\"timelineStart\":" << d.timelineStart
            << ",\"durationSeconds\":" << d.duration
-           << ",\"localPositionSeconds\":" << localPos
-           << ",\"rate\":" << d.rate
+           << ",\"localPositionSeconds\":" << d.player.localPositionSeconds
+           << ",\"isPlaying\":" << (d.player.isPlaying ? "true" : "false")
+           << ",\"rate\":" << d.player.rate
            << ",\"bpm\":" << d.bpm
            << ",\"syncFollower\":" << (d.syncFollower ? "true" : "false")
            << ",\"loopActive\":" << (d.loop.active ? "true" : "false")
@@ -569,7 +707,7 @@ std::string OdeonSession::getDjState() {
         ss << "]}";
     }
     ss << "]}";
-    return ss.str();
+    return jsonOk(ss.str());
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -759,10 +897,13 @@ std::string OdeonSession::deckJumpHotcue(int deckIndex, int slot) {
     if (!djMode_) return jsonErr("Not in DJ session mode.");
     if (deckIndex < 0 || deckIndex >= numDjDecks_) return jsonErr("Invalid deck index.");
 
-    const auto& deck = djDecks_[(size_t) deckIndex];
+    auto& deck = djDecks_[(size_t) deckIndex];
     for (int i = 0; i < deck.hotcueCount; ++i) {
         if (deck.hotcues[(size_t) i].slot == slot) {
-            return deckSeek(deckIndex, deck.timelineStart + deck.hotcues[(size_t) i].timeSeconds);
+            deck.player.seek(deck.hotcues[(size_t) i].timeSeconds, deck.duration);
+            syncDeckClipToPlayer(deck);
+            return jsonOk("{\"localPositionSeconds\":" +
+                          std::to_string(deck.player.localPositionSeconds) + "}");
         }
     }
     return jsonErr("Hotcue not set.");
@@ -1248,18 +1389,160 @@ std::string OdeonSession::setPlaybackEngineSettings(const juce::var& p) {
 //  Meters poll thread + helpers
 // ─────────────────────────────────────────────────────────────────────────
 
+void OdeonSession::syncDeckClipToPlayer(OdeonDjDeck& deck) {
+    if (!deck.waveClip || !deck.loaded) return;
+
+    const double dur = deck.duration > 0.0
+                           ? deck.duration
+                           : deck.waveClip->getPosition().getLength().inSeconds();
+
+    te::ClipPosition pos;
+    if (usesDirectTransportDeckMode()) {
+        // DAW-style: clip anchored at timeline 0; transport position = file position.
+        pos.time = tracktion::TimeRange(
+            tracktion::TimePosition::fromSeconds(0.0),
+            tracktion::TimeDuration::fromSeconds(dur));
+    } else {
+        if (!transport_) return;
+        const double clipStart = positionSeconds() - deck.player.localPositionSeconds;
+        pos.time = tracktion::TimeRange(
+            tracktion::TimePosition::fromSeconds(clipStart),
+            tracktion::TimeDuration::fromSeconds(dur));
+    }
+    pos.offset = tracktion::TimeDuration::fromSeconds(0.0);
+    deck.waveClip->setPosition(pos);
+    // Single-deck: tempo on clip only. Multi-deck: software advance + speedRatio 1.
+    deck.waveClip->setSpeedRatio(usesDirectTransportDeckMode() ? deck.player.rate : 1.0);
+    deck.waveClip->setMuted(!deck.player.isPlaying);
+
+    if (edit_) edit_->dispatchPendingUpdatesSynchronously();
+}
+
+bool OdeonSession::usesDirectTransportDeckMode() const {
+    return djMode_ && numDjDecks_ == 1;
+}
+
+bool OdeonSession::anyDeckPlaying() const {
+    for (int i = 0; i < numDjDecks_; ++i) {
+        if (djDecks_[(size_t) i].loaded && djDecks_[(size_t) i].player.isPlaying)
+            return true;
+    }
+    return false;
+}
+
+void OdeonSession::updateDjTransport() {
+    if (!transport_ || !djMode_) return;
+
+    if (anyDeckPlaying()) {
+        transport_->ensureContextAllocated();
+        if (!transport_->isPlaying())
+            transport_->play(false);
+    } else if (transport_->isPlaying()) {
+        transport_->stop(false, false);
+    }
+}
+
+void OdeonSession::advanceDeckPlayers(double deltaSeconds) {
+    if (!djMode_) return;
+
+    if (usesDirectTransportDeckMode()) {
+        if (!transport_) return;
+        auto& deck = djDecks_[0];
+        if (!deck.loaded || !deck.player.isPlaying) return;
+
+        deck.player.localPositionSeconds = positionSeconds();
+
+        if (deck.loop.active) {
+            const double before = deck.player.localPositionSeconds;
+            deck.player.applyLoop(deck.loop.inSeconds, deck.loop.outSeconds);
+            if (deck.player.localPositionSeconds != before)
+                transport_->setPosition(
+                    tracktion::TimePosition::fromSeconds(deck.player.localPositionSeconds));
+        }
+
+        if (deck.player.durationSeconds > 0.0
+            && deck.player.localPositionSeconds >= deck.player.durationSeconds - 0.001) {
+            deck.player.localPositionSeconds = deck.player.durationSeconds;
+            deck.player.isPlaying = false;
+            if (deck.waveClip) deck.waveClip->setMuted(true);
+            transport_->stop(false, false);
+        }
+        return;
+    }
+
+    if (deltaSeconds <= 0.0 || !transport_) return;
+
+    for (int i = 0; i < numDjDecks_; ++i) {
+        auto& deck = djDecks_[(size_t) i];
+        if (!deck.loaded || !deck.player.isPlaying) continue;
+
+        deck.player.advance(deltaSeconds);
+        if (deck.loop.active)
+            deck.player.applyLoop(deck.loop.inSeconds, deck.loop.outSeconds);
+
+        if (deck.player.durationSeconds > 0.0
+            && deck.player.localPositionSeconds >= deck.player.durationSeconds - 0.001) {
+            deck.player.localPositionSeconds = deck.player.durationSeconds;
+            deck.player.isPlaying = false;
+        }
+
+        syncDeckClipToPlayer(deck);
+    }
+
+    updateDjTransport();
+}
+
+void OdeonSession::enforceDeckLoops() {
+    if (!djMode_) return;
+
+    for (int i = 0; i < numDjDecks_; ++i) {
+        auto& deck = djDecks_[(size_t) i];
+        if (!deck.loaded || !deck.player.isPlaying || !deck.loop.active) continue;
+        if (deck.loop.outSeconds <= deck.loop.inSeconds + 0.05) continue;
+
+        if (deck.player.localPositionSeconds >= deck.loop.outSeconds - 0.002) {
+            deck.player.seek(deck.loop.inSeconds, deck.duration);
+            if (usesDirectTransportDeckMode() && transport_) {
+                transport_->setPosition(
+                    tracktion::TimePosition::fromSeconds(deck.player.localPositionSeconds));
+            } else {
+                syncDeckClipToPlayer(deck);
+            }
+        }
+    }
+}
+
 void OdeonSession::meterPollLoop() {
+    auto lastAdvance = std::chrono::steady_clock::now();
+
     while (meterRunning_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kMeterIntervalMs));
         if (!edit_ || !transport_) continue;
 
+        const auto now = std::chrono::steady_clock::now();
+        const double delta = std::chrono::duration<double>(now - lastAdvance).count();
+        lastAdvance = now;
+
+        if (djMode_) {
+            advanceDeckPlayers(delta);
+            enforceDeckLoops();
+        }
+
         {
             std::ostringstream ss;
-            ss << "{\"event\":\"transportState\",\"isPlaying\":"
-               << (transport_->isPlaying() ? "true" : "false")
-               << ",\"positionSeconds\":" << positionSeconds()
-               << ",\"bpm\":120.0,\"looping\":" << (transport_->looping ? "true" : "false")
-               << "}";
+            if (djMode_ && numDjDecks_ > 0) {
+                const auto& primary = djDecks_[0];
+                ss << "{\"event\":\"transportState\",\"isPlaying\":"
+                   << (primary.player.isPlaying ? "true" : "false")
+                   << ",\"positionSeconds\":" << primary.player.localPositionSeconds
+                   << ",\"bpm\":120.0,\"looping\":false}";
+            } else {
+                ss << "{\"event\":\"transportState\",\"isPlaying\":"
+                   << (transport_->isPlaying() ? "true" : "false")
+                   << ",\"positionSeconds\":" << positionSeconds()
+                   << ",\"bpm\":120.0,\"looping\":" << (transport_->looping ? "true" : "false")
+                   << "}";
+            }
             onEvent_(ss.str());
         }
 

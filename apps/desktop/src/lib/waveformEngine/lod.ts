@@ -48,6 +48,17 @@ export function getLodPeaks(
   return { blockSize, peaks };
 }
 
+/** Finest pyramid level — full detail for zoom windows and static previews. */
+export function getFinestPeaks(cache: WaveformCache): { blockSize: number; peaks: StereoPeakBucket[] } {
+  const sizes = Object.keys(cache.levels)
+    .map((k) => Number(k))
+    .filter((bs) => cache.levels[String(bs)]?.length)
+    .sort((a, b) => a - b);
+
+  const blockSize = sizes[0] ?? PYRAMID_BLOCK_SIZES[0];
+  return { blockSize, peaks: cache.levels[String(blockSize)] ?? [] };
+}
+
 /** Coarsest pyramid level — instant paint while zooming (Ableton .asd overview tier). */
 export function getCoarsestPeaks(cache: WaveformCache): { blockSize: number; peaks: StereoPeakBucket[] } {
   const sizes = Object.keys(cache.levels)

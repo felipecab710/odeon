@@ -430,7 +430,7 @@ async fn engine_unload_deck(
 #[tauri::command]
 async fn engine_deck_seek(
     deck_index: u32,
-    timeline_start_seconds: f64,
+    local_seconds: f64,
     engine: State<'_, SharedEngine>,
 ) -> Result<Value, String> {
     rpc_call(
@@ -438,10 +438,26 @@ async fn engine_deck_seek(
         "deckSeek",
         json!({
             "deckIndex": deck_index,
-            "timelineStartSeconds": timeline_start_seconds,
+            "localSeconds": local_seconds,
         }),
     )
     .await
+}
+
+#[tauri::command]
+async fn engine_deck_play(
+    deck_index: u32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "deckPlay", json!({ "deckIndex": deck_index })).await
+}
+
+#[tauri::command]
+async fn engine_deck_pause(
+    deck_index: u32,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "deckPause", json!({ "deckIndex": deck_index })).await
 }
 
 #[tauri::command]
@@ -821,6 +837,8 @@ pub fn run() {
             engine_load_deck,
             engine_unload_deck,
             engine_deck_seek,
+            engine_deck_play,
+            engine_deck_pause,
             engine_deck_set_rate,
             engine_get_dj_state,
             engine_set_deck_eq,

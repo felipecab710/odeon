@@ -86,7 +86,9 @@ public:
     std::string loadDeck(int deckIndex, const std::string& filePath,
                          const std::string& name, double timelineStartSeconds);
     std::string unloadDeck(int deckIndex);
-    std::string deckSeek(int deckIndex, double timelineStartSeconds);
+    std::string deckSeek(int deckIndex, double localSeconds);
+    std::string deckPlay(int deckIndex);
+    std::string deckPause(int deckIndex);
     std::string deckSetRate(int deckIndex, double rate);
     std::string getDjState();
 
@@ -137,7 +139,13 @@ private:
     float       crossfaderWeightDb(CfOrientation orient) const;
     void        applyDjRouteMix(OdeonRoute& route);
     void        clearDeckClips(OdeonDjDeck& deck);
-    te::WaveAudioClip* findDeckWaveClip(OdeonRoute* route);
+    te::WaveAudioClip* findDeckWaveClip(OdeonRoute* route, const juce::File& expectedFile);
+    void        syncDeckClipToPlayer(OdeonDjDeck& deck);
+    void        advanceDeckPlayers(double deltaSeconds);
+    void        updateDjTransport();
+    bool        anyDeckPlaying() const;
+    /** Select / 1-deck preview: clip at t=0, shared transport is the playhead (DAW path). */
+    bool        usesDirectTransportDeckMode() const;
     void        ensureProjectFolders(const juce::File& root);
     juce::File  projectFolder() const;
     std::string serializeProjectJson() const;
@@ -145,6 +153,7 @@ private:
     void        logEngineError(const std::string& where, const std::string& message);
 
     void  meterPollLoop();
+    void  enforceDeckLoops();
     float linearToDb(float linear) const noexcept;
     float dbToLinear(float db) const noexcept;
 

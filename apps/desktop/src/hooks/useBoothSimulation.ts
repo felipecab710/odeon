@@ -2,7 +2,7 @@
  * Runs booth simulation loop — syncs transport → boothStore → engine.
  */
 import { useEffect, useRef, useState } from "react";
-import type { CatalogEntry } from "@odeon/shared";
+import type { CatalogEntry, CatalogMarker } from "@odeon/shared";
 import type { SetCard } from "../stores/setBuilderStore";
 import { useTransportStore } from "../stores/transportStore";
 import { useBoothStore } from "../stores/boothStore";
@@ -48,6 +48,7 @@ export function useBoothSimulation(
   const prevSnapRef = useRef<ReturnType<typeof computeBoothSnapshot> | null>(null);
   const visualPosRef = useRef(new VisualPlayPosition());
   const waveCachesRef = useRef<Record<string, WaveformCache | null>>({});
+  const entryMarkersRef = useRef<Record<string, CatalogMarker[]>>({});
 
   const transKey = layout.transitions
     .map(t => `${t.fromEntryId}:${t.toEntryId}`)
@@ -64,6 +65,17 @@ export function useBoothSimulation(
       loadWaveformCache(entry.file_path)
         .then(c => { waveCachesRef.current[card.entryId] = c; })
         .catch(() => { waveCachesRef.current[card.entryId] = null; });
+    }
+  }, [enabled, entryKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!enabled) return;
+    for (const card of sorted) {
+      if (card.entryId in entryMarkersRef.current) continue;
+      entryMarkersRef.current[card.entryId] = [];
+      apiClient.select.listMarkers(card.entryId)
+        .then(m => { entryMarkersRef.current[card.entryId] = m; })
+        .catch(() => { entryMarkersRef.current[card.entryId] = []; });
     }
   }, [enabled, entryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -104,6 +116,7 @@ export function useBoothSimulation(
         interactiveChannels: booth.interactiveChannels,
         engineRoute,
         waveCaches: waveCachesRef.current,
+        entryMarkers: entryMarkersRef.current,
         laneMixes: useStudioDeckStore.getState().mixes,
         nowMs: performance.now(),
       });

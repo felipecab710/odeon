@@ -3,14 +3,14 @@
  * automation curves on waveforms, per-deck EQ strips. Like DJ.Studio for set building.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CatalogEntry } from "@odeon/shared";
+import type { CatalogEntry, CatalogMarker } from "@odeon/shared";
 import type { SetCard } from "../../stores/setBuilderStore";
 import {
   apiClient,
   type FlowEdge,
   type TransitionPlanData,
 } from "../../lib/apiClient";
-import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { resolveTrackDuration } from "../../lib/trackTime";
 import {
   type DeckMix,
   defaultDeckMix,
@@ -93,8 +93,13 @@ function trackTitle(e: CatalogEntry) {
 }
 
 /** Same renderer as Select — finest pyramid level, HiDPI, 1.5× gain. */
-function ArrangementWaveform({ cache, width, height, mode }: {
-  cache: WaveformCache | null; width: number; height: number; mode: WaveformMode;
+function ArrangementWaveform({ cache, width, height, mode, markers, durationSec }: {
+  cache: WaveformCache | null;
+  width: number;
+  height: number;
+  mode: WaveformMode;
+  markers?: CatalogMarker[];
+  durationSec?: number;
 }) {
   const w = Math.max(1, Math.floor(width));
   const h = Math.max(1, Math.floor(height));
@@ -113,6 +118,8 @@ function ArrangementWaveform({ cache, width, height, mode }: {
       height={h}
       bg="#141820"
       mode={mode}
+      markers={markers}
+      durationSec={durationSec}
     />
   );
 }
@@ -120,7 +127,7 @@ function ArrangementWaveform({ cache, width, height, mode }: {
 // ─── Single track block on timeline ───────────────────────────────────────────
 
 function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, waveHeight,
-  onSplitResize, color, mix, onMixChange, cache, waveformMode, isSelected, isCardSelected, isDragging,
+  onSplitResize, color, mix, onMixChange, cache, markers, waveformMode, isSelected, isCardSelected, isDragging,
   overrideStartSec, pxPerSec, playheadSec, onDragStart,
 }: {
   lane: LaneLayout;
@@ -134,6 +141,7 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
   mix: DeckMix;
   onMixChange: (mix: DeckMix) => void;
   cache: WaveformCache | null;
+  markers?: CatalogMarker[];
   waveformMode: WaveformMode;
   isSelected: boolean;
   isCardSelected: boolean;
@@ -208,6 +216,11 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
           width={Math.floor(w)}
           height={Math.floor(waveHeight)}
           mode={waveformMode}
+          markers={markers}
+          durationSec={resolveTrackDuration({
+            cache,
+            entryDuration: lane.entry.duration_seconds,
+          })}
         />
         {playheadLocalPx != null && (
           <div style={{
@@ -253,6 +266,7 @@ export function TransitionArrangementView({
   const [pxPerSec, setPxPerSec] = useState(readStoredZoom);
   const [scrollViewport, setScrollViewport] = useState({ left: 0, width: 0 });
   const [caches, setCaches] = useState<Record<string, WaveformCache | null>>({});
+  const [markersByEntry, setMarkersByEntry] = useState<Record<string, CatalogMarker[]>>({});
   const mixes = useStudioDeckStore(s => s.mixes);
   const waveformMode = useSelectStore(s => s.waveformMode);
   const setWaveformMode = useSelectStore(s => s.setWaveformMode);
@@ -434,6 +448,22 @@ export function TransitionArrangementView({
           setCaches(p => ({ ...p, [id]: null }));
         });
         return { ...prev, [id]: null };
+      });
+    }
+  }, [entryIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load cue / hot-cue markers from Select catalog
+  useEffect(() => {
+    for (const lane of layout.lanes) {
+      const id = lane.card.entryId;
+      setMarkersByEntry(prev => {
+        if (id in prev) return prev;
+        apiClient.select.listMarkers(id).then(m => {
+          setMarkersByEntry(p => ({ ...p, [id]: m }));
+        }).catch(() => {
+          setMarkersByEntry(p => ({ ...p, [id]: [] }));
+        });
+        return { ...prev, [id]: [] };
       });
     }
   }, [entryIds]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -979,6 +1009,7 @@ export function TransitionArrangementView({
                     mix={getMix(i)}
                     onMixChange={m => handleMixChange(i, m)}
                     cache={caches[lane.card.entryId] ?? null}
+                    markers={markersByEntry[lane.card.entryId]}
                     waveformMode={waveformMode}
                     isSelected={i === transitionIndex || i === transitionIndex + 1}
                     isCardSelected={lane.card.id === timelineSelectedCardId}

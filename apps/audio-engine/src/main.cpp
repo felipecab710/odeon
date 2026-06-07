@@ -122,7 +122,12 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
         return s.unloadDeck(static_cast<int>(extractDouble(p, "deckIndex")));
     if (method == "deckSeek")
         return s.deckSeek(static_cast<int>(extractDouble(p, "deckIndex")),
-                          extractDouble(p, "timelineStartSeconds"));
+                          extractDouble(p, "localSeconds",
+                                        extractDouble(p, "timelineStartSeconds", 0.0)));
+    if (method == "deckPlay")
+        return s.deckPlay(static_cast<int>(extractDouble(p, "deckIndex")));
+    if (method == "deckPause")
+        return s.deckPause(static_cast<int>(extractDouble(p, "deckIndex")));
     if (method == "deckSetRate")
         return s.deckSetRate(static_cast<int>(extractDouble(p, "deckIndex")),
                              extractDouble(p, "rate", 1.0));

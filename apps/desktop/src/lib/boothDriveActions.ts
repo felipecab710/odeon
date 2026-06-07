@@ -50,6 +50,6 @@ export async function driveToggleLoop(
   });
 }
 
-export async function driveCueToStart(deckIndex: number, timelineStart: number): Promise<void> {
-  await unwrapEngineResult(await engineClient.deckSeek(deckIndex, timelineStart));
+export async function driveCueToStart(deckIndex: number): Promise<void> {
+  await unwrapEngineResult(await engineClient.deckSeek(deckIndex, 0));
 }

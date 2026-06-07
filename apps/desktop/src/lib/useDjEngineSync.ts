@@ -10,6 +10,7 @@ import { engineClient, unwrapEngineResult } from "./engineClient";
 import { useEngineStore } from "../stores/engineStore";
 import { useTransportStore } from "../stores/transportStore";
 import { deckTrackId } from "./deckMixEngine";
+import { resetSelectEngineSession } from "./useSelectEngineSync";
 import type { LaneLayout } from "../components/setbuilder/setTimelineLayout";
 
 interface SyncedDeck {
@@ -53,6 +54,7 @@ export function useDjEngineSync(lanes: LaneLayout[], enabled: boolean) {
         await unwrapEngineResult(
           await engineClient.createDjSession(Math.min(deckLanes.length, MAX_DECKS)),
         );
+        resetSelectEngineSession();
         if (gen !== syncGen.current) return;
 
         synced.current = new Map();
@@ -131,12 +133,7 @@ export function useDjEngineSync(lanes: LaneLayout[], enabled: boolean) {
         if (!existing) return;
         if (Math.abs(existing.timelineStart - lane.startSec) <= 0.5) return;
 
-        void engineClient.deckSeek(deckIndex, lane.startSec)
-          .then(res => unwrapEngineResult(res))
-          .then(() => { existing.timelineStart = lane.startSec; })
-          .catch((e: unknown) =>
-            console.warn(`[djEngineSync] deckSeek failed ${deckIndex}:`, e),
-          );
+        existing.timelineStart = lane.startSec;
       });
     }, 400);
 

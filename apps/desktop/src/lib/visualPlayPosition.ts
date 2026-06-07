@@ -1,7 +1,15 @@
 /**
- * Mixxx VisualPlayPosition — interpolate playhead between ~20 Hz engine transport
- * events for smooth CDJ deck screens.
+ * Mixxx VisualPlayPosition — interpolate playhead between sparse engine transport
+ * events for smooth paint. Targets the upcoming vsync frame (see waveformSync.ts).
  */
+import {
+  extrapolatePlayhead,
+  snapTrackPosition,
+  type SyncTiming,
+} from "./waveformSync";
+
+export type { SyncTiming };
+
 export interface LoopBounds {
   inSec: number;
   outSec: number;
@@ -13,6 +21,19 @@ export class VisualPlayPosition {
   private playing = false;
   private rate = 1;
   private loop: LoopBounds | null = null;
+  private timing: SyncTiming = {};
+  private totalSamples = 0;
+  private durationSec = 0;
+
+  /** Update audio-path timing from engine (buffer size, output latency). */
+  setTiming(timing: SyncTiming) {
+    this.timing = timing;
+  }
+
+  setTrackSamples(totalSamples: number, durationSec: number) {
+    this.totalSamples = totalSamples;
+    this.durationSec = durationSec;
+  }
 
   sync(
     positionSec: number,
@@ -27,7 +48,6 @@ export class VisualPlayPosition {
     this.loop = loop ?? null;
   }
 
-  /** Mixxx determinePlayPosInLoopBoundries — wrap inside active loop. */
   private wrapLoop(pos: number): number {
     if (!this.loop) return pos;
     const { inSec, outSec } = this.loop;
@@ -38,8 +58,22 @@ export class VisualPlayPosition {
   }
 
   interpolate(nowMs = performance.now()): number {
-    if (!this.playing) return this.anchorSec;
-    const elapsed = (nowMs - this.anchorMs) / 1000;
-    return this.wrapLoop(this.anchorSec + elapsed * this.rate);
+    const raw = this.playing
+      ? extrapolatePlayhead(
+          this.anchorSec,
+          this.anchorMs,
+          this.playing,
+          this.rate,
+          nowMs,
+          this.timing,
+        )
+      : this.anchorSec;
+    const wrapped = this.wrapLoop(raw);
+    if (this.totalSamples > 0 && this.durationSec > 0) {
+      return snapTrackPosition(wrapped, this.durationSec, this.totalSamples);
+    }
+    return wrapped;
   }
 }
+
+export { snapTrackPosition, extrapolatePlayhead };

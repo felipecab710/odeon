@@ -82,7 +82,7 @@ export function BoothTwin({
           void driveSetHotcue(deckIndex, slot, deck.positionSec);
         }
       },
-      onCue: () => { void driveCueToStart(deckIndex, timelineStart); },
+      onCue: () => { void driveCueToStart(deckIndex); },
       onLoopToggle: () => {
         const next = !deck.loopActive;
         const loopIn = deck.positionSec;

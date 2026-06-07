@@ -72,15 +72,7 @@ export const ColoredWaveformCanvas = memo(function ColoredWaveformCanvas({
     const dur = cache.duration_seconds;
     const midY = height / 2;
 
-    // Choose pyramid level
-    let chosenKey: string;
-    if (timeWindow) {
-      // Zoomed: use finest level
-      chosenKey = String(Math.min(...cache.block_sizes));
-    } else {
-      // Overview: use coarsest level
-      chosenKey = String(Math.max(...cache.block_sizes));
-    }
+    const chosenKey = String(Math.min(...cache.block_sizes));
     const allBuckets = cache.levels[chosenKey];
     if (!allBuckets || allBuckets.length === 0) return;
 

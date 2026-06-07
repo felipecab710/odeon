@@ -41,6 +41,8 @@ export type EngineRpcMethod =
   | "loadDeck"
   | "unloadDeck"
   | "deckSeek"
+  | "deckPlay"
+  | "deckPause"
   | "deckSetRate"
   | "getDjState"
   | "setDeckEq"
@@ -88,8 +90,11 @@ export interface LoadDeckParams {
 export interface UnloadDeckParams     { deckIndex: number }
 export interface DeckSeekParams {
   deckIndex: number;
-  timelineStartSeconds: number;
+  /** Local position inside the loaded track (seconds). */
+  localSeconds: number;
 }
+export interface DeckPlayParams  { deckIndex: number }
+export interface DeckPauseParams { deckIndex: number }
 export interface DeckSetRateParams    { deckIndex: number; rate: number }
 
 export interface SetDeckEqParams {
@@ -155,6 +160,7 @@ export interface DjDeckEngineState {
   timelineStart: number;
   durationSeconds: number;
   localPositionSeconds: number;
+  isPlaying: boolean;
   rate: number;
   bpm?: number;
   syncFollower?: boolean;

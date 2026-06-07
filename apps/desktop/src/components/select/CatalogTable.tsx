@@ -4,6 +4,7 @@ import { useSelectStore } from "../../stores/selectStore";
 import { FieldTooltip, FIELD_TOOLTIPS } from "./FieldTooltip";
 import { apiClient } from "../../lib/apiClient";
 import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { prefetchSelectDeck } from "../../lib/useSelectEngineSync";
 import { StaticWaveform } from "./WaveformRenderer";
 import type { WaveformMode } from "../../stores/selectStore";
 import type { WaveformCache } from "../../lib/waveformEngine/types";
@@ -30,7 +31,7 @@ function MiniWaveform({ entry, mode }: { entry: CatalogEntry; mode: WaveformMode
       })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [entry.file_path, entry.status]);
+  }, [entry.file_path, entry.waveform_cache_path, entry.status]);
 
   return (
     <div style={{
@@ -39,7 +40,7 @@ function MiniWaveform({ entry, mode }: { entry: CatalogEntry; mode: WaveformMode
       display: "flex", alignItems: "center", justifyContent: "center",
     }}>
       {cache
-        ? <StaticWaveform cache={cache} width={WAVE_W} height={WAVE_H} mode={mode} />
+        ? <StaticWaveform cache={cache} width={WAVE_W} height={WAVE_H} mode={mode} cacheKey={entry.file_path} />
         : failed
           ? <span style={{ fontSize: 8, color: "#333" }}>no cache</span>
           : entry.status === "ready"
@@ -213,7 +214,10 @@ export function CatalogTable() {
                   cursor: "pointer",
                   borderBottom: "1px solid #222",
                 }}
-                onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}
+                onMouseEnter={e => {
+                  if (entry.status === "ready") prefetchSelectDeck(entry);
+                  if (!selected) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)";
+                }}
                 onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = selected ? "rgba(255,255,255,0.06)" : "transparent"; }}
               >
                 <td style={{ padding: "4px 4px 4px 8px" }}><MiniWaveform entry={entry} mode={waveformMode} /></td>
