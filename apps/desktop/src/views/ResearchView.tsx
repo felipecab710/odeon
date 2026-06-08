@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { useSelectStore } from "../stores/selectStore";
-import { useSetBuilderStore, type SetCard } from "../stores/setBuilderStore";
+import { getActiveUserSet, useSetBuilderStore, type SetCard } from "../stores/setBuilderStore";
 import { StudioWithBoothPanel } from "../components/setbuilder/StudioWithBoothPanel";
 import { SetSequencePanel } from "../components/setbuilder/SetSequencePanel";
 import { BoothPanel } from "../components/booth/BoothPanel";
@@ -109,7 +109,8 @@ function LibrarySidebar({
     scanFolder, scanning, catalogFolderPath, isPolling,
   } = useSelectStore();
   const [scanMessage, setScanMessage] = useState<string | null>(null);
-  const { addCard, cards } = useSetBuilderStore();
+  const addCard = useSetBuilderStore(s => s.addCard);
+  const cards = useSetBuilderStore(s => getActiveUserSet(s).cards);
   const [suggestions, setSuggestions] = useState<SuggestResult[]>([]);
   const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -1371,7 +1372,7 @@ function SelectedTab({
   flowEdges: FlowEdge[];
   cards: SetCard[];
 }) {
-  const { addCard } = useSetBuilderStore();
+  const addCard = useSetBuilderStore(s => s.addCard);
   const [nextSuggestions, setNextSuggestions] = useState<SuggestResult[]>([]);
   const [loadingNext, setLoadingNext] = useState(false);
   const [djTransitions, setDjTransitions] = useState<TransitionResult[]>([]);
@@ -2039,7 +2040,14 @@ function SetBuilderCanvas({
 }: {
   flowEdges: FlowEdge[];
 }) {
-  const { cards, selectedCardId, selectedTransitionIndex, moveCard, removeCard, selectCard, selectTransition, connectAfter } = useSetBuilderStore();
+  const cards = useSetBuilderStore(s => getActiveUserSet(s).cards);
+  const selectedCardId = useSetBuilderStore(s => s.selectedCardId);
+  const selectedTransitionIndex = useSetBuilderStore(s => s.selectedTransitionIndex);
+  const moveCard = useSetBuilderStore(s => s.moveCard);
+  const removeCard = useSetBuilderStore(s => s.removeCard);
+  const selectCard = useSetBuilderStore(s => s.selectCard);
+  const selectTransition = useSetBuilderStore(s => s.selectTransition);
+  const connectAfter = useSetBuilderStore(s => s.connectAfter);
   const entries = useSelectStore(s => s.entries);
   const entryMap = new Map(entries.map(e => [e.id, e]));
   const sorted = [...cards].sort((a, b) => a.order - b.order);
@@ -2338,20 +2346,53 @@ function SetBuilderCanvas({
   );
 }
 
+const LIBRARY_OPEN_KEY = "odeon-set-library-open";
+
+function readLibraryOpen(): boolean {
+  try {
+    return localStorage.getItem(LIBRARY_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 // ─── ResearchView (entry point) ───────────────────────────────────────────────
 
 export function ResearchView() {
-  const {
-    setName, setSetName, clearSet, cards, selectedCardId, timelineSelectedCardId, reorder,
-    viewMode, setViewMode, selectedTransitionIndex, selectTransition, selectCard,
-    selectTimelineCard, clearTimelinePositions, removeCard,
-  } = useSetBuilderStore();
+  const sets = useSetBuilderStore(s => s.sets);
+  const activeSetId = useSetBuilderStore(s => s.activeSetId);
+  const setName = useSetBuilderStore(s => getActiveUserSet(s).name);
+  const cards = useSetBuilderStore(s => getActiveUserSet(s).cards);
+  const setSetName = useSetBuilderStore(s => s.setSetName);
+  const clearSet = useSetBuilderStore(s => s.clearSet);
+  const createSet = useSetBuilderStore(s => s.createSet);
+  const selectActiveSet = useSetBuilderStore(s => s.selectActiveSet);
+  const selectedCardId = useSetBuilderStore(s => s.selectedCardId);
+  const timelineSelectedCardId = useSetBuilderStore(s => s.timelineSelectedCardId);
+  const reorder = useSetBuilderStore(s => s.reorder);
+  const viewMode = useSetBuilderStore(s => s.viewMode);
+  const setViewMode = useSetBuilderStore(s => s.setViewMode);
+  const selectedTransitionIndex = useSetBuilderStore(s => s.selectedTransitionIndex);
+  const selectTransition = useSetBuilderStore(s => s.selectTransition);
+  const selectCard = useSetBuilderStore(s => s.selectCard);
+  const selectTimelineCard = useSetBuilderStore(s => s.selectTimelineCard);
+  const clearTimelinePositions = useSetBuilderStore(s => s.clearTimelinePositions);
+  const removeCard = useSetBuilderStore(s => s.removeCard);
   const entries = useSelectStore(s => s.entries);
   const [editingName, setEditingName] = useState(false);
   const [suggestMode, setSuggestMode] = useState(false);
   const [flowEdges, setFlowEdges] = useState<FlowEdge[]>([]);
   const [isAutoOrdering, setIsAutoOrdering] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(readLibraryOpen);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  const toggleLibrary = useCallback(() => {
+    setLibraryOpen(prev => {
+      const next = !prev;
+      try { localStorage.setItem(LIBRARY_OPEN_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   const entryMap = useMemo(() => new Map(entries.map(e => [e.id, e])), [entries]);
   const sorted = useMemo(() => [...cards].sort((a, b) => a.order - b.order), [cards]);
@@ -2425,7 +2466,7 @@ export function ResearchView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [viewMode, selectedCardId, removeCard, selectTimelineCard, selectCard, selectTransition]);
 
-  // Clear timeline selection when leaving Studio view
+  // Clear timeline selection when leaving Timeline view
   useEffect(() => {
     if (viewMode !== "arrangement") selectTimelineCard(null);
   }, [viewMode, selectTimelineCard]);
@@ -2437,6 +2478,28 @@ export function ResearchView() {
         height: 48, background: "#1c1c1c", borderBottom: "1px solid #2a2a2a",
         display: "flex", alignItems: "center", padding: "0 16px", gap: 12, flexShrink: 0,
       }}>
+        <select
+          value={activeSetId}
+          onChange={e => selectActiveSet(e.target.value)}
+          title="Switch set"
+          style={{
+            background: "#111",
+            border: "1px solid #333",
+            borderRadius: 4,
+            color: "#aaa",
+            fontSize: 11,
+            padding: "4px 8px",
+            cursor: "pointer",
+            maxWidth: 160,
+          }}
+        >
+          {sets.map(userSet => (
+            <option key={userSet.id} value={userSet.id}>
+              {userSet.name} ({userSet.cards.length})
+            </option>
+          ))}
+        </select>
+
         {editingName ? (
           <input
             ref={nameRef}
@@ -2461,13 +2524,49 @@ export function ResearchView() {
           </button>
         )}
 
+        <button
+          onClick={() => createSet()}
+          title="Create new set"
+          style={{
+            background: "none",
+            border: "1px solid #333",
+            borderRadius: 4,
+            color: "#00c3ff",
+            fontSize: 14,
+            lineHeight: 1,
+            padding: "2px 8px",
+            cursor: "pointer",
+          }}
+        >
+          +
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleLibrary}
+          title={libraryOpen ? "Hide library (more timeline space)" : "Show library"}
+          style={{
+            background: libraryOpen ? "rgba(0,195,255,0.08)" : "#111",
+            border: `1px solid ${libraryOpen ? "#00c3ff44" : "#333"}`,
+            borderRadius: 4,
+            color: libraryOpen ? "#00c3ff" : "#888",
+            fontSize: 11,
+            fontWeight: 600,
+            padding: "4px 10px",
+            cursor: "pointer",
+            letterSpacing: "0.02em",
+          }}
+        >
+          {libraryOpen ? "◧ Hide Library" : "◨ Library"}
+        </button>
+
         {/* View mode toggle */}
         <div style={{
           display: "flex", background: "#111", borderRadius: 5, border: "1px solid #2a2a2a", overflow: "hidden",
         }}>
           {([
             { id: "nodes" as const, label: "⊞ Nodes" },
-            { id: "arrangement" as const, label: "⊟ Studio" },
+            { id: "arrangement" as const, label: "⊟ Timeline" },
             { id: "booth" as const, label: "◎ Booth" },
           ]).map(({ id, label }) => (
             <button
@@ -2529,11 +2628,13 @@ export function ResearchView() {
 
       {/* Body */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <LibrarySidebar
-          suggestMode={suggestMode}
-          selectedEntryId={selectedCard ? selectedCard.entryId : null}
-          onSuggestMode={() => setSuggestMode(v => !v)}
-        />
+        {libraryOpen && (
+          <LibrarySidebar
+            suggestMode={suggestMode}
+            selectedEntryId={selectedCard ? selectedCard.entryId : null}
+            onSuggestMode={() => setSuggestMode(v => !v)}
+          />
+        )}
 
         {viewMode === "nodes" ? (
           <SetBuilderCanvas flowEdges={flowEdges} />
@@ -2549,7 +2650,7 @@ export function ResearchView() {
           />
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontSize: 13 }}>
-            Add tracks to your set, then switch to Studio or Booth view
+            Add tracks to your set, then switch to Timeline or Booth view
           </div>
         )}
 

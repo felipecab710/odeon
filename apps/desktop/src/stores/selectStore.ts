@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiClient } from "../lib/apiClient";
+import { apiClient, type StemSummaryEntry } from "../lib/apiClient";
 import type { CatalogEntry, CatalogCollection, SelectStats } from "@odeon/shared";
 
 const POLL_INTERVAL_MS = 2000;
@@ -64,8 +64,10 @@ interface SelectState {
   isPolling:          boolean;
   waveformMode:       WaveformMode;
   catalogFolderPath:  string | null;
+  stemsSummary:       Record<string, StemSummaryEntry>;
 
-  loadEntries:      () => Promise<void>;
+  loadEntries:      (opts?: { silent?: boolean }) => Promise<void>;
+  loadStemsSummary: () => Promise<void>;
   loadCollections:  () => Promise<void>;
   loadStats:        () => Promise<void>;
   selectEntry:      (id: string | null) => void;
@@ -95,19 +97,31 @@ export const useSelectStore = create<SelectState>((set, get) => ({
   isPolling:          false,
   waveformMode:       loadWaveformMode(),
   catalogFolderPath:  loadCatalogFolderPath(),
+  stemsSummary:       {},
 
-  loadEntries: async () => {
-    set({ loading: true });
+  loadStemsSummary: async () => {
     try {
-      const entries = await apiClient.select.listEntries();
+      const { entries: summary } = await apiClient.select.stemsSummary();
+      set({ stemsSummary: summary });
+    } catch { /* ignore */ }
+  },
+
+  loadEntries: async (opts) => {
+    const silent = opts?.silent ?? false;
+    if (!silent) set({ loading: true });
+    try {
+      const entries = await apiClient.select.listEntries({ limit: 2000 });
       const state = get();
       const catalogFolderPath = state.catalogFolderPath ?? inferCatalogFolder(entries);
       if (catalogFolderPath && !state.catalogFolderPath) {
         saveCatalogFolderPath(catalogFolderPath);
       }
-      set({ entries, loading: false, catalogFolderPath });
-    } catch {
-      set({ loading: false });
+      set({ entries, catalogFolderPath, ...(silent ? {} : { loading: false }) });
+      void get().loadStemsSummary();
+    } catch (err) {
+      console.error("Select loadEntries failed:", err);
+    } finally {
+      if (!silent) set({ loading: false });
     }
   },
 
@@ -190,11 +204,18 @@ export const useSelectStore = create<SelectState>((set, get) => ({
 
     const tick = async () => {
       _pollTimer = null;
-      await get().loadEntries();
-      await get().loadStats();
+      await get().loadStemsSummary();
 
       const hasActive = get().entries.some(isActive);
       if (hasActive) {
+        await get().loadEntries({ silent: true });
+        await get().loadStats();
+      }
+
+      const hasStemWork = Object.values(get().stemsSummary).some(
+        (s) => s.job_status === "queued" || s.job_status === "running",
+      );
+      if (hasActive || hasStemWork) {
         set({ isPolling: true });
         _pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
       } else {

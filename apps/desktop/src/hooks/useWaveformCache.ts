@@ -12,6 +12,7 @@ import {
 export function useWaveformCache(
   audioPath: string | undefined | null,
   analysis?: TrackAnalysis | null,
+  options?: { cachePath?: string | null; entryId?: string | null },
 ) {
   const [cache, setCache] = useState<WaveformCache | null>(() => {
     if (!audioPath) return null;
@@ -43,7 +44,7 @@ export function useWaveformCache(
     }
 
     let cancelled = false;
-    loadWaveformCache(audioPath)
+    loadWaveformCache(audioPath, options?.cachePath, options?.entryId)
       .then((data) => {
         if (!cancelled && data) setCache(data);
       });
@@ -51,7 +52,7 @@ export function useWaveformCache(
     return () => {
       cancelled = true;
     };
-  }, [audioPath, analysis]);
+  }, [audioPath, analysis, options?.cachePath, options?.entryId]);
 
   return { cache, loading: false };
 }

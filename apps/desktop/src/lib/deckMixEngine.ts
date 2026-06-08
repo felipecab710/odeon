@@ -7,6 +7,13 @@
  */
 import { engineClient } from "./engineClient";
 import { useEngineStore } from "../stores/engineStore";
+import {
+  SET_PROJECT_ID,
+  deckStemTrackId,
+  deckTrackId,
+  setStemTrackId,
+  setTrackId,
+} from "./routeIds";
 
 export type CfAssign = "A" | "THRU" | "B";
 
@@ -24,17 +31,15 @@ export interface DeckMix {
   showAutomation: boolean;
 }
 
-export const SET_PROJECT_ID = "odeon-set-preview";
+export {
+  SET_PROJECT_ID,
+  deckTrackId,
+  setTrackId,
+  setStemTrackId,
+  deckStemTrackId,
+};
+
 export const DJ_PROJECT_ID = "odeon-dj-booth";
-
-export function setTrackId(entryId: string): string {
-  return `set:${entryId}`;
-}
-
-/** Fixed CDJ deck route — Mixxx PlayerManager deck slot */
-export function deckTrackId(deckIndex: number): string {
-  return `deck:${deckIndex}`;
-}
 
 export function defaultDeckMix(): DeckMix {
   return {

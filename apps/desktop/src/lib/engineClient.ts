@@ -142,6 +142,26 @@ export const engineClient = {
   soloTrack: (trackId: string, soloed: boolean) =>
     _invoke("engine_solo_track", { trackId, soloed }),
 
+  exclusiveSolo: (trackIds: string[], soloTrackId: string) =>
+    _invoke("engine_exclusive_solo", { trackIds, soloTrackId }),
+
+  createStemStack: (
+    stackId: string,
+    layers: Array<{
+      layerId: string;
+      filePath: string;
+      name?: string;
+      role?: string;
+      stemType?: string;
+    }>,
+  ) => _invoke("engine_create_stem_stack", { stackId, layers }),
+
+  disposeStemStack: (stackId: string) =>
+    _invoke("engine_dispose_stem_stack", { stackId }),
+
+  exclusiveSoloStack: (stackId: string, layerId: string) =>
+    _invoke("engine_exclusive_solo_stack", { stackId, layerId }),
+
   setMasterVolume: (volumeDb: number) =>
     _invoke("engine_set_master_volume", { volumeDb }),
 
@@ -245,6 +265,15 @@ export const engineClient = {
 
   deckSetSyncMode: (deckIndex: number, mode: string) =>
     _invoke("engine_deck_set_sync_mode", { deckIndex, mode }),
+
+  deckLoadStemLayers: (
+    deckIndex: number,
+    layers: Array<{ layerId: string; filePath: string; name?: string }>,
+  ) =>
+    _invoke("engine_deck_load_stem_layers", { deckIndex, layers }),
+
+  deckSetStemLayer: (deckIndex: number, layerId: string) =>
+    _invoke("engine_deck_set_stem_layer", { deckIndex, layerId }),
 
   listAudioDevices: () =>
     _invoke("engine_list_audio_devices", {}).then(unwrapEngineResult),

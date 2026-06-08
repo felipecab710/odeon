@@ -1,10 +1,12 @@
 import { useEffect, useCallback, useState } from "react";
 import { useSelectStore } from "../../stores/selectStore";
+import { useNavigationStore } from "../../stores/navigationStore";
 import { CatalogTable } from "./CatalogTable";
 import { TrackProfilePanel } from "./TrackProfilePanel";
 import { PlayerStrip } from "./PlayerStrip";
 import { apiClient } from "../../lib/apiClient";
 import { clearAllWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { warmSelectEngine } from "../../lib/useSelectEngineSync";
 
 interface Toast {
   id: number;
@@ -15,8 +17,9 @@ interface Toast {
 let _toastId = 0;
 
 export function SelectHome() {
+  const view = useNavigationStore((s) => s.view);
   const {
-    loading, scanning, stats, filter, isPolling, catalogFolderPath,
+    entries, loading, scanning, stats, filter, isPolling, catalogFolderPath,
     setFilter, loadEntries, loadStats, loadCollections, importFolder, scanFolder, ensurePolling,
   } = useSelectStore();
   const [refreshing, setRefreshing] = useState(false);
@@ -30,14 +33,23 @@ export function SelectHome() {
   }
 
   useEffect(() => {
-    // Clear any nulls cached under the old (broken) magic-byte check
-    clearAllWaveformCache();
+    if (view !== "select") return;
+    void warmSelectEngine();
     loadEntries().then(() => {
       loadStats();
       loadCollections();
       ensurePolling();
     });
-  }, []);
+  }, [view]);
+
+  // Recover if the first load happened before API was reachable.
+  useEffect(() => {
+    if (view !== "select" || loading || entries.length > 0) return;
+    const retry = setTimeout(() => {
+      void loadEntries();
+    }, 1500);
+    return () => clearTimeout(retry);
+  }, [view, loading, entries.length, loadEntries]);
 
   const handleRefreshMetadata = useCallback(async () => {
     setRefreshing(true);

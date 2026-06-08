@@ -114,9 +114,15 @@ export default function App() {
     <div className="app-shell flex flex-col h-full w-full overflow-hidden bg-studio-bg">
       <AppTitleBar />
       {view === "studio" && <TopBar />}
-      {view === "studio"   && <StudioView />}
-      {view === "select"   && <SelectView />}
-      {view === "research" && <ResearchView />}
+      <div className={view === "studio" ? "flex flex-1 flex-col min-h-0 overflow-hidden" : "hidden"}>
+        <StudioView />
+      </div>
+      <div className={view === "select" ? "flex flex-1 flex-col min-h-0 overflow-hidden" : "hidden"}>
+        <SelectView />
+      </div>
+      <div className={view === "research" ? "flex flex-1 flex-col min-h-0 overflow-hidden" : "hidden"}>
+        <ResearchView />
+      </div>
       {view === "settings" && <SettingsView />}
     </div>
   );

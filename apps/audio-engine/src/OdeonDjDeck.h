@@ -9,6 +9,7 @@
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 #include <string>
+#include <vector>
 
 namespace odeon {
 
@@ -23,6 +24,16 @@ struct DeckLoop {
     bool   active     = false;
     double inSeconds  = 0.0;
     double outSeconds = 0.0;
+};
+
+/** Pre-loaded stem layer for instant SRC switching (Select preview). */
+struct DeckStemLayer {
+    std::string layerId;   // vocals | drums | bass | other
+    std::string trackId;   // deck:0:stem:vocals
+    std::string filePath;
+    double      duration  = 0.0;
+    bool        loaded    = false;
+    te::WaveAudioClip* waveClip = nullptr;
 };
 
 struct OdeonDjDeck {
@@ -44,6 +55,15 @@ struct OdeonDjDeck {
 
     // Non-owning pointer into the Tracktion edit.
     te::WaveAudioClip* waveClip = nullptr;
+
+    // Full-mix anchor (deck:0) — restored when SRC = FULL.
+    std::string        fullMixFilePath;
+    te::WaveAudioClip* fullMixClip = nullptr;
+
+    // Pre-loaded stem routes — switch via mute (no file reload).
+    std::vector<DeckStemLayer> stemLayers;
+    std::string activeStemLayer = "full";
+    bool        stemLayersReady = false;
 };
 
 } // namespace odeon

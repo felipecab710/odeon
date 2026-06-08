@@ -3,37 +3,59 @@
  * automation curves on waveforms, per-deck EQ strips. Like DJ.Studio for set building.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CatalogEntry, CatalogMarker } from "@odeon/shared";
+import type { CatalogEntry } from "@odeon/shared";
 import type { SetCard } from "../../stores/setBuilderStore";
 import {
   apiClient,
   type FlowEdge,
   type TransitionPlanData,
 } from "../../lib/apiClient";
-import { resolveTrackDuration } from "../../lib/trackTime";
 import {
   type DeckMix,
   defaultDeckMix,
 } from "../../lib/deckMixEngine";
 import { useSetEngineSync } from "../../lib/useSetEngineSync";
-import { pushSetEngineMixes } from "../../lib/boothSimulation";
 import { useTransportStore } from "../../stores/transportStore";
-import { useBoothStore } from "../../stores/boothStore";
 import { useSetBuilderStore } from "../../stores/setBuilderStore";
 import { useStudioDeckStore } from "../../stores/studioDeckStore";
 import { captureUndoState } from "../../stores/undoStore";
-import { StaticWaveform, type WaveformMode } from "../select/WaveformRenderer";
-import { useSelectStore } from "../../stores/selectStore";
-import { DJMLaneStrip } from "./DJMLaneStrip";
-import type { WaveformCache } from "../../lib/waveformEngine/types";
+import { ZOOM_BUTTON_FACTOR } from "../../lib/timelineViewportZoom";
+import { useSetTimelineStore } from "../../stores/setTimelineStore";
+import { useTimelineWheel } from "../../hooks/useTimelineWheel";
+import { useSetTimelineShortcuts } from "../../hooks/useSetTimelineShortcuts";
+import { useSetLocatorShortcuts } from "../../hooks/useSetLocatorShortcuts";
+import { useRulerMagnify } from "../../hooks/useRulerMagnify";
 import {
-  LANE_STRIP_W, LANE_HEIGHT, RULER_H, MINIMAP_H,
+  seekSetTimeline,
+  timeSecFromContentX,
+  contentXFromClientX,
+  pixelsToTimeSec,
+} from "../../lib/setTimelineEngine";
+import { beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
+import {
+  applyZoomGesture,
+  flushZoomCommit,
+  getGestureViewport,
+  registerZoomCommit,
+  subscribeGestureViewport,
+} from "../../lib/zoomGestureViewport";
+import { getZoomCursorAnchor } from "../../lib/zoomCursorAnchor";
+import { useSetLocatorStore } from "../../stores/setLocatorStore";
+import { WaveformCanvas } from "../tracks/WaveformCanvas";
+import { DJMLaneStrip } from "./DJMLaneStrip";
+import {
+  LANE_STRIP_W, BEAT_RULER_H, TIME_RULER_H, MINIMAP_H,
   DEFAULT_PX_PER_SEC, MIN_PX_PER_SEC, MAX_PX_PER_SEC,
   HEADER_H,
   STUDIO_BG, STUDIO_BG_DEEP, STUDIO_SIDEBAR, STUDIO_RULER, STUDIO_GRID,
-  computeSetLayout, formatTimeline, snapToBeat, rulerMarkInterval, clampPxPerSec,
+  computeSetLayout, formatTimeline, snapToBeat,
   type LaneLayout,
 } from "./setTimelineLayout";
+import { SetBeatRuler } from "./SetBeatRuler";
+import { SetTimeRuler } from "./SetTimeRuler";
+import { SetTimelineNavigator } from "./SetTimelineNavigator";
+import { SetLocatorsLane } from "./SetLocatorsLane";
+import { SetBeatTimelineGrid } from "./SetBeatTimelineGrid";
 import { SetAutomationPanel } from "./SetAutomationPanel";
 import { TrackAutomationLane } from "./TrackAutomationLane";
 import { AutomationLaneControls } from "./AutomationLaneControls";
@@ -51,18 +73,12 @@ import {
 } from "../../stores/studioLaneStore";
 import { beginVerticalResizeDown } from "../../lib/domResize";
 import { AutomationWaveSplitter } from "./AutomationWaveSplitter";
-
-const ZOOM_STORAGE_KEY = "odeon-timeline-px-per-sec";
-const ZOOM_STEP = 1.28;
-
-function readStoredZoom(): number {
-  try {
-    const v = Number(localStorage.getItem(ZOOM_STORAGE_KEY));
-    return Number.isFinite(v) ? clampPxPerSec(v) : DEFAULT_PX_PER_SEC;
-  } catch {
-    return DEFAULT_PX_PER_SEC;
-  }
-}
+import {
+  arrangementClipBackground,
+  contrastingTextOn,
+  resolveClipColor,
+  shadeHex,
+} from "../../lib/clipColorPresets";
 
 // ─── Types & helpers ─────────────────────────────────────────────────────────
 
@@ -92,75 +108,54 @@ function trackTitle(e: CatalogEntry) {
   return e.title || e.file_name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").trim();
 }
 
-/** Same renderer as Select — finest pyramid level, HiDPI, 1.5× gain. */
-function ArrangementWaveform({ cache, width, height, mode, markers, durationSec }: {
-  cache: WaveformCache | null;
-  width: number;
-  height: number;
-  mode: WaveformMode;
-  markers?: CatalogMarker[];
-  durationSec?: number;
-}) {
-  const w = Math.max(1, Math.floor(width));
-  const h = Math.max(1, Math.floor(height));
-  if (!cache) {
-    return (
-      <div style={{
-        width: w, height: h, background: "#141820",
-        backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 3px)",
-      }} />
-    );
-  }
-  return (
-    <StaticWaveform
-      cache={cache}
-      width={w}
-      height={h}
-      bg="#141820"
-      mode={mode}
-      markers={markers}
-      durationSec={durationSec}
-    />
-  );
-}
 
 // ─── Single track block on timeline ───────────────────────────────────────────
 
 function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, waveHeight,
-  onSplitResize, color, mix, onMixChange, cache, markers, waveformMode, isSelected, isCardSelected, isDragging,
-  overrideStartSec, pxPerSec, playheadSec, onDragStart,
+  automationExpanded, onSplitResize, color, mix, onMixChange, isSelected, isCardSelected, isDragging,
+  dragTranslatePx, pxPerSec, playheadSec, onHeaderPointerDown, onSeekAtClientX,
+  timelineScrollLeft, timelineViewportWidth,
 }: {
   lane: LaneLayout;
   laneIndex: number;
   laneY: number;
   laneHeight: number;
   automationHeight: number;
+  automationExpanded: boolean;
   waveHeight: number;
   onSplitResize: (laneIndex: number, e: React.MouseEvent) => void;
   color: string;
   mix: DeckMix;
   onMixChange: (mix: DeckMix) => void;
-  cache: WaveformCache | null;
-  markers?: CatalogMarker[];
-  waveformMode: WaveformMode;
   isSelected: boolean;
   isCardSelected: boolean;
   isDragging: boolean;
-  overrideStartSec?: number | null;
+  dragTranslatePx?: number;
   pxPerSec: number;
   playheadSec: number;
-  onDragStart: (e: React.MouseEvent) => void;
+  onHeaderPointerDown: (e: React.MouseEvent) => void;
+  onSeekAtClientX: (clientX: number) => void;
+  timelineScrollLeft: number;
+  timelineViewportWidth: number;
 }) {
-  const leftPx = overrideStartSec != null ? overrideStartSec * pxPerSec : lane.leftPx;
-  const startSec = overrideStartSec ?? lane.startSec;
-  const w = Math.max(lane.widthPx, 80);
-  const playheadLocalPx = playheadSec >= lane.startSec && playheadSec < lane.endSec
-    ? ((playheadSec - lane.startSec) / Math.max(lane.durationSec, 0.001)) * w
-    : null;
+  const leftPx = lane.leftPx;
+  const w = Math.max(lane.widthPx, 24);
+  const showAutomation = automationExpanded && automationHeight > 0;
+  const labelColor = contrastingTextOn(color);
+  const clipBorder = shadeHex(color, -0.28);
+  const visStart = Math.max(0, timelineScrollLeft - lane.leftPx);
+  const visEnd = Math.min(w, timelineScrollLeft + timelineViewportWidth - lane.leftPx);
+  const visWidth = Math.max(0, visEnd - visStart);
+  const clipBg = resolveClipColor(color);
+
+  const seekAt = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSeekAtClientX(e.clientX);
+  };
 
   return (
     <div
-      onMouseDown={onDragStart}
+      data-clip-container
       style={{
         position: "absolute",
         left: leftPx,
@@ -169,88 +164,224 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
         height: laneHeight,
         display: "flex",
         flexDirection: "column",
-        opacity: mix.mute ? 0.4 : 1,
+        opacity: mix.mute ? 0.45 : 1,
         zIndex: isDragging ? 25 : isCardSelected ? 15 : 10,
-        cursor: isDragging ? "grabbing" : "grab",
+        pointerEvents: "none",
+        transform: dragTranslatePx ? `translateX(${dragTranslatePx}px)` : undefined,
+        willChange: isDragging ? "transform" : undefined,
+        background: arrangementClipBackground(color),
+        border: isCardSelected
+          ? `2px solid ${shadeHex(color, 0.35)}`
+          : isSelected
+            ? `1px solid ${shadeHex(color, 0.2)}`
+            : `1px solid ${clipBorder}`,
+        borderRadius: 4,
         boxShadow: isCardSelected
-          ? `0 0 0 2px ${color}, 0 4px 16px rgba(0,0,0,0.5)`
-          : isSelected ? `0 0 0 1px ${color}88` : "none",
-        borderRadius: 2,
+          ? `0 0 0 1px rgba(255,255,255,0.12), 0 4px 14px rgba(0,0,0,0.45)`
+          : "0 1px 3px rgba(0,0,0,0.35)",
+        overflow: "hidden",
       }}
     >
-      {/* Colored header bar — DJ.Studio style */}
-      <div style={{
-        height: HEADER_H,
-        display: "flex", alignItems: "center", gap: 5,
-        padding: "0 6px",
-        background: color,
-        borderRadius: "2px 2px 0 0",
-        boxShadow: isSelected ? `0 0 0 1px ${color}` : "none",
-      }}>
+      {/* Clip header — select / drag only */}
+      <div
+        data-clip-header
+        onMouseDown={onHeaderPointerDown}
+        style={{
+          height: HEADER_H,
+          display: "flex", alignItems: "center", gap: 5,
+          padding: "0 8px",
+          borderBottom: `1px solid ${shadeHex(color, -0.18)}`,
+          background: `linear-gradient(180deg, ${shadeHex(color, -0.08)} 0%, transparent 100%)`,
+          flexShrink: 0,
+          cursor: isDragging ? "grabbing" : "grab",
+          pointerEvents: "auto",
+        }}
+      >
         <span style={{
-          fontSize: 9, fontWeight: 800, color: "#1a1a1a",
-          background: "rgba(0,0,0,0.15)", padding: "0 4px", borderRadius: 2,
+          fontSize: 8, fontWeight: 800, color: labelColor,
+          background: "rgba(0,0,0,0.18)", padding: "1px 4px", borderRadius: 2,
+          letterSpacing: "0.04em",
         }}>
           {camelot(lane.entry.key)}
         </span>
         <span style={{
-          fontSize: 9, color: "#1a1a1a", fontWeight: 600,
+          fontSize: 9, color: labelColor, fontWeight: 600,
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1,
+          textShadow: labelColor === "#f8f8f8" ? "0 1px 2px rgba(0,0,0,0.45)" : "none",
         }}>
           {trackTitle(lane.entry)}
         </span>
       </div>
 
-      <div style={{
-        height: waveHeight,
-        flexShrink: 0,
-        overflow: "hidden",
-        position: "relative",
-        borderLeft: `1px solid ${STUDIO_GRID}`,
-        borderRight: `1px solid ${STUDIO_GRID}`,
-        borderBottom: automationHeight > 0 ? "none" : `1px solid ${STUDIO_GRID}`,
-        borderRadius: automationHeight > 0 ? 0 : "0 0 2px 2px",
-      }}>
-        <ArrangementWaveform
-          cache={cache}
-          width={Math.floor(w)}
-          height={Math.floor(waveHeight)}
-          mode={waveformMode}
-          markers={markers}
-          durationSec={resolveTrackDuration({
-            cache,
-            entryDuration: lane.entry.duration_seconds,
-          })}
-        />
-        {playheadLocalPx != null && (
-          <div style={{
-            position: "absolute", left: playheadLocalPx, top: 0, bottom: 0, width: 2,
-            background: "#ff2222", zIndex: 3, pointerEvents: "none",
-            boxShadow: "0 0 4px rgba(255,34,34,0.6)",
-          }} />
+      <div
+        onMouseDown={seekAt}
+        style={{
+          height: waveHeight,
+          flexShrink: 0,
+          overflow: "hidden",
+          position: "relative",
+          cursor: "default",
+          pointerEvents: "auto",
+        }}
+      >
+        {visWidth > 0 && lane.entry.file_path ? (
+          <WaveformCanvas
+            trackId={lane.card.entryId}
+            audioPath={lane.entry.file_path}
+            cachePath={lane.entry.waveform_cache_path}
+            entryId={lane.entry.id}
+            width={Math.floor(w)}
+            height={Math.floor(waveHeight)}
+            pixelsPerSecond={pxPerSec}
+            clipBgColor={clipBg}
+            viewportOffsetX={visStart}
+            viewportWidth={visWidth}
+            freezeRender={isDragging}
+            waveLayout="stereo"
+            waveFill="#141414"
+            waveOutline="none"
+            showCenterLine
+          />
+        ) : (
+          <div style={{ width: "100%", height: "100%", background: clipBg, opacity: 0.85 }} />
         )}
       </div>
 
-      {automationHeight > 0 && (
+      {showAutomation && (
         <>
           <AutomationWaveSplitter
             onResizeStart={e => onSplitResize(laneIndex, e)}
           />
-          <TrackAutomationLane
-            laneIndex={laneIndex}
-            color={color}
-            width={w}
-            panelHeight={automationHeight}
-            startSec={startSec}
-            durationSec={lane.durationSec}
-            playheadSec={playheadSec}
-            showAutomation={mix.showAutomation}
-            mix={mix}
-            onMixChange={onMixChange}
-          />
+          <div
+            onMouseDown={seekAt}
+            style={{ flex: 1, minHeight: 0, cursor: "default", pointerEvents: "auto" }}
+          >
+            <TrackAutomationLane
+              laneIndex={laneIndex}
+              color={color}
+              width={w}
+              panelHeight={automationHeight}
+              startSec={lane.startSec}
+              durationSec={lane.durationSec}
+              playheadSec={playheadSec}
+              showAutomation={mix.showAutomation}
+              mix={mix}
+              onMixChange={onMixChange}
+            />
+          </div>
         </>
       )}
     </div>
+  );
+}
+
+const LANE_RESIZE_HIT = 12;
+
+/** Full-width lane row click targets — select deck/track from empty timeline or sidebar filler. */
+function LaneSelectOverlays({
+  lanes,
+  laneYs,
+  laneHeights,
+  laneCount,
+  extendedLaneH,
+  colors,
+  selectedCardId,
+  onSelectLane,
+  onSeekAtClientX,
+}: {
+  lanes: LaneLayout[];
+  laneYs: number[];
+  laneHeights: number[];
+  laneCount: number;
+  extendedLaneH: number;
+  colors: string[];
+  selectedCardId: string | null;
+  onSelectLane: (laneIndex: number) => void;
+  onSeekAtClientX: (clientX: number) => void;
+}) {
+  return (
+    <>
+      {laneYs.map((y, i) => {
+        const lane = lanes[i];
+        if (!lane) return null;
+        const rowH = i < laneCount - 1 ? laneHeights[i] : extendedLaneH - y;
+        const color = colors[i % colors.length];
+        const isSelected = lane.card.id === selectedCardId;
+        return (
+          <div
+            key={`lane-select-${i}`}
+            data-lane-select
+            onClick={e => {
+              e.stopPropagation();
+              onSeekAtClientX(e.clientX);
+              onSelectLane(i);
+            }}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: y,
+              height: rowH,
+              zIndex: 2,
+              cursor: "pointer",
+              boxShadow: isSelected ? `inset 0 0 0 1px ${color}66` : undefined,
+            }}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/** Full-width bottom-edge resize zones — last lane extends into empty viewport below tracks. */
+function LaneResizeOverlays({
+  laneYs,
+  laneHeights,
+  laneCount,
+  extendedLaneH,
+  onResizeStart,
+}: {
+  laneYs: number[];
+  laneHeights: number[];
+  laneCount: number;
+  extendedLaneH: number;
+  onResizeStart: (laneIndex: number, e: React.MouseEvent, currentHeight: number) => void;
+}) {
+  return (
+    <>
+      {laneYs.map((y, i) => {
+        const bottom = y + laneHeights[i];
+        const isLast = i === laneCount - 1;
+        const hitTop = bottom - LANE_RESIZE_HIT / 2;
+        const hitHeight = isLast
+          ? Math.max(LANE_RESIZE_HIT, extendedLaneH - hitTop)
+          : LANE_RESIZE_HIT;
+        return (
+          <div
+            key={`lane-resize-${i}`}
+            data-lane-resize
+            role="separator"
+            aria-label={`Resize deck ${i + 1}`}
+            onMouseDown={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              onResizeStart(i, e, laneHeights[i]);
+            }}
+            onClick={e => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: hitTop,
+              height: hitHeight,
+              cursor: "ns-resize",
+              zIndex: 26,
+              touchAction: "none",
+            }}
+          />
+        );
+      })}
+    </>
   );
 }
 
@@ -261,15 +392,16 @@ export function TransitionArrangementView({
   boothVisible = true, onToggleBooth,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const zoomCameraRef = useRef<HTMLDivElement>(null);
+  const timelineZoneRef = useRef<HTMLDivElement>(null);
   const sidebarScrollRef = useRef<HTMLDivElement>(null);
-  const pxPerSecRef = useRef(readStoredZoom());
-  const [pxPerSec, setPxPerSec] = useState(readStoredZoom);
+  const pixelsPerSecond = useSetTimelineStore(s => s.pixelsPerSecond);
+  const setScrollLeft = useSetTimelineStore(s => s.setScrollLeft);
+  const fitToDuration = useSetTimelineStore(s => s.fitToDuration);
+  const pxPerSecRef = useRef(pixelsPerSecond);
   const [scrollViewport, setScrollViewport] = useState({ left: 0, width: 0 });
-  const [caches, setCaches] = useState<Record<string, WaveformCache | null>>({});
-  const [markersByEntry, setMarkersByEntry] = useState<Record<string, CatalogMarker[]>>({});
+  const [laneViewportH, setLaneViewportH] = useState(0);
   const mixes = useStudioDeckStore(s => s.mixes);
-  const waveformMode = useSelectStore(s => s.waveformMode);
-  const setWaveformMode = useSelectStore(s => s.setWaveformMode);
   const [plans, setPlans] = useState<Record<number, TransitionPlanData | null>>({});
   const [drag, setDrag] = useState<{
     cardId: string;
@@ -277,25 +409,142 @@ export function TransitionArrangementView({
     startSec: number;
     bpm: number;
   } | null>(null);
-  const [dragPreviewSec, setDragPreviewSec] = useState<number | null>(null);
+  const [dragDeltaPx, setDragDeltaPx] = useState(0);
 
+  const activeSetId = useSetBuilderStore(s => s.activeSetId);
   const timelineSelectedCardId = useSetBuilderStore(s => s.timelineSelectedCardId);
   const selectTimelineCard = useSetBuilderStore(s => s.selectTimelineCard);
   const setTimelineStart = useSetBuilderStore(s => s.setTimelineStart);
 
-  const playheadSec = useBoothStore(s => s.playheadSec);
+  const locators = useSetLocatorStore(s => s.locators);
+  const locatorSelectedId = useSetLocatorStore(s => s.selectedId);
+  const locatorRenamingId = useSetLocatorStore(s => s.renamingId);
+  const keyMapMode = useSetLocatorStore(s => s.keyMapMode);
+  const pendingKeyMapLocatorId = useSetLocatorStore(s => s.pendingKeyMapLocatorId);
+  const loadLocatorsForSet = useSetLocatorStore(s => s.loadForActiveSet);
+  const addLocator = useSetLocatorStore(s => s.addLocator);
+  const updateLocator = useSetLocatorStore(s => s.updateLocator);
+  const removeLocator = useSetLocatorStore(s => s.removeLocator);
+  const selectLocator = useSetLocatorStore(s => s.selectLocator);
+  const setKeyMapMode = useSetLocatorStore(s => s.setKeyMapMode);
+  const setRenamingId = useSetLocatorStore(s => s.setRenamingId);
+  const requestKeyBinding = useSetLocatorStore(s => s.requestKeyBinding);
+
+  const [locatorMenu, setLocatorMenu] = useState<{
+    x: number;
+    y: number;
+    locatorId: string | null;
+    timeSec: number;
+  } | null>(null);
+
+  const playheadSec = useTransportStore(s => s.positionSeconds);
   const isPlaying = useTransportStore(s => s.isPlaying);
   const togglePlayPause = useTransportStore(s => s.togglePlayPause);
-  const seek = useTransportStore(s => s.seek);
-  pxPerSecRef.current = pxPerSec;
+  pxPerSecRef.current = pixelsPerSecond;
 
   const layout = useMemo(
-    () => computeSetLayout(sorted, entryMap, undefined, pxPerSec),
-    [sorted, entryMap, pxPerSec],
+    () => computeSetLayout(sorted, entryMap, undefined, pixelsPerSecond),
+    [sorted, entryMap, pixelsPerSecond],
   );
 
+  const onViewportChange = useCallback((left: number, width: number) => {
+    setScrollViewport({ left, width });
+  }, []);
+
+  /** Direct DOM camera updates — no React re-render per zoom frame. */
+  useEffect(() => {
+    return subscribeGestureViewport(() => {
+      const cam = zoomCameraRef.current;
+      if (!cam) return;
+      const g = getGestureViewport();
+      if (g.active) {
+        cam.style.transform = `scaleX(${g.scaleX}) translateZ(0)`;
+        cam.style.transformOrigin = `${g.anchorContentX}px 0`;
+        cam.style.willChange = "transform";
+      } else {
+        cam.style.transform = "";
+        cam.style.transformOrigin = "";
+        cam.style.willChange = "";
+      }
+    });
+  }, []);
+
+  const readZoomAnchorViewportX = useCallback(() => {
+    const el = scrollRef.current;
+    const fallback = el ? el.clientWidth * 0.5 : 0;
+    return getZoomCursorAnchor(fallback);
+  }, []);
+
+  // Seed viewport width on mount — avoids width=0 (no waveforms / ruler paint).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && el.clientWidth > 0) {
+      setScrollViewport({ left: el.scrollLeft, width: el.clientWidth });
+    }
+  }, [layout.lanes.length]);
+
+  const { syncDomScroll } = useTimelineWheel({
+    scrollRef,
+    zoneRef: timelineZoneRef,
+    setScrollLeft,
+    readScrollLeft: () => useSetTimelineStore.getState().scrollLeft,
+    enabled: layout.lanes.length > 0,
+    lanesKey: layout.lanes.length,
+    onViewportChange,
+  });
+
+  useEffect(() => {
+    return registerZoomCommit((pps, sl) => {
+      useSetTimelineStore.getState().setView(pps, sl);
+      const el = scrollRef.current;
+      if (el) {
+        el.scrollLeft = sl;
+        setScrollViewport({ left: sl, width: el.clientWidth });
+      }
+    });
+  }, []);
+
+  const seekTimeline = useCallback(async (timeSec: number) => {
+    await seekSetTimeline(timeSec, {
+      lanes: layout.lanes,
+      transitions: layout.transitions,
+      totalSec: layout.totalSec,
+    });
+  }, [layout.lanes, layout.transitions, layout.totalSec]);
+
+  const seekFromClientX = useCallback((clientX: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    void seekTimeline(
+      timeSecFromContentX(
+        contentXFromClientX(clientX, el),
+        pixelsPerSecond,
+        layout.totalSec,
+      ),
+    );
+  }, [seekTimeline, pixelsPerSecond, layout.totalSec]);
+
+  const rulerMagnify = useRulerMagnify({
+    scrollRef,
+    syncDomScroll,
+    onRulerSeek: seekFromClientX,
+  });
+
+  useSetLocatorShortcuts({
+    enabled: layout.lanes.length > 0,
+    onJumpToLocator: (t) => { void seekTimeline(t); },
+  });
+
+  useSetTimelineShortcuts({
+    enabled: layout.lanes.length > 0,
+    lanes: layout.lanes,
+    selectedCardId: timelineSelectedCardId,
+    scrollRef,
+    syncDomScroll,
+    readZoomAnchorViewportX,
+  });
+
   const automationTracks = useStudioAutomationStore(s => s.tracks);
-  const expandAll = useStudioAutomationStore(s => s.expandAll);
   const expandedFlags = useStudioAutomationStore(s =>
     layout.lanes.map((_, i) => (s.tracks[i]?.expanded ? "1" : "0")).join(""),
   );
@@ -308,7 +557,28 @@ export function TransitionArrangementView({
   const { laneYs, laneHeights, timelineH } = useMemo(() => {
     const { ys, heights, totalH } = computeLaneLayout(layout.lanes.length);
     return { laneYs: ys, laneHeights: heights, timelineH: totalH };
-  }, [layout.lanes.length, automationTracks, expandAll, expandedFlags, laneSplits]);
+  }, [layout.lanes.length, automationTracks, expandedFlags, laneSplits]);
+
+  const laneCount = layout.lanes.length;
+  const extendedLaneH = Math.max(timelineH, laneViewportH);
+
+  const selectLaneCard = useCallback((laneIndex: number) => {
+    const lane = layout.lanes[laneIndex];
+    if (!lane) return;
+    selectTimelineCard(lane.card.id);
+    if (laneIndex < layout.transitions.length) onSelectTransition(laneIndex);
+    else if (laneIndex > 0) onSelectTransition(laneIndex - 1);
+  }, [layout.lanes, layout.transitions.length, selectTimelineCard, onSelectTransition]);
+
+  const toggleLaneCard = useCallback((lane: LaneLayout) => {
+    const current = useSetBuilderStore.getState().timelineSelectedCardId;
+    const next = current === lane.card.id ? null : lane.card.id;
+    selectTimelineCard(next);
+    if (next) {
+      if (lane.index < layout.transitions.length) onSelectTransition(lane.index);
+      else if (lane.index > 0) onSelectTransition(lane.index - 1);
+    }
+  }, [layout.transitions.length, selectTimelineCard, onSelectTransition]);
 
   const startLaneResize = useCallback((laneIndex: number, e: React.MouseEvent, currentHeight: number) => {
     e.preventDefault();
@@ -349,34 +619,28 @@ export function TransitionArrangementView({
     window.addEventListener("mouseup", onUp);
   }, [nudgeSplit]);
 
-  const persistZoom = useCallback((next: number) => {
-    const clamped = clampPxPerSec(next);
-    setPxPerSec(clamped);
-    try { localStorage.setItem(ZOOM_STORAGE_KEY, String(clamped)); } catch { /* ignore */ }
-  }, []);
+  const applyZoomClick = useCallback((factor: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const anchor = readZoomAnchorViewportX();
+    const pps = useSetTimelineStore.getState().pixelsPerSecond;
+    if (applyZoomGesture(factor, anchor, el.scrollLeft, pps, MIN_PX_PER_SEC, MAX_PX_PER_SEC)) {
+      flushZoomCommit();
+      syncDomScroll();
+    }
+  }, [syncDomScroll, readZoomAnchorViewportX]);
 
-  const zoomIn = useCallback(() => {
-    persistZoom(pxPerSecRef.current * ZOOM_STEP);
-  }, [persistZoom]);
-
-  const zoomOut = useCallback(() => {
-    persistZoom(pxPerSecRef.current / ZOOM_STEP);
-  }, [persistZoom]);
+  const zoomIn = useCallback(() => applyZoomClick(ZOOM_BUTTON_FACTOR), [applyZoomClick]);
+  const zoomOut = useCallback(() => applyZoomClick(1 / ZOOM_BUTTON_FACTOR), [applyZoomClick]);
 
   const fitToSet = useCallback(() => {
     const el = scrollRef.current;
     if (!el || layout.totalSec <= 0) return;
-    const available = Math.max(200, el.clientWidth - 48);
-    persistZoom(available / layout.totalSec);
+    fitToDuration(layout.totalSec, el.clientWidth);
     el.scrollLeft = 0;
-  }, [layout.totalSec, persistZoom]);
-
-  const handleTimelineWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    const factor = e.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
-    persistZoom(pxPerSecRef.current * factor);
-  }, [persistZoom]);
+    setScrollLeft(0);
+    setScrollViewport({ left: 0, width: el.clientWidth });
+  }, [layout.totalSec, fitToDuration, setScrollLeft]);
 
   const { syncing: engineSyncing } = useSetEngineSync(layout.lanes);
   const engineTracksReady = useTransportStore(s => s.engineTracksReady);
@@ -384,34 +648,23 @@ export function TransitionArrangementView({
 
   useAutomationRecorder(layout.lanes.length > 0);
 
-  // Keep set-preview faders in sync with timeline strips (uses transport playhead).
-  useEffect(() => {
-    if (!canPlay || layout.lanes.length === 0) return;
-    let raf = 0;
-    const tick = () => {
-      const pos = useTransportStore.getState().positionSeconds;
-      const mixesNow = useStudioDeckStore.getState().mixes;
-      const mode = useBoothStore.getState().mode;
-      pushSetEngineMixes(layout.lanes, layout.transitions, mixesNow, pos, mode);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [canPlay, layout.lanes, layout.transitions]);
+  // Engine mix pushes run in useBoothSimulation (engineRoute: "set") — no duplicate RAF here.
 
   // Keep playhead in view while playing
   useEffect(() => {
     if (!isPlaying) return;
     const el = scrollRef.current;
     if (!el) return;
-    const playheadPx = playheadSec * pxPerSec;
+    const playheadPx = playheadSec * pixelsPerSecond;
     const margin = 80;
     const viewLeft = el.scrollLeft;
     const viewRight = viewLeft + el.clientWidth;
     if (playheadPx < viewLeft + margin || playheadPx > viewRight - margin) {
-      el.scrollLeft = Math.max(0, playheadPx - el.clientWidth * 0.35);
+      const next = Math.max(0, playheadPx - el.clientWidth * 0.35);
+      el.scrollLeft = next;
+      setScrollLeft(next);
     }
-  }, [playheadSec, isPlaying, pxPerSec]);
+  }, [playheadSec, isPlaying, pixelsPerSecond, setScrollLeft]);
 
   const getMix = useCallback((i: number) => mixes[i] ?? defaultDeckMix(), [mixes]);
 
@@ -434,39 +687,16 @@ export function TransitionArrangementView({
 
   const entryIds = sorted.map(c => c.entryId).join(",");
 
-  // Load waveforms
   useEffect(() => {
-    for (const lane of layout.lanes) {
-      const id = lane.card.entryId;
-      const fp = lane.entry.file_path;
-      if (!fp) continue;
-      setCaches(prev => {
-        if (id in prev) return prev;
-        loadWaveformCache(fp, lane.entry.waveform_cache_path, lane.entry.id).then(c => {
-          setCaches(p => ({ ...p, [id]: c }));
-        }).catch(() => {
-          setCaches(p => ({ ...p, [id]: null }));
-        });
-        return { ...prev, [id]: null };
-      });
-    }
-  }, [entryIds]); // eslint-disable-line react-hooks/exhaustive-deps
+    loadLocatorsForSet();
+  }, [activeSetId, loadLocatorsForSet]);
 
-  // Load cue / hot-cue markers from Select catalog
   useEffect(() => {
-    for (const lane of layout.lanes) {
-      const id = lane.card.entryId;
-      setMarkersByEntry(prev => {
-        if (id in prev) return prev;
-        apiClient.select.listMarkers(id).then(m => {
-          setMarkersByEntry(p => ({ ...p, [id]: m }));
-        }).catch(() => {
-          setMarkersByEntry(p => ({ ...p, [id]: [] }));
-        });
-        return { ...prev, [id]: [] };
-      });
-    }
-  }, [entryIds]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!locatorMenu) return;
+    const close = () => setLocatorMenu(null);
+    window.addEventListener("pointerdown", close, true);
+    return () => window.removeEventListener("pointerdown", close, true);
+  }, [locatorMenu]);
 
   // Load transition plans
   useEffect(() => {
@@ -489,46 +719,63 @@ export function TransitionArrangementView({
     sync();
     timeline.addEventListener("scroll", sync, { passive: true });
     return () => timeline.removeEventListener("scroll", sync);
-  }, [timelineH, layout.lanes.length]);
+  }, [extendedLaneH, layout.lanes.length]);
 
-  // Track scroll viewport for minimap
+  // Lane viewport height (for resize in empty area below tracks)
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const update = () => setScrollViewport({ left: el.scrollLeft, width: el.clientWidth });
-    update();
-    el.addEventListener("scroll", update, { passive: true });
-    const ro = new ResizeObserver(update);
+    const updateH = () => setLaneViewportH(Math.max(0, el.clientHeight - BEAT_RULER_H - TIME_RULER_H));
+    updateH();
+    const ro = new ResizeObserver(updateH);
     ro.observe(el);
-    return () => {
-      el.removeEventListener("scroll", update);
-      ro.disconnect();
-    };
+    return () => ro.disconnect();
   }, [layout.totalWidthPx]);
 
-  // Scroll to selected transition
+  // Scroll to selected transition — only when selection changes, not on every zoom.
+  const prevTransitionIndex = useRef(transitionIndex);
   useEffect(() => {
+    if (prevTransitionIndex.current === transitionIndex) return;
+    prevTransitionIndex.current = transitionIndex;
     const t = layout.transitions[transitionIndex];
     if (!t || !scrollRef.current) return;
-    scrollRef.current.scrollLeft = Math.max(0, t.leftPx - 120);
-  }, [transitionIndex, layout.transitions]);
+    const next = Math.max(0, t.leftPx - 120);
+    scrollRef.current.scrollLeft = next;
+    setScrollLeft(next);
+  }, [transitionIndex, layout.transitions, setScrollLeft]);
 
-  // Horizontal drag — reposition track on timeline
+  // Horizontal drag — CSS translate preview; commit on mouseup (engine sync deferred)
   useEffect(() => {
     if (!drag) return;
 
     const onMove = (e: MouseEvent) => {
-      const deltaSec = (e.clientX - drag.startClientX) / pxPerSecRef.current;
-      setDragPreviewSec(Math.max(0, drag.startSec + deltaSec));
+      const deltaPx = e.clientX - drag.startClientX;
+      setDragDeltaPx(deltaPx);
+
+      const el = scrollRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const sl = el.scrollLeft;
+        if (e.clientX > rect.right - 48) {
+          const next = sl + 16;
+          el.scrollLeft = next;
+          setScrollLeft(next);
+        } else if (e.clientX < rect.left + 48) {
+          const next = Math.max(0, sl - 16);
+          el.scrollLeft = next;
+          setScrollLeft(next);
+        }
+      }
     };
 
     const onUp = (e: MouseEvent) => {
-      const deltaSec = (e.clientX - drag.startClientX) / pxPerSecRef.current;
+      const deltaSec = pixelsToTimeSec(e.clientX - drag.startClientX, pxPerSecRef.current);
       const raw = Math.max(0, drag.startSec + deltaSec);
       const snapped = snapToBeat(raw, drag.bpm);
       setTimelineStart(drag.cardId, snapped);
+      endUndoGesture();
       setDrag(null);
-      setDragPreviewSec(null);
+      setDragDeltaPx(0);
     };
 
     window.addEventListener("mousemove", onMove);
@@ -537,7 +784,7 @@ export function TransitionArrangementView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [drag, setTimelineStart]);
+  }, [drag, setTimelineStart, setScrollLeft]);
 
   const handleTrackPointerDown = useCallback((lane: LaneLayout, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -549,27 +796,22 @@ export function TransitionArrangementView({
         dragging = true;
         const current = useSetBuilderStore.getState().timelineSelectedCardId;
         if (current !== lane.card.id) {
-          selectTimelineCard(lane.card.id);
-          if (lane.index > 0) onSelectTransition(lane.index - 1);
+          selectLaneCard(lane.index);
         }
+        beginUndoGesture();
+        setDragDeltaPx(0);
         setDrag({
           cardId: lane.card.id,
           startClientX: startX,
           startSec: lane.startSec,
           bpm: lane.entry.bpm ?? 128,
         });
-        setDragPreviewSec(lane.startSec);
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       }
     };
 
-    const toggleSelect = () => {
-      const current = useSetBuilderStore.getState().timelineSelectedCardId;
-      const next = current === lane.card.id ? null : lane.card.id;
-      selectTimelineCard(next);
-      if (next && lane.index > 0) onSelectTransition(lane.index - 1);
-    };
+    const toggleSelect = () => toggleLaneCard(lane);
 
     const onUp = () => {
       if (!dragging) toggleSelect();
@@ -579,7 +821,7 @@ export function TransitionArrangementView({
 
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [selectTimelineCard, onSelectTransition]);
+  }, [selectLaneCard, toggleLaneCard]);
 
   if (layout.lanes.length === 0) {
     return (
@@ -591,17 +833,9 @@ export function TransitionArrangementView({
 
   const totalDur = layout.totalSec;
 
-  const markStep = rulerMarkInterval(pxPerSec);
-  const rulerMarks: number[] = [];
-  for (let s = 0; s <= totalDur; s += markStep) rulerMarks.push(s);
+  const gridBpm = layout.lanes[0]?.entry.bpm ?? 128;
 
-  const zoomPct = Math.round((pxPerSec / DEFAULT_PX_PER_SEC) * 100);
-  const viewportLeftPct = layout.totalWidthPx > 0
-    ? (scrollViewport.left / layout.totalWidthPx) * 100
-    : 0;
-  const viewportWidthPct = layout.totalWidthPx > 0
-    ? Math.min(100, (scrollViewport.width / layout.totalWidthPx) * 100)
-    : 100;
+  const zoomPct = Math.round((pixelsPerSecond / DEFAULT_PX_PER_SEC) * 100);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: STUDIO_BG_DEEP }}>
@@ -627,13 +861,13 @@ export function TransitionArrangementView({
         }}>
           <button
             type="button"
-            onClick={zoomOut}
-            disabled={pxPerSec <= MIN_PX_PER_SEC}
-            title="Zoom out"
+            onClick={e => { e.stopPropagation(); zoomOut(); }}
+            disabled={pixelsPerSecond <= MIN_PX_PER_SEC + 1e-6}
+            title="Zoom out (⌘/Ctrl + scroll)"
             style={{
               background: "none", border: "none", color: "#aaa",
               fontSize: 12, fontWeight: 700, width: 22, cursor: "pointer",
-              opacity: pxPerSec <= MIN_PX_PER_SEC ? 0.35 : 1,
+              opacity: pixelsPerSecond <= MIN_PX_PER_SEC ? 0.35 : 1,
             }}
           >−</button>
           <span style={{ color: "#666", fontSize: 9, minWidth: 36, textAlign: "center" }}>
@@ -641,18 +875,18 @@ export function TransitionArrangementView({
           </span>
           <button
             type="button"
-            onClick={zoomIn}
-            disabled={pxPerSec >= MAX_PX_PER_SEC}
-            title="Zoom in"
+            onClick={e => { e.stopPropagation(); zoomIn(); }}
+            disabled={pixelsPerSecond >= MAX_PX_PER_SEC - 1e-6}
+            title="Zoom in (⌘/Ctrl + scroll)"
             style={{
               background: "none", border: "none", color: "#aaa",
               fontSize: 12, fontWeight: 700, width: 22, cursor: "pointer",
-              opacity: pxPerSec >= MAX_PX_PER_SEC ? 0.35 : 1,
+              opacity: pixelsPerSecond >= MAX_PX_PER_SEC ? 0.35 : 1,
             }}
           >+</button>
           <button
             type="button"
-            onClick={fitToSet}
+            onClick={e => { e.stopPropagation(); fitToSet(); }}
             title="Fit entire set in view"
             style={{
               background: "rgba(0,195,255,0.1)", border: "1px solid #00c3ff44",
@@ -662,31 +896,34 @@ export function TransitionArrangementView({
           >Fit</button>
         </div>
 
-        {/* Waveform style — same modes as Select */}
-        <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
-          <span style={{ color: "#555", fontSize: 8, marginRight: 2, letterSpacing: "0.06em" }}>WAVE</span>
-          {(["rgb", "hsv", "simple"] as WaveformMode[]).map(m => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setWaveformMode(m)}
-              title={{
-                rgb: "RGB — frequency-colored (Mixxx RGB)",
-                hsv: "HSV — hue-shift mode (Mixxx HSV)",
-                simple: "Simple — amplitude only (Mixxx Simple)",
-              }[m]}
-              style={{
-                height: 20, padding: "0 7px", border: "none", borderRadius: 2,
-                background: waveformMode === m ? "rgba(255,255,255,0.12)" : "transparent",
-                color: waveformMode === m ? "#e0e0e0" : "#555",
-                fontSize: 8, fontWeight: 700, cursor: "pointer", letterSpacing: "0.08em",
-                textTransform: "uppercase",
-              }}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); addLocator(playheadSec); }}
+          title="Set locator at playhead (Ableton Set)"
+          style={{
+            background: "#222", border: "1px solid #444", borderRadius: 3,
+            color: "#c8c850", fontSize: 9, fontWeight: 700,
+            padding: "2px 10px", cursor: "pointer",
+          }}
+        >Set</button>
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); setKeyMapMode(!keyMapMode); }}
+          title="Key Map mode (K) — click locator then press a key"
+          style={{
+            background: keyMapMode ? "rgba(200,200,80,0.15)" : "#222",
+            border: `1px solid ${keyMapMode ? "#c8c85088" : "#444"}`,
+            borderRadius: 3,
+            color: keyMapMode ? "#c8c850" : "#888",
+            fontSize: 9, fontWeight: 700,
+            padding: "2px 10px", cursor: "pointer",
+          }}
+        >KEY</button>
+        {keyMapMode && (
+          <span style={{ color: "#c8c850", fontSize: 9 }}>
+            {pendingKeyMapLocatorId ? "Press a key to bind…" : "Key Map — select locator + key · [ ] prev/next"}
+          </span>
+        )}
 
         <span style={{ flex: 1 }} />
         {onToggleBooth && (
@@ -725,61 +962,52 @@ export function TransitionArrangementView({
 
       <SetAutomationPanel trackCount={layout.lanes.length} />
 
-      {/* Mini-map */}
-      <div style={{
-        height: MINIMAP_H, flexShrink: 0, background: STUDIO_SIDEBAR, borderBottom: `1px solid ${STUDIO_GRID}`,
-        position: "relative", margin: "0 0 0 0",
-      }}>
-        <div style={{ position: "absolute", left: LANE_STRIP_W, right: 0, top: 4, bottom: 4, display: "flex" }}>
-          {layout.lanes.map((lane, i) => (
-            <div
-              key={lane.card.id}
-              onClick={() => {
-                const current = useSetBuilderStore.getState().timelineSelectedCardId;
-                const next = current === lane.card.id ? null : lane.card.id;
-                selectTimelineCard(next);
-                if (scrollRef.current) scrollRef.current.scrollLeft = lane.leftPx;
-                if (next) {
-                  if (i < layout.transitions.length) onSelectTransition(i);
-                  else if (i > 0) onSelectTransition(i - 1);
-                }
-              }}
-              style={{
-                position: "absolute",
-                left: `${(lane.startSec / totalDur) * 100}%`,
-                width: `${(lane.durationSec / totalDur) * 100}%`,
-                height: "100%",
-                background: LANE_COLORS[i % LANE_COLORS.length] + "44",
-                border: transitionIndex === i || transitionIndex === i - 1
-                  ? `1px solid ${LANE_COLORS[i % LANE_COLORS.length]}`
-                  : "1px solid #222",
-                borderRadius: 2, cursor: "pointer", minWidth: 4,
-              }}
-            />
-          ))}
-          {/* Scroll viewport indicator */}
-          <div style={{
-            position: "absolute",
-            left: `${viewportLeftPct}%`,
-            width: `${viewportWidthPct}%`,
-            height: "100%",
-            border: "1px solid #ffeb3b88",
-            background: "#ffeb3b12",
-            borderRadius: 2, pointerEvents: "none",
-          }} />
-          {/* Playhead tick on minimap */}
-          {totalDur > 0 && (
-            <div style={{
-              position: "absolute",
-              left: `${(playheadSec / totalDur) * 100}%`,
-              width: 2,
-              height: "100%",
-              background: "#fff",
-              opacity: 0.7,
-              pointerEvents: "none",
-            }} />
-          )}
-        </div>
+      <div
+        ref={timelineZoneRef}
+        style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}
+      >
+      {/* Ableton-style overview navigator — shows zoom window + playhead */}
+      <div style={{ height: MINIMAP_H, flexShrink: 0 }}>
+        <SetTimelineNavigator
+          lanes={layout.lanes}
+          totalSec={totalDur}
+          scrollLeft={scrollViewport.left}
+          viewportWidth={scrollViewport.width}
+          pixelsPerSecond={pixelsPerSecond}
+          playheadSec={playheadSec}
+          transitionIndex={transitionIndex}
+          laneColors={LANE_COLORS}
+          leftInset={LANE_STRIP_W}
+          onScroll={sl => {
+            if (scrollRef.current) scrollRef.current.scrollLeft = sl;
+            setScrollLeft(sl);
+            setScrollViewport(prev => ({ ...prev, left: sl }));
+          }}
+          onViewChange={(pps, sl) => {
+            useSetTimelineStore.getState().setView(pps, sl);
+            if (scrollRef.current) {
+              scrollRef.current.scrollLeft = sl;
+              setScrollViewport({ left: sl, width: scrollRef.current.clientWidth });
+            }
+          }}
+          onSeek={t => { void seekTimeline(t); }}
+          onLaneClick={i => {
+            const lane = layout.lanes[i];
+            if (!lane) return;
+            const current = useSetBuilderStore.getState().timelineSelectedCardId;
+            const next = current === lane.card.id ? null : lane.card.id;
+            selectTimelineCard(next);
+            if (scrollRef.current) {
+              scrollRef.current.scrollLeft = lane.leftPx;
+              setScrollLeft(lane.leftPx);
+              setScrollViewport(prev => ({ ...prev, left: lane.leftPx }));
+            }
+            if (next) {
+              if (i < layout.transitions.length) onSelectTransition(i);
+              else if (i > 0) onSelectTransition(i - 1);
+            }
+          }}
+        />
       </div>
 
       {/* Timeline body */}
@@ -795,7 +1023,7 @@ export function TransitionArrangementView({
           overflow: "hidden",
         }}>
           <div style={{
-            height: RULER_H,
+            height: BEAT_RULER_H,
             flexShrink: 0,
             borderBottom: `1px solid ${STUDIO_GRID}`,
             background: STUDIO_RULER,
@@ -803,7 +1031,7 @@ export function TransitionArrangementView({
           <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
             <div
               ref={sidebarScrollRef}
-              style={{ position: "absolute", left: 0, right: 0, top: 0, height: timelineH }}
+              style={{ position: "absolute", left: 0, right: 0, top: 0, height: extendedLaneH }}
             >
               {layout.lanes.map((lane, i) => {
                 const waveH = getWaveHeight(i);
@@ -819,14 +1047,16 @@ export function TransitionArrangementView({
                         top: laneYs[i],
                         left: 0,
                         right: 0,
-                        height: LANE_HEIGHT,
+                        height: laneHeights[i],
                       }}
                     >
                       <DJMLaneStrip
                         index={i}
                         entryId={lane.card.entryId}
                         mix={mix}
-                        height={LANE_HEIGHT}
+                        height={laneHeights[i]}
+                        selected={lane.card.id === timelineSelectedCardId}
+                        onSelect={() => selectLaneCard(i)}
                         onChange={m => handleMixChange(i, m)}
                         color={color}
                       />
@@ -854,46 +1084,146 @@ export function TransitionArrangementView({
                   </div>
                 );
               })}
+              {laneCount > 0 && extendedLaneH > laneYs[laneCount - 1] + laneHeights[laneCount - 1] && (
+                <div
+                  data-lane-select
+                  onClick={e => {
+                    e.stopPropagation();
+                    selectLaneCard(laneCount - 1);
+                  }}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    top: laneYs[laneCount - 1] + laneHeights[laneCount - 1],
+                    height: extendedLaneH - (laneYs[laneCount - 1] + laneHeights[laneCount - 1]),
+                    zIndex: 2,
+                    cursor: "pointer",
+                    boxShadow: layout.lanes[laneCount - 1]?.card.id === timelineSelectedCardId
+                      ? `inset 0 0 0 1px ${LANE_COLORS[(laneCount - 1) % LANE_COLORS.length]}66`
+                      : undefined,
+                  }}
+                />
+              )}
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: extendedLaneH }}>
+                <LaneResizeOverlays
+                  laneYs={laneYs}
+                  laneHeights={laneHeights}
+                  laneCount={laneCount}
+                  extendedLaneH={extendedLaneH}
+                  onResizeStart={startLaneResize}
+                />
+              </div>
             </div>
           </div>
+          <div style={{
+            height: TIME_RULER_H,
+            flexShrink: 0,
+            borderTop: `1px solid ${STUDIO_GRID}`,
+            background: STUDIO_RULER,
+          }} />
         </div>
 
-        {/* Scrollable timeline */}
+        {/* Scrollable timeline — cursor-anchored zoom camera */}
         <div
           ref={scrollRef}
-          style={{ flex: 1, overflow: "auto", position: "relative", background: STUDIO_BG }}
-          onWheel={handleTimelineWheel}
+          style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "auto", background: STUDIO_BG }}
           onClick={e => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const x = e.clientX - rect.left + e.currentTarget.scrollLeft;
-            seek(x / pxPerSec);
+            if ((e.target as HTMLElement).closest("[data-lane-select]")) return;
+            if ((e.target as HTMLElement).closest("[data-lane-resize]")) return;
+            if ((e.target as HTMLElement).closest("[data-clip-header]")) return;
+            seekFromClientX(e.clientX);
           }}
         >
-          <div style={{ width: layout.totalWidthPx + 200, minHeight: timelineH + RULER_H, position: "relative" }}>
-            {/* Time ruler */}
-            <div style={{
-              height: RULER_H, position: "sticky", top: 0, zIndex: 20,
-              background: STUDIO_RULER, borderBottom: `1px solid ${STUDIO_GRID}`,
-            }}>
-              {rulerMarks.map(s => (
-                <div key={s} style={{
-                  position: "absolute", left: s * pxPerSec, top: 0, height: "100%",
-                  borderLeft: `1px solid ${STUDIO_GRID}`, paddingLeft: 4, paddingTop: 5,
-                  fontSize: 8, color: "#888",
-                }}>
-                  {formatTimeline(s)}
-                </div>
-              ))}
+          <div
+            ref={zoomCameraRef}
+            style={{
+              width: layout.totalWidthPx + 200,
+              minHeight: extendedLaneH + BEAT_RULER_H + TIME_RULER_H,
+              position: "relative",
+            }}
+          >
+            {/* Ableton beat-time ruler (top) + locators */}
+            <div style={{ height: BEAT_RULER_H, position: "sticky", top: 0, zIndex: 20 }}>
+              <SetBeatRuler
+                totalSec={totalDur}
+                pixelsPerSecond={pixelsPerSecond}
+                bpm={gridBpm}
+                height={BEAT_RULER_H}
+                scrollLeft={scrollViewport.left}
+                viewportWidth={scrollViewport.width}
+                onPointerDown={rulerMagnify.onRulerPointerDown}
+                onPointerMove={rulerMagnify.onRulerPointerMove}
+                onPointerUp={rulerMagnify.onRulerPointerUp}
+                onPointerCancel={rulerMagnify.onRulerPointerCancel}
+                onContextMenu={e => {
+                  e.preventDefault();
+                  const el = scrollRef.current;
+                  if (!el) return;
+                  setLocatorMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    locatorId: null,
+                    timeSec: timeSecFromContentX(
+                      contentXFromClientX(e.clientX, el),
+                      pixelsPerSecond,
+                      totalDur,
+                    ),
+                  });
+                }}
+              />
+              <div style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                height: BEAT_RULER_H,
+                pointerEvents: "none",
+                overflow: "visible",
+              }}>
+                <SetLocatorsLane
+                  locators={locators}
+                  pixelsPerSecond={pixelsPerSecond}
+                  totalSec={totalDur}
+                  rulerHeight={BEAT_RULER_H}
+                  selectedId={locatorSelectedId}
+                  renamingId={locatorRenamingId}
+                  keyMapMode={keyMapMode}
+                  onSelect={selectLocator}
+                  onSeek={t => { void seekTimeline(t); }}
+                  onMove={(id, t) => updateLocator(id, { timeSec: t })}
+                  onRename={(id, name) => {
+                    updateLocator(id, { name });
+                    setRenamingId(null);
+                  }}
+                  onAssignKey={requestKeyBinding}
+                  onCancelRenaming={() => setRenamingId(null)}
+                  onContextMenu={(id, x, y, timeSec) => {
+                    setLocatorMenu({ x, y, locatorId: id, timeSec });
+                  }}
+                />
+              </div>
             </div>
 
-            {/* Grid lines + lane row dividers */}
-            <div style={{ position: "absolute", top: RULER_H, left: 0, right: 0, height: timelineH }}>
-              {rulerMarks.map(s => (
-                <div key={s} style={{
-                  position: "absolute", left: s * pxPerSec, top: 0, height: "100%",
-                  borderLeft: `1px solid ${STUDIO_GRID}44`, pointerEvents: "none",
-                }} />
-              ))}
+            {/* Arrangement workspace — lanes, clips, grid (between the two rulers) */}
+            <div style={{ position: "relative", height: extendedLaneH, flexShrink: 0 }}>
+              {laneYs.map((y, i) => {
+                const rowH = i < laneCount - 1 ? laneHeights[i] : extendedLaneH - y;
+                return (
+                  <div
+                    key={`lane-bg-${i}`}
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      top: y,
+                      height: rowH,
+                      background: i % 2 === 1 ? "rgba(0,0,0,0.18)" : "transparent",
+                      pointerEvents: "none",
+                    }}
+                  />
+                );
+              })}
               {laneYs.map((y, i) => (
                 <div
                   key={`lane-div-${i}`}
@@ -908,29 +1238,24 @@ export function TransitionArrangementView({
                   }}
                 />
               ))}
-              {laneYs.map((y, i) => (
-                <div
-                  key={`lane-resize-${i}`}
-                  role="separator"
-                  aria-label={`Resize deck ${i + 1}`}
-                  onMouseDown={e => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    startLaneResize(i, e, laneHeights[i]);
-                  }}
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    right: 0,
-                    top: y + laneHeights[i] - 4,
-                    height: 8,
-                    cursor: "ns-resize",
-                    zIndex: 25,
-                    touchAction: "none",
-                  }}
-                />
-              ))}
-            </div>
+              <LaneSelectOverlays
+                lanes={layout.lanes}
+                laneYs={laneYs}
+                laneHeights={laneHeights}
+                laneCount={laneCount}
+                extendedLaneH={extendedLaneH}
+                colors={LANE_COLORS}
+                selectedCardId={timelineSelectedCardId}
+                onSelectLane={selectLaneCard}
+                onSeekAtClientX={seekFromClientX}
+              />
+              <LaneResizeOverlays
+                laneYs={laneYs}
+                laneHeights={laneHeights}
+                laneCount={laneCount}
+                extendedLaneH={extendedLaneH}
+                onResizeStart={startLaneResize}
+              />
 
             {/* Transition regions (blue boxes) */}
             {layout.transitions.map(t => {
@@ -941,11 +1266,15 @@ export function TransitionArrangementView({
               return (
                 <div
                   key={t.index}
-                  onClick={e => { e.stopPropagation(); onSelectTransition(t.index); }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    seekFromClientX(e.clientX);
+                    onSelectTransition(t.index);
+                  }}
                   style={{
                     position: "absolute",
                     left: t.leftPx,
-                    top: RULER_H + (laneYs[t.index] ?? t.laneAY),
+                    top: laneYs[t.index] ?? t.laneAY,
                     width: t.widthPx,
                     height: (laneYs[t.index + 1] ?? (laneYs[t.index] ?? 0) + (laneHeights[t.index] ?? 0))
                       - (laneYs[t.index] ?? 0),
@@ -969,31 +1298,31 @@ export function TransitionArrangementView({
               );
             })}
 
-            {/* Playhead */}
+            {/* Beat grid — behind clips so lines show through waveform gaps */}
             <div style={{
               position: "absolute",
-              left: playheadSec * pxPerSec,
-              top: RULER_H,
-              height: timelineH,
-              width: 2,
-              background: "#fff",
-              zIndex: 30,
+              top: 0,
+              left: 0,
+              right: 0,
+              height: extendedLaneH,
               pointerEvents: "none",
+              zIndex: 4,
             }}>
-              <div style={{
-                position: "absolute", top: -RULER_H, left: -5,
-                width: 0, height: 0,
-                borderLeft: "6px solid transparent",
-                borderRight: "6px solid transparent",
-                borderTop: "8px solid #fff",
-              }} />
+              <SetBeatTimelineGrid
+                totalSec={totalDur}
+                pixelsPerSecond={pixelsPerSecond}
+                bpm={gridBpm}
+                height={extendedLaneH}
+                scrollLeft={scrollViewport.left}
+                viewportWidth={scrollViewport.width}
+              />
             </div>
 
             {/* Track blocks */}
-            <div style={{ position: "absolute", top: RULER_H, left: 0, height: timelineH }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: timelineH, zIndex: 10 }}>
               {layout.lanes.map((lane, i) => {
                 const isDragging = drag?.cardId === lane.card.id;
-                const overrideStart = isDragging ? dragPreviewSec : null;
+                const automationExpanded = automationTracks[i]?.expanded ?? false;
 
                 return (
                   <TrackBlock
@@ -1003,28 +1332,133 @@ export function TransitionArrangementView({
                     laneY={laneYs[i]}
                     laneHeight={laneHeights[i]}
                     automationHeight={getAutomationPanelHeight(i)}
+                    automationExpanded={automationExpanded}
                     waveHeight={getWaveHeight(i)}
                     onSplitResize={startSplitResize}
                     color={LANE_COLORS[i % LANE_COLORS.length]}
                     mix={getMix(i)}
                     onMixChange={m => handleMixChange(i, m)}
-                    cache={caches[lane.card.entryId] ?? null}
-                    markers={markersByEntry[lane.card.entryId]}
-                    waveformMode={waveformMode}
                     isSelected={i === transitionIndex || i === transitionIndex + 1}
                     isCardSelected={lane.card.id === timelineSelectedCardId}
                     isDragging={isDragging}
-                    overrideStartSec={overrideStart}
-                    pxPerSec={pxPerSec}
+                    dragTranslatePx={isDragging ? dragDeltaPx : undefined}
+                    pxPerSec={pixelsPerSecond}
                     playheadSec={playheadSec}
-                    onDragStart={e => handleTrackPointerDown(lane, e)}
+                    onHeaderPointerDown={e => handleTrackPointerDown(lane, e)}
+                    onSeekAtClientX={seekFromClientX}
+                    timelineScrollLeft={scrollViewport.left}
+                    timelineViewportWidth={scrollViewport.width}
                   />
                 );
               })}
             </div>
+
+            </div>
+
+            {/* Ableton time ruler (bottom black strip) — m:ss */}
+            <div style={{ position: "sticky", bottom: 0, zIndex: 20 }}>
+              <SetTimeRuler
+                totalSec={totalDur}
+                pixelsPerSecond={pixelsPerSecond}
+                height={TIME_RULER_H}
+                scrollLeft={scrollViewport.left}
+                viewportWidth={scrollViewport.width}
+              />
+            </div>
+
+            {/* Playhead — inside zoom camera so it stretches with the world */}
+            <div style={{
+              position: "absolute",
+              left: playheadSec * pixelsPerSecond,
+              top: 0,
+              height: BEAT_RULER_H + extendedLaneH + TIME_RULER_H,
+              width: 1,
+              background: "rgba(94,200,232,0.85)",
+              zIndex: 30,
+              pointerEvents: "none",
+              boxShadow: "0 0 6px rgba(94,200,232,0.4)",
+            }}>
+              <div style={{
+                position: "absolute", top: 0, left: -5,
+                width: 0, height: 0,
+                borderLeft: "5px solid transparent",
+                borderRight: "5px solid transparent",
+                borderTop: "7px solid #5ec8e8",
+              }} />
+            </div>
           </div>
         </div>
       </div>
+      </div>
+
+      {locatorMenu && (
+        <div
+          style={{
+            position: "fixed",
+            left: locatorMenu.x,
+            top: locatorMenu.y,
+            zIndex: 1000,
+            background: "#1a1a1a",
+            border: "1px solid #444",
+            borderRadius: 4,
+            padding: "4px 0",
+            minWidth: 140,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+          }}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {locatorMenu.locatorId ? (
+            <>
+              <LocatorMenuItem
+                label="Rename"
+                onClick={() => {
+                  setRenamingId(locatorMenu.locatorId);
+                  setLocatorMenu(null);
+                }}
+              />
+              <LocatorMenuItem
+                label="Delete"
+                onClick={() => {
+                  removeLocator(locatorMenu.locatorId!);
+                  setLocatorMenu(null);
+                }}
+              />
+            </>
+          ) : (
+            <LocatorMenuItem
+              label="Add Locator"
+              onClick={() => {
+                addLocator(locatorMenu.timeSec);
+                setLocatorMenu(null);
+              }}
+            />
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function LocatorMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        background: "none",
+        border: "none",
+        color: "#ddd",
+        fontSize: 11,
+        padding: "6px 12px",
+        cursor: "pointer",
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#333"; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+    >
+      {label}
+    </button>
   );
 }

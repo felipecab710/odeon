@@ -5,9 +5,11 @@ import { create } from "zustand";
 import type { DeckMix } from "../lib/deckMixEngine";
 import type { TrackAutomationState } from "./studioAutomationStore";
 import type { SetCard } from "./setBuilderStore";
+import type { SetLocator } from "./setLocatorStore";
 import { useStudioAutomationStore } from "./studioAutomationStore";
 import { useStudioDeckStore } from "./studioDeckStore";
-import { useSetBuilderStore } from "./setBuilderStore";
+import { getActiveUserSet, useSetBuilderStore } from "./setBuilderStore";
+import { useSetLocatorStore } from "./setLocatorStore";
 
 const MAX_HISTORY = 80;
 
@@ -15,6 +17,7 @@ export interface UndoSnapshot {
   automation: Record<number, TrackAutomationState>;
   deckMixes: Record<number, DeckMix>;
   setCards: SetCard[];
+  locators: SetLocator[];
 }
 
 let restoring = false;
@@ -31,11 +34,13 @@ function snapshotsEqual(a: UndoSnapshot, b: UndoSnapshot): boolean {
 function createSnapshot(): UndoSnapshot {
   const { tracks } = useStudioAutomationStore.getState();
   const { mixes } = useStudioDeckStore.getState();
-  const { cards } = useSetBuilderStore.getState();
+  const setState = useSetBuilderStore.getState();
+  const cards = getActiveUserSet(setState).cards;
   return {
     automation: clone(tracks),
     deckMixes: clone(mixes),
     setCards: clone(cards),
+    locators: clone(useSetLocatorStore.getState().locators),
   };
 }
 
@@ -43,7 +48,14 @@ function applySnapshot(snapshot: UndoSnapshot) {
   restoring = true;
   useStudioAutomationStore.setState({ tracks: clone(snapshot.automation) });
   useStudioDeckStore.getState().setMixes(clone(snapshot.deckMixes));
-  useSetBuilderStore.setState({ cards: clone(snapshot.setCards) });
+  useSetBuilderStore.setState(s => ({
+    sets: s.sets.map(userSet =>
+      userSet.id === s.activeSetId
+        ? { ...userSet, cards: clone(snapshot.setCards) }
+        : userSet,
+    ),
+  }));
+  useSetLocatorStore.getState().replaceLocators(clone(snapshot.locators));
   restoring = false;
 }
 

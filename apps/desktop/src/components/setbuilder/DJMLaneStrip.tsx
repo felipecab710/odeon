@@ -17,10 +17,14 @@ interface Props {
   mix: DeckMix;
   color: string;
   height?: number;
+  selected?: boolean;
+  onSelect?: () => void;
   onChange: (mix: DeckMix) => void;
 }
 
-export function DJMLaneStrip({ index, entryId, mix, color, height = LANE_HEIGHT, onChange }: Props) {
+export function DJMLaneStrip({
+  index, entryId, mix, color, height = LANE_HEIGHT, selected, onSelect, onChange,
+}: Props) {
   const trackId = setTrackId(entryId);
   const meters = useEngineStore(s => s.trackStates[trackId]);
   const expanded = useStudioAutomationStore(s => s.tracks[index]?.expanded ?? false);
@@ -46,12 +50,17 @@ export function DJMLaneStrip({ index, entryId, mix, color, height = LANE_HEIGHT,
   const patch = (p: Partial<DeckMix>) => onChange({ ...mix, ...p });
 
   return (
-    <div style={{
-      height,
-      padding: "4px 6px",
-      display: "flex", gap: 4,
-      background: STUDIO_SIDEBAR,
-    }}>
+    <div
+      onClick={() => onSelect?.()}
+      style={{
+        height,
+        padding: "4px 6px",
+        display: "flex", gap: 4,
+        background: STUDIO_SIDEBAR,
+        cursor: onSelect ? "pointer" : undefined,
+        boxShadow: selected ? `inset 0 0 0 2px ${color}` : undefined,
+      }}
+    >
       {/* Left controls */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>

@@ -5,8 +5,9 @@
  */
 import { useEffect, useState, useCallback } from "react";
 import { useSelectStore } from "../../stores/selectStore";
-import { apiClient, type TrackAnalysisData } from "../../lib/apiClient";
-import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { apiClient, type StemJobData, type StemPathsData, type TrackAnalysisData } from "../../lib/apiClient";
+import { getCachedWaveform, loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { pauseSelectStemPreview, playSelectStemFile } from "../../lib/useSelectEngineSync";
 import { ColoredWaveformCanvas } from "./ColoredWaveformCanvas";
 import { FieldTooltip, FIELD_TOOLTIPS } from "./FieldTooltip";
 import type { CatalogEntry, CatalogMarker, MarkerType, CreateMarkerRequest } from "@odeon/shared";
@@ -44,6 +45,15 @@ function formatDuration(s?: number | null): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60).toString().padStart(2, "0");
   return `${m}:${sec}`;
+}
+
+function stemStatusLabel(job: StemJobData | null, stemCount: number): string {
+  if (!job) return stemCount > 0 ? `Ready (${stemCount} stems)` : "Not separated";
+  if (job.status === "queued") return "Queued…";
+  if (job.status === "running") return "Separating…";
+  if (job.status === "completed") return `Ready (${stemCount || 4} stems)`;
+  if (job.status === "failed") return job.last_error ? `Failed — ${job.last_error}` : "Failed";
+  return "Not separated";
 }
 
 function fileFormat(entry: CatalogEntry): string {
@@ -260,15 +270,52 @@ const WAVEFORM_W = 248;
 const WAVEFORM_H = 72;
 
 export function TrackProfilePanel() {
-  const { selectedId, entries, updateEntryTags } = useSelectStore();
+  const { selectedId, entries, updateEntryTags, loadStemsSummary, ensurePolling } = useSelectStore();
   const [entry, setEntry] = useState<CatalogEntry | null>(null);
   const [cache, setCache] = useState<WaveformCache | null>(null);
   const [markers, setMarkers] = useState<CatalogMarker[]>([]);
   const [analysis, setAnalysis] = useState<TrackAnalysisData | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [stemJob, setStemJob] = useState<StemJobData | null>(null);
+  const [stemCount, setStemCount] = useState(0);
+  const [stemPaths, setStemPaths] = useState<StemPathsData | null>(null);
+  const [separating, setSeparating] = useState(false);
+  const [playingStem, setPlayingStem] = useState<string | null>(null);
+  const [stemPlayError, setStemPlayError] = useState<string | null>(null);
+
+  const refreshStemState = useCallback(async (entryId: string) => {
+    let job: StemJobData | null = null;
+    let count = 0;
+    let paths: StemPathsData | null = null;
+    try {
+      job = await apiClient.select.getStemJob(entryId);
+    } catch {
+      job = null;
+    }
+    try {
+      const stems = await apiClient.select.getStems(entryId);
+      paths = stems;
+      count = [stems.vocals_path, stems.drums_path, stems.bass_path, stems.other_path]
+        .filter(Boolean).length;
+    } catch {
+      count = 0;
+      paths = null;
+    }
+    setStemJob(job);
+    setStemCount(count);
+    setStemPaths(paths);
+    return job;
+  }, []);
 
   useEffect(() => {
-    if (!selectedId) { setEntry(null); setCache(null); setMarkers([]); return; }
+    if (!selectedId) {
+      setEntry(null);
+      setCache(null);
+      setMarkers([]);
+      setStemJob(null);
+      setStemCount(0);
+      return;
+    }
     const e = entries.find(e => e.id === selectedId) ?? null;
     setEntry(e);
     setCache(null);
@@ -279,14 +326,29 @@ export function TrackProfilePanel() {
     if (e) {
       apiClient.select.listMarkers(e.id).then(setMarkers).catch(() => {});
       apiClient.select.getAnalysis(e.id).then(r => setAnalysis(r.analysis)).catch(() => setAnalysis(null));
+      refreshStemState(e.id).catch(() => {});
     }
-  }, [selectedId, entries]);
+  }, [selectedId, entries, refreshStemState]);
+
+  useEffect(() => {
+    if (!entry) return;
+    if (stemJob?.status !== "queued" && stemJob?.status !== "running") return;
+    const timer = window.setInterval(() => {
+      refreshStemState(entry.id).catch(() => {});
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [entry, stemJob?.status, refreshStemState]);
 
   // Load waveform cache when entry is ready
   useEffect(() => {
     if (!entry?.file_path || entry.status !== "ready") return;
+    const instant = getCachedWaveform(entry.file_path);
+    if (instant) {
+      setCache(instant);
+      return;
+    }
     loadWaveformCache(entry.file_path, entry.waveform_cache_path, entry.id).then(c => setCache(c)).catch(() => {});
-  }, [entry?.file_path, entry?.status]);
+  }, [entry?.file_path, entry?.status, entry?.waveform_cache_path, entry?.id]);
 
   const handleAddMarker = useCallback(async (req: CreateMarkerRequest) => {
     if (!entry) return;
@@ -443,6 +505,104 @@ export function TrackProfilePanel() {
           }}
         >
           {analyzing ? "Analyzing…" : "Run AI Analysis"}
+        </button>
+
+        <SectionHeader>STEMS</SectionHeader>
+        <MetaRow label="Status" value={stemStatusLabel(stemJob, stemCount)} />
+        {stemCount > 0 && stemPaths?.vocals_path && (
+          <div style={{ marginTop: 6, marginBottom: 6 }}>
+            <div style={{ color: "#555", fontSize: 9, marginBottom: 4, wordBreak: "break-all" }}>
+              {stemPaths.vocals_path.replace(/\/[^/]+\.wav$/, "/")}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              {(["vocals", "drums", "bass", "other"] as const).map(stem => {
+                const hasStem = Boolean(stemPaths[`${stem}_path` as keyof StemPathsData]);
+                const active = playingStem === stem;
+                return (
+                  <button
+                    key={stem}
+                    disabled={!hasStem}
+                    onClick={async () => {
+                      if (!entry || !hasStem) return;
+                      const stemPath = stemPaths[`${stem}_path` as keyof StemPathsData];
+                      if (!stemPath) return;
+                      if (active) {
+                        await pauseSelectStemPreview();
+                        setPlayingStem(null);
+                        return;
+                      }
+                      setStemPlayError(null);
+                      try {
+                        const label = `${stem} — ${entry.title || entry.file_name}`;
+                        await playSelectStemFile(stemPath, label, stem);
+                        setPlayingStem(stem);
+                      } catch (err) {
+                        setPlayingStem(null);
+                        setStemPlayError(err instanceof Error ? err.message : "Playback failed");
+                      }
+                    }}
+                    style={{
+                      padding: "5px 6px",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      textTransform: "capitalize",
+                      background: active ? "#2d5a2d" : "#1a2e1a",
+                      border: `1px solid ${active ? "#4ade80" : "#2d5a2d"}`,
+                      color: hasStem ? (active ? "#4ade80" : "#8fd9a0") : "#444",
+                      borderRadius: 4,
+                      cursor: hasStem ? "pointer" : "default",
+                    }}
+                  >
+                    {active ? `■ ${stem}` : `▶ ${stem}`}
+                  </button>
+                );
+              })}
+            </div>
+            {stemPlayError && (
+              <div style={{ marginTop: 4, color: "#f87171", fontSize: 9 }}>{stemPlayError}</div>
+            )}
+          </div>
+        )}
+        <button
+          disabled={
+            separating
+            || entry.status !== "ready"
+            || stemJob?.status === "queued"
+            || stemJob?.status === "running"
+          }
+          onClick={async () => {
+            if (!entry) return;
+            setSeparating(true);
+            try {
+              const result = await apiClient.select.separate(entry.id);
+              if (result.job) setStemJob(result.job);
+              else setStemJob({ entry_id: entry.id, status: "queued" });
+              await refreshStemState(entry.id);
+              await loadStemsSummary();
+              ensurePolling();
+            } catch {
+              setStemJob({ entry_id: entry.id, status: "failed", last_error: "Could not start separation" });
+            } finally {
+              setSeparating(false);
+            }
+          }}
+          style={{
+            marginTop: 6,
+            background: "#1a2e1a",
+            border: "1px solid #2d5a2d",
+            borderRadius: 4,
+            padding: "4px 8px",
+            color: separating || stemJob?.status === "queued" || stemJob?.status === "running" ? "#444" : "#4ade80",
+            fontSize: 10,
+            cursor: separating || stemJob?.status === "queued" || stemJob?.status === "running" ? "default" : "pointer",
+            width: "100%",
+          }}
+        >
+          {separating || stemJob?.status === "queued" || stemJob?.status === "running"
+            ? "Separating…"
+            : stemCount > 0 || stemJob?.status === "completed"
+              ? "Re-separate Stems"
+              : "Separate Stems"}
         </button>
 
         {/* Tags */}

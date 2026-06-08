@@ -328,6 +328,151 @@ std::string OdeonSession::soloTrack(const std::string& trackId, bool soloed) {
     return jsonOk();
 }
 
+std::string OdeonSession::stackRouteId(const std::string& stackId, const std::string& layerId) const {
+    return "stack:" + stackId + ":" + layerId;
+}
+
+void OdeonSession::registerSoloGroup(const std::string& groupId,
+                                     const std::vector<std::string>& trackIds) {
+    soloGroups_[groupId] = trackIds;
+}
+
+void OdeonSession::unregisterSoloGroup(const std::string& groupId) {
+    soloGroups_.erase(groupId);
+}
+
+std::string OdeonSession::exclusiveSolo(const juce::var& trackIdsVar,
+                                          const std::string& soloTrackId) {
+    if (!trackIdsVar.isArray())
+        return jsonErr("trackIds must be an array");
+
+    bool foundSolo = false;
+    std::lock_guard<std::mutex> lk(routesMutex_);
+
+    for (const auto& item : *trackIdsVar.getArray()) {
+        const std::string trackId = item.toString().toStdString();
+        auto* route = findRoute(trackId);
+        if (!route || !route->track) continue;
+
+        const bool isSolo = trackId == soloTrackId;
+        // Pro Tools / Ableton exclusive solo — one route heard, shared transport clock.
+        route->track->setMute(false);
+        route->track->setSolo(isSolo);
+        route->mix.muted  = false;
+        route->mix.soloed = isSolo;
+        if (isSolo) foundSolo = true;
+    }
+
+    if (!foundSolo)
+        return jsonErr("soloTrackId not in group: " + soloTrackId);
+
+    return jsonOk("{\"soloTrackId\":" + jsonQuote(soloTrackId) + "}");
+}
+
+std::string OdeonSession::createStemStack(const std::string& stackId, const juce::var& layersVar) {
+    if (stackId.empty())
+        return jsonErr("stackId required");
+    if (!layersVar.isArray())
+        return jsonErr("layers must be an array");
+
+    disposeStemStack(stackId);
+
+    std::vector<std::string> group;
+    int loaded = 0;
+
+    for (const auto& item : *layersVar.getArray()) {
+        const std::string layerId = item.getProperty("layerId", juce::String()).toString().toStdString();
+        const std::string filePath = item.getProperty("filePath", juce::String()).toString().toStdString();
+        const std::string name = item.getProperty("name", juce::String(layerId)).toString().toStdString();
+        const std::string role = item.getProperty("role", juce::String("reference_stem")).toString().toStdString();
+        const std::string stemType = item.getProperty("stemType", juce::String(layerId)).toString().toStdString();
+        if (layerId.empty() || filePath.empty())
+            continue;
+
+        juce::File file(filePath);
+        if (!file.existsAsFile())
+            continue;
+
+        const std::string trackId = stackRouteId(stackId, layerId);
+        if (findRoute(trackId) == nullptr) {
+            const std::string created = createTrack(trackId, name, role, stemType);
+            if (created.find("\"ok\":false") != std::string::npos)
+                continue;
+        }
+
+        const std::string added = addClip(trackId, "", filePath, 0.0);
+        if (added.find("\"ok\":false") != std::string::npos)
+            continue;
+
+        {
+            std::lock_guard<std::mutex> lk(routesMutex_);
+            if (auto* route = findRoute(trackId)) {
+                if (route->track) {
+                    route->track->setMute(false);
+                    route->track->setSolo(false);
+                    if (auto* vp = route->track->getVolumePlugin())
+                        vp->setVolumeDb(0.0f);
+                }
+            }
+        }
+
+        group.push_back(trackId);
+        ++loaded;
+    }
+
+    if (loaded == 0)
+        return jsonErr("No stem stack layers could be loaded");
+
+    registerSoloGroup(stackId, group);
+
+    if (edit_)
+        edit_->dispatchPendingUpdatesSynchronously();
+
+    return jsonOk("{\"stackId\":" + jsonQuote(stackId) +
+                  ",\"loadedLayers\":" + std::to_string(loaded) + "}");
+}
+
+std::string OdeonSession::disposeStemStack(const std::string& stackId) {
+    unregisterSoloGroup(stackId);
+
+    std::vector<std::string> toRemove;
+    {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        const std::string prefix = "stack:" + stackId + ":";
+        for (const auto& [trackId, _] : routes_)
+            if (trackId.rfind(prefix, 0) == 0)
+                toRemove.push_back(trackId);
+    }
+
+    for (const auto& trackId : toRemove)
+        removeTrack(trackId);
+
+    return jsonOk("{\"removed\":" + std::to_string(toRemove.size()) + "}");
+}
+
+std::string OdeonSession::exclusiveSoloStack(const std::string& stackId,
+                                              const std::string& layerId) {
+    auto it = soloGroups_.find(stackId);
+    if (it == soloGroups_.end())
+        return jsonErr("Unknown stem stack: " + stackId);
+
+    std::string soloTrackId;
+    if (layerId == "full" && stackId.rfind("deck:", 0) == 0)
+        soloTrackId = stackId;
+    else if (layerId == "full")
+        soloTrackId = stackRouteId(stackId, "full");
+    else if (stackId.rfind("deck:", 0) == 0)
+        soloTrackId = stackId + ":stem:" + layerId;
+    else
+        soloTrackId = stackRouteId(stackId, layerId);
+
+    juce::Array<juce::var> ids;
+    for (const auto& id : it->second)
+        ids.add(juce::var(id));
+
+    return exclusiveSolo(juce::var(ids), soloTrackId);
+}
+
 std::string OdeonSession::setMasterVolume(float volumeDb) {
     if (!edit_) return jsonErr("No active session.");
     if (auto vp = edit_->getMasterVolumePlugin())
@@ -391,7 +536,51 @@ te::WaveAudioClip* OdeonSession::findDeckWaveClip(OdeonRoute* route, const juce:
     return nullptr;
 }
 
+void OdeonSession::clearDeckStemLayers(OdeonDjDeck& deck) {
+    unregisterSoloGroup(deck.trackId);
+    for (const auto& layer : deck.stemLayers) {
+        if (!layer.trackId.empty())
+            removeTrack(layer.trackId);
+    }
+    deck.stemLayers.clear();
+    deck.stemLayersReady = false;
+    deck.activeStemLayer = "full";
+}
+
+std::string OdeonSession::applyDeckStemSoloState(OdeonDjDeck& deck) {
+    if (!deck.stemLayersReady)
+        return jsonOk();
+    if (deck.fullMixClip) deck.fullMixClip->setMuted(false);
+    for (auto& layer : deck.stemLayers)
+        if (layer.waveClip) layer.waveClip->setMuted(false);
+    return exclusiveSoloStack(deck.trackId, deck.activeStemLayer);
+}
+
+void OdeonSession::enableStemLayerParallelPlayback(OdeonDjDeck& deck, bool dispatchGraph) {
+    auto anchorClip = [&](te::WaveAudioClip* clip) {
+        if (!clip) return;
+        const double dur = clip->getPosition().getLength().inSeconds();
+        te::ClipPosition pos;
+        pos.time = tracktion::TimeRange(
+            tracktion::TimePosition::fromSeconds(0.0),
+            tracktion::TimeDuration::fromSeconds(dur));
+        pos.offset = tracktion::TimeDuration::fromSeconds(0.0);
+        clip->setPosition(pos);
+        clip->setSpeedRatio(usesDirectTransportDeckMode() ? deck.player.rate : 1.0);
+        clip->setMuted(false);
+    };
+
+    anchorClip(deck.fullMixClip);
+    for (auto& layer : deck.stemLayers)
+        anchorClip(layer.waveClip);
+
+    if (dispatchGraph && edit_)
+        edit_->dispatchPendingUpdatesSynchronously();
+}
+
 void OdeonSession::clearDeckClips(OdeonDjDeck& deck) {
+    clearDeckStemLayers(deck);
+
     OdeonRoute* route = nullptr;
     {
         std::lock_guard<std::mutex> lk(routesMutex_);
@@ -404,6 +593,8 @@ void OdeonSession::clearDeckClips(OdeonDjDeck& deck) {
         route->clips.clear();
     }
     deck.waveClip = nullptr;
+    deck.fullMixClip = nullptr;
+    deck.fullMixFilePath.clear();
     deck.loaded = false;
     deck.filePath.clear();
     deck.clipId.clear();
@@ -496,6 +687,9 @@ std::string OdeonSession::loadDeck(int deckIndex, const std::string& filePath,
         deck.player.rate            = 1.0;
         deck.player.isPlaying       = false;
         deck.player.localPositionSeconds = 0.0;
+        deck.fullMixFilePath = filePath;
+        deck.fullMixClip     = deck.waveClip;
+        deck.activeStemLayer = "full";
 
         if (transport_)
             transport_->setPosition(tracktion::TimePosition::fromSeconds(0.0));
@@ -582,13 +776,14 @@ std::string OdeonSession::deckSeek(int deckIndex, double localSeconds) {
         return jsonErr("Invalid deck index.");
 
     auto& deck = djDecks_[(size_t) deckIndex];
-    if (!deck.loaded || !deck.waveClip)
+    if (!deck.loaded)
         return jsonErr("Deck not loaded.");
 
     deck.player.seek(localSeconds, deck.duration);
 
     if (usesDirectTransportDeckMode()) {
-        syncDeckClipToPlayer(deck);
+        if (!deck.stemLayersReady)
+            syncDeckClipToPlayer(deck);
         if (transport_)
             transport_->setPosition(
                 tracktion::TimePosition::fromSeconds(deck.player.localPositionSeconds));
@@ -607,13 +802,16 @@ std::string OdeonSession::deckPlay(int deckIndex) {
         return jsonErr("Invalid deck index.");
 
     auto& deck = djDecks_[(size_t) deckIndex];
-    if (!deck.loaded || !deck.waveClip)
+    if (!deck.loaded)
         return jsonErr("Deck not loaded.");
 
     deck.player.isPlaying = true;
 
     if (usesDirectTransportDeckMode()) {
-        syncDeckClipToPlayer(deck);
+        if (deck.stemLayersReady)
+            applyDeckStemSoloState(deck);
+        else
+            syncDeckClipToPlayer(deck);
         if (transport_) {
             transport_->ensureContextAllocated();
             transport_->setPosition(
@@ -647,7 +845,8 @@ std::string OdeonSession::deckPause(int deckIndex) {
     if (usesDirectTransportDeckMode()) {
         if (transport_)
             transport_->stop(false, false);
-        if (deck.waveClip)
+        // Stem stack: leave clips unmuted + solo state intact (DAW pause — no route teardown).
+        if (!deck.stemLayersReady && deck.waveClip)
             deck.waveClip->setMuted(true);
     } else {
         syncDeckClipToPlayer(deck);
@@ -936,6 +1135,176 @@ std::string OdeonSession::deckSetLoop(int deckIndex, bool enabled, double inSeco
     deck.loop.inSeconds  = std::max(0.0, inSeconds);
     deck.loop.outSeconds = std::clamp(outSeconds, deck.loop.inSeconds + 0.1, deck.duration);
     return jsonOk();
+}
+
+std::string OdeonSession::deckLoadStemLayers(int deckIndex, const juce::var& layersVar) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+    if (!layersVar.isArray())
+        return jsonErr("layers must be an array");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded)
+        return jsonErr("Load the full mix on the deck before loading stem layers.");
+
+    clearDeckStemLayers(deck);
+
+    const bool wasPlaying = deck.player.isPlaying;
+    const double savedPos = deck.player.localPositionSeconds;
+
+    int loadedCount = 0;
+    for (const auto& item : *layersVar.getArray()) {
+        const std::string layerId = item.getProperty("layerId", juce::String()).toString().toStdString();
+        const std::string filePath = item.getProperty("filePath", juce::String()).toString().toStdString();
+        const std::string name = item.getProperty("name", juce::String(layerId)).toString().toStdString();
+        if (layerId.empty() || filePath.empty() || layerId == "full")
+            continue;
+
+        juce::File file(filePath);
+        if (!file.existsAsFile())
+            continue;
+
+        te::AudioFile audioFile(*engine_, file);
+        if (!audioFile.isValid())
+            continue;
+
+        const std::string trackId = deck.trackId + ":stem:" + layerId;
+        if (findRoute(trackId) == nullptr) {
+            const std::string created = createTrack(trackId, name, "deck", layerId);
+            if (created.find("\"ok\":false") != std::string::npos)
+                continue;
+        }
+
+        const std::string added = addClip(trackId, "", filePath, 0.0);
+        if (added.find("\"ok\":false") != std::string::npos)
+            continue;
+
+        OdeonRoute* route = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(routesMutex_);
+            route = findRoute(trackId);
+        }
+        te::WaveAudioClip* clip = findDeckWaveClip(route, file);
+        if (!clip)
+            continue;
+
+        DeckStemLayer layer;
+        layer.layerId   = layerId;
+        layer.trackId   = trackId;
+        layer.filePath  = filePath;
+        layer.duration  = audioFile.getLength();
+        layer.loaded    = true;
+        layer.waveClip  = clip;
+        deck.stemLayers.push_back(layer);
+
+        if (route && route->track) {
+            route->track->setMute(false);
+            route->track->setSolo(false);
+        }
+        clip->setMuted(false);
+
+        ++loadedCount;
+    }
+
+    if (loadedCount == 0)
+        return jsonErr("No stem layers could be loaded");
+
+    deck.stemLayersReady = true;
+    deck.activeStemLayer = "full";
+
+    std::vector<std::string> soloGroup = { deck.trackId };
+    for (const auto& layer : deck.stemLayers)
+        soloGroup.push_back(layer.trackId);
+    registerSoloGroup(deck.trackId, soloGroup);
+
+    enableStemLayerParallelPlayback(deck, true);
+    exclusiveSoloStack(deck.trackId, "full");
+    deck.waveClip = deck.fullMixClip;
+    deck.filePath = deck.fullMixFilePath;
+    deck.player.localPositionSeconds = savedPos;
+
+    if (wasPlaying) {
+        if (transport_) {
+            transport_->ensureContextAllocated();
+            transport_->setPosition(tracktion::TimePosition::fromSeconds(savedPos));
+            transport_->play(false);
+        }
+        deck.player.isPlaying = true;
+    }
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"loadedLayers\":" + std::to_string(loadedCount) +
+                  ",\"activeLayer\":\"full\"}");
+}
+
+std::string OdeonSession::deckSetStemLayer(int deckIndex, const std::string& layerId) {
+    if (!djMode_)
+        return jsonErr("Not in DJ session mode.");
+    if (deckIndex < 0 || deckIndex >= numDjDecks_)
+        return jsonErr("Invalid deck index.");
+
+    auto& deck = djDecks_[(size_t) deckIndex];
+    if (!deck.loaded)
+        return jsonErr("Deck not loaded.");
+
+    if (deck.stemLayersReady) {
+        if (layerId != "full") {
+            bool found = false;
+            for (const auto& layer : deck.stemLayers) {
+                if (layer.loaded && layer.layerId == layerId) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return jsonErr("Stem layer not found: " + layerId);
+        } else if (!deck.fullMixClip) {
+            return jsonErr("Full mix clip not available.");
+        }
+
+        const bool wasPlaying = deck.player.isPlaying;
+        const double pinnedPos = wasPlaying && transport_
+            ? positionSeconds()
+            : deck.player.localPositionSeconds;
+
+        deck.activeStemLayer = layerId;
+        auto soloResult = applyDeckStemSoloState(deck);
+        if (soloResult.find("\"ok\":false") != std::string::npos)
+            return soloResult;
+
+        deck.player.localPositionSeconds = pinnedPos;
+        if (wasPlaying && transport_) {
+            transport_->setPosition(
+                tracktion::TimePosition::fromSeconds(pinnedPos));
+        }
+
+        return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                      ",\"activeLayer\":" + jsonQuote(layerId) +
+                      ",\"localPositionSeconds\":" + std::to_string(pinnedPos) +
+                      ",\"isPlaying\":" + (deck.player.isPlaying ? "true" : "false") + "}");
+    }
+
+    if (layerId == "full") {
+        if (!deck.fullMixClip)
+            return jsonErr("Full mix clip not available.");
+        deck.waveClip = deck.fullMixClip;
+        deck.filePath = deck.fullMixFilePath;
+        deck.duration = deck.fullMixClip->getPosition().getLength().inSeconds();
+    } else {
+        return jsonErr("Stem layers not loaded — call deckLoadStemLayers first.");
+    }
+
+    deck.activeStemLayer = layerId;
+    auto soloResult = exclusiveSoloStack(deck.trackId, layerId);
+    if (soloResult.find("\"ok\":false") != std::string::npos)
+        return soloResult;
+
+    return jsonOk("{\"deckIndex\":" + std::to_string(deckIndex) +
+                  ",\"activeLayer\":" + jsonQuote(layerId) +
+                  ",\"localPositionSeconds\":" + std::to_string(deck.player.localPositionSeconds) +
+                  ",\"isPlaying\":" + (deck.player.isPlaying ? "true" : "false") + "}");
 }
 
 std::string OdeonSession::deckSetSyncMode(int deckIndex, const std::string& mode) {
@@ -1390,7 +1759,14 @@ std::string OdeonSession::setPlaybackEngineSettings(const juce::var& p) {
 // ─────────────────────────────────────────────────────────────────────────
 
 void OdeonSession::syncDeckClipToPlayer(OdeonDjDeck& deck) {
-    if (!deck.waveClip || !deck.loaded) return;
+    if (!deck.loaded) return;
+
+    if (deck.stemLayersReady) {
+        applyDeckStemSoloState(deck);
+        return;
+    }
+
+    if (!deck.waveClip) return;
 
     const double dur = deck.duration > 0.0
                            ? deck.duration
@@ -1398,7 +1774,6 @@ void OdeonSession::syncDeckClipToPlayer(OdeonDjDeck& deck) {
 
     te::ClipPosition pos;
     if (usesDirectTransportDeckMode()) {
-        // DAW-style: clip anchored at timeline 0; transport position = file position.
         pos.time = tracktion::TimeRange(
             tracktion::TimePosition::fromSeconds(0.0),
             tracktion::TimeDuration::fromSeconds(dur));
@@ -1411,7 +1786,6 @@ void OdeonSession::syncDeckClipToPlayer(OdeonDjDeck& deck) {
     }
     pos.offset = tracktion::TimeDuration::fromSeconds(0.0);
     deck.waveClip->setPosition(pos);
-    // Single-deck: tempo on clip only. Multi-deck: software advance + speedRatio 1.
     deck.waveClip->setSpeedRatio(usesDirectTransportDeckMode() ? deck.player.rate : 1.0);
     deck.waveClip->setMuted(!deck.player.isPlaying);
 

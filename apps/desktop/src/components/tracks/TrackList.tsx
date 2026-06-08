@@ -15,6 +15,7 @@ import {
 import { useSelectionStore } from "../../stores/selectionStore";
 import { onLayoutResize } from "../../lib/windowShell";
 import { markZoomActivity } from "../../lib/zoomInteraction";
+import { wheelStepsFromEvent, zoomMultiplierFromSteps } from "../../lib/timelineViewportZoom";
 import type { OdeonTrack } from "@odeon/shared";
 import type { PendingTrack } from "../../stores/projectStore";
 
@@ -202,8 +203,9 @@ export function TrackList() {
   const vScrollRef  = useRef<HTMLDivElement>(null);
   const rulerRef    = useRef<HTMLDivElement>(null);
   const cursorRaf   = useRef<number | null>(null);
-  const zoomRaf     = useRef<number | null>(null);
-  const zoomPending = useRef<{ factor: number; anchorX: number } | null>(null);
+  const zoomRaf        = useRef<number | null>(null);
+  const wheelStepsAccum = useRef(0);
+  const wheelAnchorRef  = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const maxDuration  = sessionDurationSeconds(project?.tracks ?? []);
@@ -242,26 +244,21 @@ export function TrackList() {
 
   const flushZoom = useCallback(() => {
     zoomRaf.current = null;
-    const pending = zoomPending.current;
-    if (!pending) return;
-    zoomPending.current = null;
+    const steps = wheelStepsAccum.current;
+    wheelStepsAccum.current = 0;
+    if (Math.abs(steps) < 1e-6) return;
     markZoomActivity();
-    zoomAt(pending.factor, pending.anchorX);
+    zoomAt(zoomMultiplierFromSteps(steps), wheelAnchorRef.current);
   }, [zoomAt]);
 
   const handleTimelineWheel = useCallback((e: React.WheelEvent, viewportEl: HTMLElement) => {
     const rect = viewportEl.getBoundingClientRect();
-    const anchorX = scrollLeft + (e.clientX - rect.left);
+    const anchorViewportX = e.clientX - rect.left;
 
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      const step = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      if (zoomPending.current) {
-        zoomPending.current.factor *= step;
-        zoomPending.current.anchorX = anchorX;
-      } else {
-        zoomPending.current = { factor: step, anchorX };
-      }
+      wheelAnchorRef.current = anchorViewportX;
+      wheelStepsAccum.current += wheelStepsFromEvent(e);
       if (zoomRaf.current === null) {
         zoomRaf.current = requestAnimationFrame(flushZoom);
       }

@@ -71,6 +71,12 @@ public:
     std::string setTrackPan(const std::string& trackId, float pan);
     std::string muteTrack(const std::string& trackId, bool muted);
     std::string soloTrack(const std::string& trackId, bool soloed);
+    /** Pro Tools / Ableton-style exclusive solo within a route group (one RPC, no graph rebuild). */
+    std::string exclusiveSolo(const juce::var& trackIds, const std::string& soloTrackId);
+    /** DAW stem stack: parallel routes at t=0, registered for exclusive solo. */
+    std::string createStemStack(const std::string& stackId, const juce::var& layers);
+    std::string disposeStemStack(const std::string& stackId);
+    std::string exclusiveSoloStack(const std::string& stackId, const std::string& layerId);
     std::string setMasterVolume(float volumeDb);
     std::string getTrackMeters();
 
@@ -108,6 +114,10 @@ public:
     std::string deckClearHotcue(int deckIndex, int slot);
     std::string deckSetLoop(int deckIndex, bool enabled, double inSeconds, double outSeconds);
     std::string deckSetSyncMode(int deckIndex, const std::string& mode);
+    /** Pre-load stem WAVs on parallel routes for instant layer switching. */
+    std::string deckLoadStemLayers(int deckIndex, const juce::var& layers);
+    /** Instant layer switch — mute/unmute only (Mixxx/Pioneer stem parity). */
+    std::string deckSetStemLayer(int deckIndex, const std::string& layerId);
 
     // ── Render ──────────────────────────────────────────────────────────────────
     std::string renderMix(const std::string& outputFilePath);
@@ -139,6 +149,13 @@ private:
     float       crossfaderWeightDb(CfOrientation orient) const;
     void        applyDjRouteMix(OdeonRoute& route);
     void        clearDeckClips(OdeonDjDeck& deck);
+    void        clearDeckStemLayers(OdeonDjDeck& deck);
+    void        enableStemLayerParallelPlayback(OdeonDjDeck& deck, bool dispatchGraph);
+    /** Stem stack: all clips play in parallel; route solo selects the audible layer. */
+    std::string applyDeckStemSoloState(OdeonDjDeck& deck);
+    std::string stackRouteId(const std::string& stackId, const std::string& layerId) const;
+    void        registerSoloGroup(const std::string& groupId, const std::vector<std::string>& trackIds);
+    void        unregisterSoloGroup(const std::string& groupId);
     te::WaveAudioClip* findDeckWaveClip(OdeonRoute* route, const juce::File& expectedFile);
     void        syncDeckClipToPlayer(OdeonDjDeck& deck);
     void        advanceDeckPlayers(double deltaSeconds);
@@ -186,6 +203,7 @@ private:
     std::array<OdeonDjDeck, 4> djDecks_{};
     float crossfaderPos_ = 0.5f;
     int   syncLeaderDeck_ = 0;
+    std::map<std::string, std::vector<std::string>> soloGroups_;
 
     static constexpr int kSchemaVersion = 1;
 };

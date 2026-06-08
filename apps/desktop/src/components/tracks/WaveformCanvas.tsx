@@ -4,8 +4,8 @@
  * Scroll model: tiles of 512px are rendered and cached; scroll blits from cache
  * via drawImage — no per-pixel repaint on scroll change.
  *
- * Zoom gesture: CSS scaleX stretch of last bitmap (zero repaint, 60fps).
- * Zoom end: stale tiles cleared, visible tiles repainted at snapped LOD.
+ * Zoom gesture: Ableton camera — no repaint during pinch; stretch cached tiles
+ * via parent CSS scale. Zoom end: invalidate tiles and rebuild at exact LOD.
  */
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { TrackAnalysis } from "@odeon/shared";
@@ -18,17 +18,12 @@ import { paintWaveform } from "../../lib/waveformEngine";
 import { isZooming } from "../../lib/zoomInteraction";
 import { scheduleWavePaint } from "../../lib/wavePaintScheduler";
 
-interface PaintSnapshot {
-  pps: number;
-  width: number;
-  renderW: number;
-  offsetX: number;
-}
-
 export const WaveformCanvas = memo(function WaveformCanvas({
   trackId,
   audioPath,
   analysis,
+  cachePath,
+  entryId,
   width,
   height,
   pixelsPerSecond,
@@ -37,10 +32,16 @@ export const WaveformCanvas = memo(function WaveformCanvas({
   viewportOffsetX = 0,
   viewportWidth,
   freezeRender = false,
+  waveLayout = "stereo",
+  waveFill,
+  waveOutline,
+  showCenterLine,
 }: {
   trackId: string;
   audioPath: string;
   analysis?: TrackAnalysis | null;
+  cachePath?: string | null;
+  entryId?: string | null;
   width: number;
   height: number;
   pixelsPerSecond: number;
@@ -49,16 +50,18 @@ export const WaveformCanvas = memo(function WaveformCanvas({
   viewportOffsetX?: number;
   viewportWidth?: number;
   freezeRender?: boolean;
+  waveLayout?: "stereo" | "mirrored";
+  waveFill?: string;
+  waveOutline?: string;
+  showCenterLine?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const snapshotRef = useRef<PaintSnapshot | null>(null);
-  const { cache } = useWaveformCache(audioPath, analysis);
+  const { cache } = useWaveformCache(audioPath, analysis, { cachePath, entryId });
 
   const renderW = viewportWidth ?? width;
   const offsetX = Math.max(0, Math.min(viewportOffsetX, width - 1));
   const [zoomEpoch, setZoomEpoch] = useState(0);
 
-  // Clear tile cache on zoom-end so tiles repaint at new pps
   useEffect(() => {
     const onEnd = () => {
       invalidateWaveformBitmap(trackId);
@@ -67,20 +70,6 @@ export const WaveformCanvas = memo(function WaveformCanvas({
     window.addEventListener("odeon:zoom-end", onEnd);
     return () => window.removeEventListener("odeon:zoom-end", onEnd);
   }, [trackId]);
-
-  const applyZoomScale = useCallback((canvas: HTMLCanvasElement) => {
-    const snap = snapshotRef.current;
-    if (!snap || snap.pps <= 0 || snap.width <= 0) return false;
-
-    const scaleX = (pixelsPerSecond / snap.pps) * (width / snap.width);
-    if (!Number.isFinite(scaleX) || Math.abs(scaleX - 1) < 0.001) return false;
-
-    canvas.style.width = `${renderW}px`;
-    canvas.style.height = "100%";
-    canvas.style.transformOrigin = "left center";
-    canvas.style.transform = `scaleX(${scaleX})`;
-    return true;
-  }, [pixelsPerSecond, width, renderW]);
 
   const paint = useCallback((fastMode: boolean) => {
     const canvas = canvasRef.current;
@@ -99,57 +88,43 @@ export const WaveformCanvas = memo(function WaveformCanvas({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
+    const key = {
+      trackId,
+      width,
+      height,
+      pps: pixelsPerSecond,
+      clipStartSec,
+      clipBgColor,
+      waveLayout,
+      waveFill,
+      waveOutline,
+      showCenterLine,
+    };
+
     if (fastMode) {
-      // During zoom: direct paint at coarsest LOD
       paintWaveform(ctx, cache, {
-        trackId,
-        width,
-        height,
-        pps: pixelsPerSecond,
-        clipStartSec,
-        clipBgColor,
+        ...key,
         offsetX,
         renderWidth: renderW,
         fastMode: true,
       }, renderW, height);
     } else {
-      // Scroll/normal: blit cached tiles (O(1) per tile if already rendered)
-      blitVisibleTiles(ctx, cache, {
-        trackId,
-        width,
-        height,
-        pps: pixelsPerSecond,
-        clipStartSec,
-        clipBgColor,
-      }, offsetX, renderW, height);
+      blitVisibleTiles(ctx, cache, key, offsetX, renderW, height);
     }
-
-    snapshotRef.current = { pps: pixelsPerSecond, width, renderW, offsetX };
   }, [
-    cache, renderW, height, trackId, width, pixelsPerSecond,
-    clipStartSec, clipBgColor, offsetX,
+    cache, renderW, height, offsetX,
+    trackId, width, pixelsPerSecond, clipStartSec, clipBgColor,
+    waveLayout, waveFill, waveOutline, showCenterLine,
   ]);
 
   useEffect(() => {
-    if (freezeRender) return;
-
-    if (isZooming()) {
-      const canvas = canvasRef.current;
-      if (canvas && snapshotRef.current) {
-        applyZoomScale(canvas);
-      } else {
-        paint(true);
-      }
-      return;
-    }
-
+    if (freezeRender || isZooming()) return;
     scheduleWavePaint(() => paint(false));
   }, [
-    freezeRender, paint, applyZoomScale,
-    // Note: offsetX intentionally included so scroll does trigger a blit,
-    // but blitVisibleTiles reads from tile cache — no per-pixel work on cache hit.
+    freezeRender, paint,
     trackId, cache, width, height, pixelsPerSecond,
     clipStartSec, clipBgColor, offsetX, renderW, zoomEpoch,
+    waveLayout, waveFill, waveOutline, showCenterLine,
   ]);
 
   if (!cache) {

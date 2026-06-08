@@ -3,9 +3,12 @@ ML pipeline orchestration — embed, separate, analyze, reason, generate.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,18 +17,20 @@ import httpx
 
 from .runpod_client import (
     embed_file, embed_text, is_configured, get_status,
-    separate_file, analyze_file, plan_transition as runpod_plan,
+    analyze_file, plan_transition as runpod_plan,
     generate_bridge as runpod_bridge, generate_riser as runpod_riser,
     download_runpod_file, RUNPOD_URL,
 )
 from ..select.repository import get_entry, list_entries
 from ..db.repository import DB_PATH
+from ..separation.separator import get_separator
 import sqlite3
 
 logger = logging.getLogger(__name__)
 
 STEMS_ROOT = DB_PATH.parent / "stems"
 GENERATED_ROOT = DB_PATH.parent / "generated"
+STEM_JOB_STATUSES = {"queued", "running", "completed", "failed"}
 
 
 def _conn() -> sqlite3.Connection:
@@ -73,6 +78,17 @@ def init_ml_db() -> None:
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS stem_jobs (
+                entry_id    TEXT PRIMARY KEY,
+                status      TEXT NOT NULL,
+                priority    INTEGER NOT NULL DEFAULT 50,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                last_error  TEXT,
+                created_at  TEXT,
+                updated_at  TEXT
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS generated_audio (
                 id          TEXT PRIMARY KEY,
                 entry_id    TEXT,
@@ -83,6 +99,150 @@ def init_ml_db() -> None:
             )
         """)
         conn.commit()
+
+    _reset_stuck_stem_jobs()
+
+
+def _reset_stuck_stem_jobs() -> None:
+    """Jobs left 'running' after a crash/reload get re-queued."""
+    now = _now_iso()
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE stem_jobs
+            SET status = 'queued', last_error = NULL, updated_at = ?
+            WHERE status = 'running'
+            """,
+            (now,),
+        )
+        conn.commit()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_stem_job_status(status: str) -> str:
+    if status not in STEM_JOB_STATUSES:
+        raise ValueError(f"Invalid stem job status: {status}")
+    return status
+
+
+def enqueue_stem_job(entry_id: str, priority: int = 50, force: bool = False) -> Dict[str, Any]:
+    now = _now_iso()
+    priority = max(0, min(100, int(priority)))
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT entry_id, status, priority, attempts, last_error, created_at, updated_at FROM stem_jobs WHERE entry_id = ?",
+            (entry_id,),
+        ).fetchone()
+        if existing and existing["status"] == "completed" and not force:
+            return dict(existing)
+
+        if existing:
+            conn.execute(
+                """
+                UPDATE stem_jobs
+                SET status = ?, priority = ?, last_error = ?, updated_at = ?
+                WHERE entry_id = ?
+                """,
+                ("queued", priority, None, now, entry_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO stem_jobs (entry_id, status, priority, attempts, last_error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (entry_id, "queued", priority, 0, None, now, now),
+            )
+        conn.commit()
+    return get_stem_job(entry_id) or {
+        "entry_id": entry_id,
+        "status": "queued",
+        "priority": priority,
+        "attempts": 0,
+        "last_error": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def update_stem_job(
+    entry_id: str,
+    *,
+    status: str,
+    last_error: Optional[str] = None,
+    increment_attempts: bool = False,
+) -> Optional[Dict[str, Any]]:
+    status = _normalize_stem_job_status(status)
+    now = _now_iso()
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT attempts FROM stem_jobs WHERE entry_id = ?",
+            (entry_id,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                """
+                INSERT INTO stem_jobs (entry_id, status, priority, attempts, last_error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (entry_id, status, 50, 1 if increment_attempts else 0, last_error, now, now),
+            )
+        else:
+            attempts = int(existing["attempts"] or 0) + (1 if increment_attempts else 0)
+            conn.execute(
+                """
+                UPDATE stem_jobs
+                SET status = ?, attempts = ?, last_error = ?, updated_at = ?
+                WHERE entry_id = ?
+                """,
+                (status, attempts, last_error, now, entry_id),
+            )
+        conn.commit()
+    return get_stem_job(entry_id)
+
+
+def get_stem_job(entry_id: str) -> Optional[Dict[str, Any]]:
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT entry_id, status, priority, attempts, last_error, created_at, updated_at
+            FROM stem_jobs
+            WHERE entry_id = ?
+            """,
+            (entry_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_stem_jobs(status: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+    limit = max(1, min(int(limit), 2000))
+    with _conn() as conn:
+        if status:
+            _normalize_stem_job_status(status)
+            rows = conn.execute(
+                """
+                SELECT entry_id, status, priority, attempts, last_error, created_at, updated_at
+                FROM stem_jobs
+                WHERE status = ?
+                ORDER BY priority DESC, updated_at ASC
+                LIMIT ?
+                """,
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT entry_id, status, priority, attempts, last_error, created_at, updated_at
+                FROM stem_jobs
+                ORDER BY priority DESC, updated_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def store_embeddings(
@@ -356,27 +516,120 @@ def get_stems(entry_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-async def separate_entry(entry_id: str) -> Dict[str, Any]:
-    if not is_configured():
-        return {"error": "RUNPOD_URL not configured"}
-    entry = get_entry(entry_id)
-    if not entry or not entry.file_path:
-        return {"error": "entry not found"}
-    result = await separate_file(entry.file_path)
-    if result.get("status") != "ok":
-        return result
-    job_id = result["job_id"]
+def _stem_flags_from_row(r: Dict[str, Any]) -> Dict[str, bool]:
+    return {
+        "vocals": bool(r.get("vocals_path")),
+        "drums": bool(r.get("drums_path")),
+        "bass": bool(r.get("bass_path")),
+        "other": bool(r.get("other_path")),
+    }
+
+
+def get_stems_summary() -> Dict[str, Dict[str, Any]]:
+    """Map entry_id → { has_stems, job_status, stems } for catalog indicators."""
+    summary: Dict[str, Dict[str, Any]] = {}
+    with _conn() as conn:
+        stem_rows = conn.execute(
+            "SELECT entry_id, vocals_path, drums_path, bass_path, other_path FROM track_stems"
+        ).fetchall()
+        job_rows = conn.execute(
+            "SELECT entry_id, status, last_error FROM stem_jobs"
+        ).fetchall()
+
+    for row in stem_rows:
+        r = dict(row)
+        stems = _stem_flags_from_row(r)
+        has_stems = any(stems.values())
+        summary[r["entry_id"]] = {
+            "has_stems": has_stems,
+            "job_status": "completed" if has_stems else None,
+            "stems": stems,
+            "last_error": None,
+        }
+
+    for row in job_rows:
+        r = dict(row)
+        eid = r["entry_id"]
+        existing = summary.get(eid, {
+            "has_stems": False,
+            "job_status": None,
+            "stems": {"vocals": False, "drums": False, "bass": False, "other": False},
+            "last_error": None,
+        })
+        if existing.get("has_stems"):
+            existing["job_status"] = "completed"
+        else:
+            existing["job_status"] = r["status"]
+        if r.get("last_error"):
+            existing["last_error"] = r["last_error"]
+        summary[eid] = existing
+
+    return summary
+
+
+def _separate_with_demucs_sync(entry_id: str, file_path: str) -> Dict[str, Any]:
+    """Run local Demucs and store stems under audio/stems/<entry_id>/."""
+    try:
+        separator = get_separator()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    if not separator.is_available():
+        return {
+            "error": "Demucs is not available. Install with: pip install demucs",
+        }
+
     local_dir = STEMS_ROOT / entry_id
     local_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = local_dir / "demucs_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    result = separator.separate(file_path, str(work_dir))
+    if not result.success:
+        return {"error": result.error or "Separation failed"}
+
+    job_id = uuid.uuid4().hex[:12]
     local_paths: Dict[str, str] = {}
-    for stem in ("vocals", "drums", "bass", "other"):
-        rel = result.get(stem)
-        if rel:
-            dest = local_dir / f"{stem}.wav"
-            await download_runpod_file(f"/files/stems/{rel}", dest)
-            local_paths[stem] = str(dest)
+    for stem in result.stems:
+        dest = local_dir / f"{stem.stem_type}.wav"
+        shutil.copy2(stem.file_path, dest)
+        local_paths[stem.stem_type] = str(dest)
+
     store_stems(entry_id, job_id, local_paths)
-    return {"entry_id": entry_id, "job_id": job_id, "stems": local_paths}
+    return {
+        "entry_id": entry_id,
+        "job_id": job_id,
+        "stems": local_paths,
+        "source": result.separator_used,
+    }
+
+
+async def separate_entry(entry_id: str) -> Dict[str, Any]:
+    enqueue_stem_job(entry_id)
+    update_stem_job(entry_id, status="running", increment_attempts=True, last_error=None)
+    try:
+        entry = get_entry(entry_id)
+        if not entry or not entry.file_path:
+            err = "entry not found"
+            update_stem_job(entry_id, status="failed", last_error=err)
+            return {"error": err}
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            _separate_with_demucs_sync,
+            entry_id,
+            entry.file_path,
+        )
+        if "error" in result:
+            update_stem_job(entry_id, status="failed", last_error=result["error"])
+            return result
+
+        update_stem_job(entry_id, status="completed", last_error=None)
+        return result
+    except Exception as exc:
+        update_stem_job(entry_id, status="failed", last_error=str(exc))
+        return {"error": str(exc)}
 
 
 def _bar_at_seconds(seconds: float, bpm: float, beats_per_bar: int = 4) -> int:

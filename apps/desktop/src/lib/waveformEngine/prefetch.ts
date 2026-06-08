@@ -1,4 +1,4 @@
-import type { OdeonProject } from "@odeon/shared";
+import type { CatalogEntry, OdeonProject } from "@odeon/shared";
 import { waveformCacheFromAnalysis } from "./analysisCache";
 import { getCachedWaveform, isFullWaveformCache, loadWaveformCache, seedWaveformCache } from "./cacheLoader";
 
@@ -39,5 +39,51 @@ async function throttledFetch(paths: string[], concurrency: number) {
 
   await Promise.all(
     Array.from({ length: Math.min(concurrency, paths.length) }, worker)
+  );
+}
+
+type SelectWaveformJob = {
+  filePath: string;
+  cachePath?: string | null;
+  entryId?: string | null;
+};
+
+/** Background prefetch for Select catalog mini-waveforms (throttled disk I/O). */
+export function prefetchSelectCatalogWaveforms(entries: CatalogEntry[]) {
+  const jobs: SelectWaveformJob[] = entries
+    .filter((e) => e.status === "ready" && e.file_path)
+    .filter((e) => !isFullWaveformCache(getCachedWaveform(e.file_path!) ?? EMPTY_CACHE))
+    .map((e) => ({
+      filePath: e.file_path,
+      cachePath: e.waveform_cache_path,
+      entryId: e.id,
+    }));
+
+  if (!jobs.length) return;
+  void throttledSelectFetch(jobs, 4);
+}
+
+const EMPTY_CACHE = {
+  levels: {},
+  block_sizes: [],
+  version: 0,
+  sample_rate: 0,
+  channels: 0,
+  duration_seconds: 0,
+  global_peak: 0,
+} as const;
+
+async function throttledSelectFetch(jobs: SelectWaveformJob[], concurrency: number) {
+  let index = 0;
+
+  async function worker() {
+    while (index < jobs.length) {
+      const job = jobs[index++];
+      await loadWaveformCache(job.filePath, job.cachePath, job.entryId);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, jobs.length) }, worker),
   );
 }

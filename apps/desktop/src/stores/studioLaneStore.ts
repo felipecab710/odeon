@@ -71,8 +71,11 @@ function defaultSplit(laneIndex: number): LaneSplit {
 }
 
 function clampSplit(laneIndex: number, split: LaneSplit): LaneSplit {
-  const autoMin = Math.max(MIN_AUTO_PANEL_H, automationContentMin(laneIndex));
-  let automationH = Math.max(autoMin, Math.min(MAX_AUTO_PANEL_H, split.automationH));
+  const autoMin = automationContentMin(laneIndex);
+  // Collapsed decks reserve zero automation space — no grey gap under the waveform.
+  let automationH = autoMin > 0
+    ? Math.max(autoMin, Math.min(MAX_AUTO_PANEL_H, split.automationH))
+    : 0;
   let waveH = Math.max(MIN_WAVE_H, Math.min(MAX_WAVE_H, split.waveH));
   const total = HEADER_H + automationH + waveH;
   if (total > MAX_LANE_TOTAL_H) {

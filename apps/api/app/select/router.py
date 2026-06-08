@@ -8,7 +8,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, FileResponse
@@ -58,6 +58,7 @@ from ..ml.pipeline import (
     similar_by_model, muq_similarity_map, get_analysis, get_stems,
     analyze_entry_ml, separate_entry, plan_transition_for_set,
     generate_bridge_for_set, generate_riser_for_entry, get_mert_features,
+    enqueue_stem_job, get_stem_job, list_stem_jobs, get_stems_summary,
 )
 from ..ml.runpod_client import is_configured as runpod_configured, get_status as runpod_status
 
@@ -74,6 +75,31 @@ init_ml_db()
 # the audio engine and Studio API calls. librosa/numpy release the GIL
 # so actual parallelism is real (not limited by Python threads).
 _analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="odeon-analysis")
+_stem_semaphore = asyncio.Semaphore(1)
+_stem_inflight: Set[str] = set()
+
+
+def _stem_priority_for_entry(entry: CatalogEntry) -> int:
+    # Tracks in collections are more likely to be used for set building.
+    return 80 if entry.collection_ids else 50
+
+
+async def _run_separation_async(entry_id: str) -> None:
+    if entry_id in _stem_inflight:
+        return
+    _stem_inflight.add(entry_id)
+    try:
+        async with _stem_semaphore:
+            await separate_entry(entry_id)
+    finally:
+        _stem_inflight.discard(entry_id)
+
+
+def _queue_separation(entry: CatalogEntry, *, force: bool = False) -> None:
+    job = enqueue_stem_job(entry.id, priority=_stem_priority_for_entry(entry), force=force)
+    if job.get("status") == "completed" and not force:
+        return
+    asyncio.create_task(_run_separation_async(entry.id))
 
 
 # ─────────────────────────────────────────────
@@ -254,7 +280,7 @@ def preview_entry_audio(entry_id: str):
 # ─────────────────────────────────────────────
 
 @router.post("/import", response_model=List[CatalogEntry])
-def import_folder(req: ImportFolderRequest):
+async def import_folder(req: ImportFolderRequest):
     """Scan folder and add discovered audio files to the catalog."""
     collection_ids: List[str] = []
 
@@ -273,6 +299,9 @@ def import_folder(req: ImportFolderRequest):
         extensions=req.extensions,
         collection_ids=collection_ids,
     )
+    # Precompute stems in background so timeline/set workflows don't block later.
+    for entry in entries:
+        _queue_separation(entry)
     return entries
 
 
@@ -1148,14 +1177,19 @@ def get_entry_analysis(entry_id: str):
 
 
 @router.post("/entries/{entry_id}/separate")
-async def separate_entry_endpoint(entry_id: str):
-    """Separate track into 4 stems via RunPod BS-RoFormer."""
-    if not runpod_configured():
-        raise HTTPException(400, "RUNPOD_URL not configured")
-    result = await separate_entry(entry_id)
-    if "error" in result:
-        raise HTTPException(400, result["error"])
-    return result
+async def separate_entry_endpoint(entry_id: str, wait: bool = Query(default=False)):
+    """Queue or run separation for a track. Default: queue in background."""
+    entry = get_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry not found")
+    enqueue_stem_job(entry_id, priority=_stem_priority_for_entry(entry))
+    if wait:
+        result = await separate_entry(entry_id)
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    _queue_separation(entry, force=True)
+    return {"queued": entry_id, "job": get_stem_job(entry_id)}
 
 
 @router.get("/entries/{entry_id}/stems")
@@ -1164,6 +1198,54 @@ def get_entry_stems(entry_id: str):
     if not stems:
         raise HTTPException(404, "No stems stored — run POST /separate first")
     return {"entry_id": entry_id, **stems}
+
+
+_STEM_TYPES = ("vocals", "drums", "bass", "other")
+
+
+@router.get("/entries/{entry_id}/stems/{stem_type}/preview")
+def preview_entry_stem(entry_id: str, stem_type: str):
+    """Stream a separated stem WAV for in-app preview."""
+    if stem_type not in _STEM_TYPES:
+        raise HTTPException(400, f"stem_type must be one of: {', '.join(_STEM_TYPES)}")
+    stems = get_stems(entry_id)
+    if not stems:
+        raise HTTPException(404, "No stems stored — run POST /separate first")
+    path_key = f"{stem_type}_path"
+    file_path = stems.get(path_key)
+    if not file_path or not Path(file_path).is_file():
+        raise HTTPException(404, f"Stem not found: {stem_type}")
+    return FileResponse(file_path, media_type="audio/wav", headers={"Accept-Ranges": "bytes"})
+
+
+@router.get("/entries/{entry_id}/stem-job")
+def get_entry_stem_job(entry_id: str):
+    job = get_stem_job(entry_id)
+    if not job:
+        raise HTTPException(404, "No stem job found")
+    return job
+
+
+@router.get("/stems/summary")
+def stems_summary():
+    """Which catalog entries have separated stems (for table indicators)."""
+    return {"entries": get_stems_summary()}
+
+
+@router.get("/stem-jobs")
+def get_all_stem_jobs(
+    status: Optional[str] = Query(default=None, pattern="^(queued|running|completed|failed)?$"),
+    limit: int = Query(default=200, ge=1, le=2000),
+):
+    return {"jobs": list_stem_jobs(status=status, limit=limit)}
+
+
+@router.post("/stems/enqueue-all")
+async def enqueue_all_stems(force: bool = Query(default=False)):
+    entries = list_entries(limit=5000)
+    for entry in entries:
+        _queue_separation(entry, force=force)
+    return {"queued": len(entries), "force": force}
 
 
 @router.post("/set/plan-transition")

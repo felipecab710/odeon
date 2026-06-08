@@ -30,6 +30,12 @@ export interface RenderKey {
   renderWidth?: number;
   audioBuffer?: AudioBuffer | null;
   fastMode?: boolean;
+  /** Override clip-derived envelope colours (Audacity-style black wave on hue clip). */
+  waveFill?: string;
+  waveOutline?: string;
+  /** 'mirrored' = single black silhouette centred on clip (Audacity); 'stereo' = L/R split. */
+  waveLayout?: "stereo" | "mirrored";
+  showCenterLine?: boolean;
 }
 
 // ── Tile bitmap cache ──────────────────────────────────────────────────────
@@ -43,8 +49,10 @@ function tileCacheKey(
   blockSize: number,
   pps: number,
   clipBgColor: string,
+  waveLayout = "stereo",
+  waveFill = "",
 ): string {
-  return `${COLOR_REV}:${clipBgColor}:${trackId}:${height}:${pps.toFixed(2)}:bs${blockSize}:t${tileIndex}`;
+  return `${COLOR_REV}:${clipBgColor}:${waveLayout}:${waveFill}:${trackId}:${height}:${pps.toFixed(2)}:bs${blockSize}:t${tileIndex}`;
 }
 
 export function getTileCache() { return tileCache; }
@@ -105,10 +113,12 @@ function drawChannelPath2D(
   outPathBot.moveTo(0, bot[0]);
   for (let x = 1; x < renderW; x++) outPathBot.lineTo(x, bot[x]);
 
-  ctx.strokeStyle = outline;
-  ctx.lineWidth = 0.75;
-  ctx.stroke(outPath);
-  ctx.stroke(outPathBot);
+  if (outline && outline !== "none") {
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 0.75;
+    ctx.stroke(outPath);
+    ctx.stroke(outPathBot);
+  }
 }
 
 // ── Core paint ─────────────────────────────────────────────────────────────
@@ -134,58 +144,85 @@ export function paintWaveform(
   );
 
   const clipBg = key.clipBgColor ?? PT_TRACK_BG;
-  const { fill: waveFill, outline: waveOutline } = waveformColorsFromClip(clipBg);
+  const derived = waveformColorsFromClip(clipBg);
+  const waveFill = key.waveFill ?? derived.fill;
+  const waveOutline = key.waveOutline ?? derived.outline;
 
   ctx.fillStyle = clipBg;
   ctx.fillRect(0, 0, renderW, h);
 
   const mid = h / 2;
-  const halfH = (h / 4) * 0.96;
+  const layout = key.waveLayout ?? "stereo";
   const fullW = key.width;
   const offsetX = key.offsetX ?? 0;
   const totalSamples = cache.duration_seconds * cache.sample_rate;
-
-  const leftCenter = mid / 2;
-  const rightCenter = mid + mid / 2;
   const norm = cache.global_peak > 1e-9 ? cache.global_peak : 1;
-
-  // Allocate envelope arrays
-  const lTop = new Float32Array(renderW);
-  const lBot = new Float32Array(renderW);
-  const rTop = new Float32Array(renderW);
-  const rBot = new Float32Array(renderW);
 
   const left = key.audioBuffer?.getChannelData(0);
   const right = key.audioBuffer && key.audioBuffer.numberOfChannels > 1
     ? key.audioBuffer.getChannelData(1)
     : left;
 
-  for (let col = 0; col < renderW; col++) {
-    const x = offsetX + col;
-    let p: { lm: number; lx: number; rm: number; rx: number };
+  if (layout === "mirrored") {
+    const halfH = mid * 0.94;
+    const top = new Float32Array(renderW);
+    const bot = new Float32Array(renderW);
 
-    if (useFine && left) {
-      p = peakForPixelFromBuffer(left, right!, x, fullW, norm);
-    } else {
-      p = peakForPixel(peaks, x, fullW, totalSamples, blockSize);
+    for (let col = 0; col < renderW; col++) {
+      const x = offsetX + col;
+      let p: { lm: number; lx: number; rm: number; rx: number };
+
+      if (useFine && left) {
+        p = peakForPixelFromBuffer(left, right!, x, fullW, norm);
+      } else {
+        p = peakForPixel(peaks, x, fullW, totalSamples, blockSize);
+      }
+
+      const peak = Math.min(1, Math.max(
+        Math.abs(p.lm), Math.abs(p.lx), Math.abs(p.rm), Math.abs(p.rx),
+      ) / norm);
+      top[col] = mid - peak * halfH;
+      bot[col] = mid + peak * halfH;
     }
 
-    lTop[col] = leftCenter - p.lx * halfH;
-    lBot[col] = leftCenter - p.lm * halfH;
-    rTop[col] = rightCenter - p.rx * halfH;
-    rBot[col] = rightCenter - p.rm * halfH;
+    drawChannelPath2D(ctx, { top, bot }, renderW, waveFill, waveOutline);
+  } else {
+    const halfH = (h / 4) * 0.96;
+    const leftCenter = mid / 2;
+    const rightCenter = mid + mid / 2;
+    const lTop = new Float32Array(renderW);
+    const lBot = new Float32Array(renderW);
+    const rTop = new Float32Array(renderW);
+    const rBot = new Float32Array(renderW);
+
+    for (let col = 0; col < renderW; col++) {
+      const x = offsetX + col;
+      let p: { lm: number; lx: number; rm: number; rx: number };
+
+      if (useFine && left) {
+        p = peakForPixelFromBuffer(left, right!, x, fullW, norm);
+      } else {
+        p = peakForPixel(peaks, x, fullW, totalSamples, blockSize);
+      }
+
+      lTop[col] = leftCenter - p.lx * halfH;
+      lBot[col] = leftCenter - p.lm * halfH;
+      rTop[col] = rightCenter - p.rx * halfH;
+      rBot[col] = rightCenter - p.rm * halfH;
+    }
+
+    drawChannelPath2D(ctx, { top: lTop, bot: lBot }, renderW, waveFill, waveOutline);
+    drawChannelPath2D(ctx, { top: rTop, bot: rBot }, renderW, waveFill, waveOutline);
   }
 
-  drawChannelPath2D(ctx, { top: lTop, bot: lBot }, renderW, waveFill, waveOutline);
-  drawChannelPath2D(ctx, { top: rTop, bot: rBot }, renderW, waveFill, waveOutline);
-
-  // Centre line
-  ctx.strokeStyle = PT_CENTER_LINE;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, mid);
-  ctx.lineTo(renderW, mid);
-  ctx.stroke();
+  if (key.showCenterLine !== false && layout === "stereo") {
+    ctx.strokeStyle = PT_CENTER_LINE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(renderW, mid);
+    ctx.stroke();
+  }
 }
 
 // ── Tile-based bitmap cache ────────────────────────────────────────────────
@@ -203,7 +240,10 @@ export function getOrRenderTile(
 ): HTMLCanvasElement {
   const { blockSize } = getLodPeaks(cache, key.pps, key.width);
   const clipBg = key.clipBgColor ?? PT_TRACK_BG;
-  const ck = tileCacheKey(key.trackId, tileIndex, key.height, blockSize, key.pps, clipBg);
+  const ck = tileCacheKey(
+    key.trackId, tileIndex, key.height, blockSize, key.pps, clipBg,
+    key.waveLayout ?? "stereo", key.waveFill ?? "",
+  );
 
   const cached = tileCache.get(ck);
   if (cached) return cached;
@@ -270,13 +310,14 @@ export function blitVisibleTiles(
     );
   }
 
-  // Centre line over blitted tiles
-  ctx.strokeStyle = PT_CENTER_LINE;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, h / 2);
-  ctx.lineTo(viewportWidth, h / 2);
-  ctx.stroke();
+  if (key.showCenterLine !== false && key.waveLayout !== "mirrored") {
+    ctx.strokeStyle = PT_CENTER_LINE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(viewportWidth, h / 2);
+    ctx.stroke();
+  }
 }
 
 // ── Legacy bitmap render (kept for compatibility) ──────────────────────────

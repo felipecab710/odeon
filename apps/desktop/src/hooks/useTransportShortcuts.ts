@@ -1,5 +1,7 @@
 import { useEffect } from "react";
+import { useNavigationStore } from "../stores/navigationStore";
 import { useTransportStore } from "../stores/transportStore";
+import { toggleSelectPlayback } from "../lib/useSelectEngineSync";
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -19,6 +21,10 @@ export function useTransportShortcuts() {
       if (isTypingTarget(e.target)) return;
       e.preventDefault();
       e.stopPropagation();
+      if (useNavigationStore.getState().view === "select") {
+        void toggleSelectPlayback();
+        return;
+      }
       void togglePlayPause();
     };
 

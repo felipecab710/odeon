@@ -1,5 +1,5 @@
 /**
- * Global automation header — enable, draw/record mode, expand all.
+ * Global automation header — enable, draw/record mode.
  */
 import {
   useStudioAutomationStore,
@@ -13,11 +13,9 @@ interface Props {
 
 export function SetAutomationPanel({ trackCount }: Props) {
   const globalEnabled = useStudioAutomationStore(s => s.globalEnabled);
-  const expandAll = useStudioAutomationStore(s => s.expandAll);
   const editMode = useStudioAutomationStore(s => s.editMode);
   const isRecording = useStudioAutomationStore(s => s.isRecording);
   const setGlobalEnabled = useStudioAutomationStore(s => s.setGlobalEnabled);
-  const setExpandAll = useStudioAutomationStore(s => s.setExpandAll);
   const setEditMode = useStudioAutomationStore(s => s.setEditMode);
   const setRecording = useStudioAutomationStore(s => s.setRecording);
 
@@ -119,15 +117,6 @@ export function SetAutomationPanel({ trackCount }: Props) {
           ? "Click lane · drag nodes · dbl-click delete"
           : "Arm deck · REC · play · move faders/EQ"}
       </span>
-
-      <button
-        type="button"
-        style={btn(expandAll)}
-        onClick={() => setExpandAll(!expandAll, trackCount)}
-        title="Expand or collapse all track automation lanes"
-      >
-        {expandAll ? "Collapse All" : "Expand All"}
-      </button>
     </div>
   );
 }

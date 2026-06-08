@@ -156,6 +156,8 @@ export const apiClient = {
     refreshMetadata: () => request<{ updated: number }>("POST", "/select/refresh-metadata"),
     rebuildWaveforms: () => request<{ rebuilt: number; total: number }>("POST", "/select/rebuild-waveforms"),
     previewUrl: (entryId: string) => `${BASE}/select/entries/${entryId}/preview`,
+    stemPreviewUrl: (entryId: string, stemType: "vocals" | "drums" | "bass" | "other") =>
+      `${BASE}/select/entries/${entryId}/stems/${stemType}/preview`,
 
     // ── Set Builder AI ──────────────────────────────────────────────
     suggestNext: (entryId: string, excludeIds: string[], limit = 8) => {
@@ -232,11 +234,16 @@ export const apiClient = {
         "GET", `/select/entries/${entryId}/analysis`),
 
     separate: (entryId: string) =>
-      request<{ entry_id: string; job_id: string; stems: Record<string, string> }>(
-        "POST", `/select/entries/${entryId}/separate`),
+      request<SeparateStemResult>("POST", `/select/entries/${entryId}/separate`),
+
+    getStemJob: (entryId: string) =>
+      request<StemJobData>("GET", `/select/entries/${entryId}/stem-job`),
 
     getStems: (entryId: string) =>
       request<StemPathsData>("GET", `/select/entries/${entryId}/stems`),
+
+    stemsSummary: () =>
+      request<{ entries: Record<string, StemSummaryEntry> }>("GET", "/select/stems/summary"),
 
     planTransition: (fromEntryId: string, toEntryId: string) =>
       request<TransitionPlanData>("POST", "/select/set/plan-transition",
@@ -390,6 +397,32 @@ export interface TransitionPlanData {
   strategy?: string;
   steps?: TransitionStepData[];
   reason?: string;
+}
+
+export interface StemSummaryEntry {
+  has_stems: boolean;
+  job_status?: "queued" | "running" | "completed" | "failed" | null;
+  stems?: { vocals: boolean; drums: boolean; bass: boolean; other: boolean };
+  last_error?: string | null;
+}
+
+export interface StemJobData {
+  entry_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  priority?: number;
+  attempts?: number;
+  last_error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SeparateStemResult {
+  queued?: string;
+  job?: StemJobData;
+  entry_id?: string;
+  job_id?: string;
+  stems?: Record<string, string>;
+  error?: string;
 }
 
 export interface StemPathsData {

@@ -17,14 +17,21 @@ import { useSelectStore } from "../../stores/selectStore";
 import type { WaveformMode } from "../../stores/selectStore";
 import { useTransportStore } from "../../stores/transportStore";
 import { apiClient } from "../../lib/apiClient";
-import { loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
+import { getCachedWaveform, loadWaveformCache } from "../../lib/waveformEngine/cacheLoader";
 import { resolveTrackDuration, snapToBeatGrid } from "../../lib/trackTime";
 import { VisualPlayPosition } from "../../lib/visualPlayPosition";
 import { subscribeWaveformFrame } from "../../lib/waveformSync";
 import {
   SELECT_DECK_INDEX,
+  getSelectPlaybackMode,
+  ensureSelectEntryLoaded,
+  preloadSelectStemLayers,
+  setSelectStemPaths,
+  switchSelectPlaybackSource,
   useSelectEngineSync,
   volumeLinearToFaderDb,
+  type SelectPlaybackMode,
+  type SelectStemPaths,
 } from "../../lib/useSelectEngineSync";
 import { engineClient, unwrapEngineResult } from "../../lib/engineClient";
 import { applyDeckMixBySlot, defaultDeckMix } from "../../lib/deckMixEngine";
@@ -67,8 +74,16 @@ function fmt(s: number): string {
   return `${m}:${ss}`;
 }
 
+const SOURCE_BUTTONS: Array<{ mode: SelectPlaybackMode; label: string }> = [
+  { mode: "full", label: "FULL" },
+  { mode: "vocals", label: "VOC" },
+  { mode: "drums", label: "DRU" },
+  { mode: "bass", label: "BAS" },
+  { mode: "other", label: "OTH" },
+];
+
 export function PlayerStrip() {
-  const { entries, selectedId, waveformMode, setWaveformMode } = useSelectStore();
+  const { entries, selectedId, waveformMode, setWaveformMode, stemsSummary } = useSelectStore();
   const transportPosition = useTransportStore(s => s.positionSeconds);
   const transportPlaying = useTransportStore(s => s.isPlaying);
 
@@ -106,6 +121,9 @@ export function PlayerStrip() {
   const waveContainerRef = useRef<HTMLDivElement>(null);
   const trackDurationRef = useRef(0);
   const [waveW, setWaveW] = useState(900);
+  const [playbackMode, setPlaybackMode] = useState<SelectPlaybackMode>("full");
+  const [stemPaths, setStemPaths] = useState<SelectStemPaths | null>(null);
+  const [sourceSwitching, setSourceSwitching] = useState(false);
 
   const trackDurationSec = useMemo(
     () => resolveTrackDuration({
@@ -149,9 +167,9 @@ export function PlayerStrip() {
 
   // ── Load waveform + markers on entry change ─────────────────────────────────
   useEffect(() => {
-    setCache(null);
     setMarkers([]);
     if (!entry) {
+      setCache(null);
       setTrackMeta({ title: "", artist: "", album: "", bpm: 0, key: "", lufs: 0, dur: 0, hasArt: false, id: "" });
       return;
     }
@@ -167,10 +185,38 @@ export function PlayerStrip() {
       id:     entry.id,
     });
     if (entry.status === "ready" && entry.file_path) {
-      loadWaveformCache(entry.file_path, entry.waveform_cache_path, entry.id).then(c => setCache(c)).catch(() => {});
+      const instant = getCachedWaveform(entry.file_path);
+      if (instant) setCache(instant);
+      else loadWaveformCache(entry.file_path, entry.waveform_cache_path, entry.id).then(c => setCache(c)).catch(() => {});
+    } else {
+      setCache(null);
     }
     apiClient.select.listMarkers(entry.id).then(m => setMarkers(m)).catch(() => {});
+    setPlaybackMode("full");
+    setStemPaths(null);
+    apiClient.select.getStems(entry.id).then(stems => {
+      const paths: SelectStemPaths = {
+        vocals: stems.vocals_path,
+        drums: stems.drums_path,
+        bass: stems.bass_path,
+        other: stems.other_path,
+      };
+      setStemPaths(paths);
+      setSelectStemPaths(entry.id, paths);
+    }).catch(() => {
+      setStemPaths(null);
+    });
   }, [entry?.id]);
+
+  // Pre-load stem layers after the full mix is on deck (never block play on stem prep).
+  useEffect(() => {
+    if (!entry || !engineReady || !stemPaths) return;
+    const hasStem = (["vocals", "drums", "bass", "other"] as const).some(s => stemPaths[s]);
+    if (!hasStem) return;
+    void ensureSelectEntryLoaded(entry)
+      .then(() => preloadSelectStemLayers(entry, stemPaths))
+      .catch(() => {});
+  }, [entry?.id, engineReady, stemPaths]);
 
   const getPlayheadForSet = useCallback((): number => {
     const pos = transportPlaying
@@ -178,6 +224,55 @@ export function PlayerStrip() {
       : transportPosition;
     return Math.round(pos * 1000) / 1000;
   }, [transportPlaying, transportPosition]);
+
+  const stemSourceAvailable = useCallback((mode: SelectPlaybackMode): boolean => {
+    if (mode === "full") return true;
+    if (stemPaths?.[mode]) return true;
+    const summary = entry ? stemsSummary[entry.id] : null;
+    return summary?.stems?.[mode] ?? false;
+  }, [entry, stemPaths, stemsSummary]);
+
+  const handleSourceSwitch = useCallback(async (mode: SelectPlaybackMode) => {
+    if (!entry || !canPlay || sourceSwitching) return;
+    if (mode !== "full" && !stemSourceAvailable(mode)) return;
+    if (getSelectPlaybackMode() === mode && playbackMode === mode) return;
+
+    const prevMode = playbackMode;
+    setPlaybackMode(mode);
+    setSourceSwitching(true);
+    try {
+      let paths = stemPaths;
+      if (mode !== "full" && !paths?.[mode]) {
+        const stems = await apiClient.select.getStems(entry.id);
+        paths = {
+          vocals: stems.vocals_path,
+          drums: stems.drums_path,
+          bass: stems.bass_path,
+          other: stems.other_path,
+        };
+        setStemPaths(paths);
+        setSelectStemPaths(entry.id, paths);
+        if (engineReady) await preloadSelectStemLayers(entry, paths);
+      }
+      const anchor = getPlayheadForSet();
+      await switchSelectPlaybackSource(entry, mode, {
+        position: anchor,
+        playing: transportPlaying,
+        preserveTransport: true,
+      });
+      if (transportPlaying) {
+        visualPosRef.current.sync(anchor, true, deckRateRef.current, getLoopBounds());
+        syncWaveforms(anchor);
+      }
+    } catch {
+      setPlaybackMode(prevMode);
+    } finally {
+      setSourceSwitching(false);
+    }
+  }, [
+    entry, canPlay, sourceSwitching, stemSourceAvailable, playbackMode,
+    getPlayheadForSet, transportPlaying, engineReady, getLoopBounds, syncWaveforms,
+  ]);
 
   const quantizeTime = useCallback((raw: number): number => {
     return snapToBeatGrid(raw, entry?.beat_times);
@@ -446,9 +541,14 @@ export function PlayerStrip() {
 
         {/* Play button */}
         <div style={{ display: "flex", alignItems: "center", padding: "0 12px", borderLeft: "1px solid #1a1a1a", gap: 6 }}>
-          {(syncError || syncing) && (
-            <span style={{ fontSize: 8, color: syncError ? "#f87171" : "#888", maxWidth: 140, lineHeight: 1.2 }}>
-              {syncError ?? "Loading track…"}
+          {syncError && (
+            <span style={{ fontSize: 8, color: "#f87171", maxWidth: 140, lineHeight: 1.2 }}>
+              {syncError}
+            </span>
+          )}
+          {!syncError && syncing && !canPlay && (
+            <span style={{ fontSize: 8, color: "#555", maxWidth: 140, lineHeight: 1.2 }}>
+              Loading…
             </span>
           )}
           <button onClick={togglePlay} disabled={!entry || !canPlay} style={{
@@ -682,6 +782,41 @@ export function PlayerStrip() {
           AUTO-CUE
         </button>
 
+        <div style={{ width: 1, height: 26, background: "#1e1e1e", margin: "0 4px", flexShrink: 0 }} />
+
+        {/* Full song ↔ stem source toggle (preserves playhead while playing) */}
+        <span style={{ color: "#333", fontSize: 8, fontWeight: 700, letterSpacing: "0.06em", flexShrink: 0 }}>SRC</span>
+        {SOURCE_BUTTONS.map(({ mode, label }) => {
+          const available = stemSourceAvailable(mode);
+          const active = playbackMode === mode;
+          const isFull = mode === "full";
+          const accent = isFull ? "#3b82f6" : "#4ade80";
+          return (
+            <button
+              key={mode}
+              disabled={!entry || !canPlay || sourceSwitching || (!available && mode !== "full")}
+              onClick={() => { void handleSourceSwitch(mode); }}
+              title={
+                mode === "full"
+                  ? "Play full mix"
+                  : available
+                    ? `Switch to ${mode} stem (keeps playhead)`
+                    : `${mode} stem not ready`
+              }
+              style={{
+                height: 34, padding: "0 7px", border: "none", borderRadius: 3, flexShrink: 0,
+                background: active ? `${accent}22` : "#111",
+                borderTop: `2.5px solid ${active ? accent : available ? "#2a2a2a" : "#1a1a1a"}`,
+                color: active ? accent : available ? "#666" : "#2a2a2a",
+                fontSize: 8, fontWeight: 800, cursor: available && entry && canPlay ? "pointer" : "default",
+                letterSpacing: "0.05em", opacity: available || isFull ? 1 : 0.35,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+
         {/* Waveform mode selector — matches Mixxx's waveform type selector */}
         <div style={{ marginLeft: "auto", display: "flex", gap: 2, alignItems: "center" }}>
           <span style={{ color: "#2a2a2a", fontSize: 8, marginRight: 4, letterSpacing: "0.06em" }}>WAVE</span>
@@ -704,7 +839,6 @@ export function PlayerStrip() {
         </div>
       </div>
 
-      {/* ── Waveform rows ────────────────────────────────────────────────────── */}
       <div ref={waveContainerRef} style={{ lineHeight: 0, borderTop: "1px solid #111" }}>
         <OverviewWaveform
           ref={overviewRef} cache={cache} width={waveW} height={40}

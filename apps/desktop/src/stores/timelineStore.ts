@@ -6,6 +6,7 @@ import {
   MAX_PPS, MIN_PPS, DEFAULT_PPS, pxToTime,
   TRACK_H, MIN_TRACK_H, MAX_TRACK_H,
 } from "../lib/timelineUtils";
+import { zoomAtAnchor } from "../lib/timelineViewportZoom";
 
 interface TimelineState {
   pixelsPerSecond: number;
@@ -26,15 +27,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
   setScrollLeft: (px) => set({ scrollLeft: Math.max(0, px) }),
 
-  zoomAt: (factor, anchorXInContent) => {
+  /** @param anchorViewportX — X within the visible viewport (not content-absolute) */
+  zoomAt: (factor, anchorViewportX) => {
     const { pixelsPerSecond, scrollLeft } = get();
-    const timeAtAnchor = pxToTime(scrollLeft + anchorXInContent, pixelsPerSecond);
-    const newPps = Math.max(MIN_PPS, Math.min(MAX_PPS, pixelsPerSecond * factor));
-    const newScroll = timeAtAnchor * newPps - anchorXInContent;
-    set({
-      pixelsPerSecond: newPps,
-      scrollLeft: Math.max(0, newScroll),
+    const result = zoomAtAnchor({
+      oldPps: pixelsPerSecond,
+      factor,
+      scrollLeft,
+      anchorViewportX,
+      minPps: MIN_PPS,
+      maxPps: MAX_PPS,
     });
+    if (!result) return;
+    set({ pixelsPerSecond: result.newPps, scrollLeft: result.newScrollLeft });
   },
 
   resetView: () => set({ pixelsPerSecond: DEFAULT_PPS, scrollLeft: 0 }),

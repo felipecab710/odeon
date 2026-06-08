@@ -30,6 +30,10 @@ export type EngineRpcMethod =
   | "setTrackPan"
   | "muteTrack"
   | "soloTrack"
+  | "exclusiveSolo"
+  | "createStemStack"
+  | "disposeStemStack"
+  | "exclusiveSoloStack"
   | "setMasterVolume"
   | "getTrackMeters"
   | "renderMix"
@@ -55,7 +59,9 @@ export type EngineRpcMethod =
   | "deckJumpHotcue"
   | "deckClearHotcue"
   | "deckSetLoop"
-  | "deckSetSyncMode";
+  | "deckSetSyncMode"
+  | "deckLoadStemLayers"
+  | "deckSetStemLayer";
 
 export interface EngineRpcRequest {
   id: number;
@@ -75,6 +81,26 @@ export interface SetTrackVolumeParams { trackId: string; volumeDb: number }
 export interface SetTrackPanParams    { trackId: string; pan: number }
 export interface MuteTrackParams      { trackId: string; muted: boolean }
 export interface SoloTrackParams      { trackId: string; soloed: boolean }
+export interface ExclusiveSoloParams {
+  trackIds: string[];
+  soloTrackId: string;
+}
+export interface StemStackLayerSpec {
+  layerId: string;
+  filePath: string;
+  name?: string;
+  role?: string;
+  stemType?: string;
+}
+export interface CreateStemStackParams {
+  stackId: string;
+  layers: StemStackLayerSpec[];
+}
+export interface DisposeStemStackParams { stackId: string }
+export interface ExclusiveSoloStackParams {
+  stackId: string;
+  layerId: string;
+}
 export interface SetMasterVolumeParams { volumeDb: number }
 export interface MoveClipParams       { trackId: string; clipId: string; newStartTimeSeconds: number }
 export interface RenderMixParams      { outputFilePath: string }
@@ -96,6 +122,22 @@ export interface DeckSeekParams {
 export interface DeckPlayParams  { deckIndex: number }
 export interface DeckPauseParams { deckIndex: number }
 export interface DeckSetRateParams    { deckIndex: number; rate: number }
+
+export interface DeckStemLayerSpec {
+  layerId: string;
+  filePath: string;
+  name?: string;
+}
+
+export interface DeckLoadStemLayersParams {
+  deckIndex: number;
+  layers: DeckStemLayerSpec[];
+}
+
+export interface DeckSetStemLayerParams {
+  deckIndex: number;
+  layerId: string;
+}
 
 export interface SetDeckEqParams {
   deckIndex: number;

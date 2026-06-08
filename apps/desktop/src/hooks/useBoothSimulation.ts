@@ -46,6 +46,7 @@ export function useBoothSimulation(
   const [transitionPlans, setTransitionPlans] = useState<Record<number, TransitionPlanData | null>>({});
   const rafRef = useRef(0);
   const prevSnapRef = useRef<ReturnType<typeof computeBoothSnapshot> | null>(null);
+  const prevSnapKeyRef = useRef("");
   const visualPosRef = useRef(new VisualPlayPosition());
   const waveCachesRef = useRef<Record<string, WaveformCache | null>>({});
   const entryMarkersRef = useRef<Record<string, CatalogMarker[]>>({});
@@ -121,7 +122,17 @@ export function useBoothSimulation(
         nowMs: performance.now(),
       });
 
-      useBoothStore.getState().setSnapshot(snapshot);
+      const snapKey = [
+        smoothPlayhead.toFixed(2),
+        isPlaying ? 1 : 0,
+        booth.mode,
+        snapshot.currentTransitionIndex ?? -1,
+        snapshot.channels.map(c => c.faderDb.toFixed(0)).join(","),
+      ].join("|");
+      if (snapKey !== prevSnapKeyRef.current) {
+        prevSnapKeyRef.current = snapKey;
+        useBoothStore.getState().setSnapshot(snapshot);
+      }
       if (driveEngine && canDriveEngine) {
         // Engine uses transport playhead; booth visuals use smoothed interpolation.
         const enginePlayhead = usePreview ? previewPlayheadSec! : positionSeconds;

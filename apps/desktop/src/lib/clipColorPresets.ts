@@ -71,5 +71,21 @@ export function waveformColorsFromClip(hex: string): { fill: string; outline: st
   };
 }
 
+/** Audacity-style clip body — saturated hue, subtle vertical depth. */
+export function arrangementClipBackground(hex: string): string {
+  const top = shadeHex(hex, 0.06);
+  const mid = hex;
+  const bot = shadeHex(hex, -0.1);
+  return `linear-gradient(180deg, ${top} 0%, ${mid} 55%, ${bot} 100%)`;
+}
+
+/** Readable label colour on a saturated clip block. */
+export function contrastingTextOn(hex: string): string {
+  const rgb = parseHex(hex);
+  if (!rgb) return "#f5f5f5";
+  const lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+  return lum > 150 ? "#1a1a1a" : "#f8f8f8";
+}
+
 /** Bus/group palette — same presets as clip colour menu. */
 export const BUS_COLOR_PALETTE = CLIP_COLOR_PRESETS.map((p) => p.color);

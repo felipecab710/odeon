@@ -11,8 +11,15 @@ export const LANE_GAP = 8;
 export const LANE_HEIGHT = 110;
 export const LANE_STRIP_W = 148;
 export const CFADER_H = 36;
-export const RULER_H = 24;
-export const MINIMAP_H = 20;
+/** Ableton beat-time ruler (top black strip) — bars / beats / sixteenths. */
+export const BEAT_RULER_H = 22;
+/** Ableton time ruler (bottom black strip) — minutes : seconds. */
+export const TIME_RULER_H = 20;
+/** Top ruler height (alias for beat-time ruler). */
+export const RULER_H = BEAT_RULER_H;
+/** Ableton arrangement ruler background. */
+export const ABLETON_RULER_BG = "#0a0a0a";
+export const MINIMAP_H = 24;
 
 /** DJ.Studio palette */
 export const STUDIO_BG = "#2a2a2a";
@@ -25,7 +32,8 @@ export const DEFAULT_PX_PER_SEC = 3.2;
 /** @deprecated Use DEFAULT_PX_PER_SEC or dynamic zoom pxPerSec */
 export const PX_PER_SEC = DEFAULT_PX_PER_SEC;
 export const MIN_PX_PER_SEC = 0.35;
-export const MAX_PX_PER_SEC = 48;
+/** Tile renderer paints viewport only — safe to zoom further than the old 48 cap. */
+export const MAX_PX_PER_SEC = 128;
 
 export interface LaneLayout {
   card: SetCard;

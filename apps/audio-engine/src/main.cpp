@@ -99,6 +99,14 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
         return s.muteTrack(extractString(p, "trackId"), extractBool(p, "muted"));
     if (method == "soloTrack")
         return s.soloTrack(extractString(p, "trackId"), extractBool(p, "soloed"));
+    if (method == "exclusiveSolo")
+        return s.exclusiveSolo(p.getProperty("trackIds", juce::var()), extractString(p, "soloTrackId"));
+    if (method == "createStemStack")
+        return s.createStemStack(extractString(p, "stackId"), p.getProperty("layers", juce::var()));
+    if (method == "disposeStemStack")
+        return s.disposeStemStack(extractString(p, "stackId"));
+    if (method == "exclusiveSoloStack")
+        return s.exclusiveSoloStack(extractString(p, "stackId"), extractString(p, "layerId"));
     if (method == "setMasterVolume")
         return s.setMasterVolume(extractFloat(p, "volumeDb"));
     if (method == "moveClip")
@@ -167,6 +175,12 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
     if (method == "deckSetSyncMode")
         return s.deckSetSyncMode(static_cast<int>(extractDouble(p, "deckIndex")),
                                  extractString(p, "mode", "off"));
+    if (method == "deckLoadStemLayers")
+        return s.deckLoadStemLayers(static_cast<int>(extractDouble(p, "deckIndex")),
+                                    p.getProperty("layers", juce::var()));
+    if (method == "deckSetStemLayer")
+        return s.deckSetStemLayer(static_cast<int>(extractDouble(p, "deckIndex")),
+                                  extractString(p, "layerId"));
 
     return jsonErr("Unknown method: " + method);
 }

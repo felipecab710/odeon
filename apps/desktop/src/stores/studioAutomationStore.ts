@@ -64,13 +64,11 @@ function defaultTrackState(): TrackAutomationState {
 
 interface StudioAutomationStore {
   globalEnabled: boolean;
-  expandAll: boolean;
   editMode: AutomationEditMode;
   isRecording: boolean;
   tracks: Record<number, TrackAutomationState>;
 
   setGlobalEnabled: (v: boolean) => void;
-  setExpandAll: (v: boolean, laneCount?: number) => void;
   setEditMode: (mode: AutomationEditMode) => void;
   setRecording: (v: boolean) => void;
   toggleTrackExpanded: (laneIndex: number) => void;
@@ -89,7 +87,6 @@ interface StudioAutomationStore {
 
 export const useStudioAutomationStore = create<StudioAutomationStore>((set, get) => ({
   globalEnabled: true,
-  expandAll: false,
   editMode: "draw",
   isRecording: false,
   tracks: {},
@@ -99,16 +96,6 @@ export const useStudioAutomationStore = create<StudioAutomationStore>((set, get)
   setEditMode: (mode) => set({ editMode: mode, isRecording: false }),
 
   setRecording: (v) => set({ isRecording: v }),
-
-  setExpandAll: (v, laneCount = 0) => set(s => {
-    const tracks = { ...s.tracks };
-    const count = Math.max(laneCount, ...Object.keys(tracks).map(Number).map(n => n + 1), 0);
-    for (let i = 0; i < count; i++) {
-      const cur = tracks[i] ?? defaultTrackState();
-      tracks[i] = { ...cur, expanded: v };
-    }
-    return { expandAll: v, tracks };
-  }),
 
   toggleTrackExpanded: (laneIndex) => {
     const cur = get().getTrack(laneIndex);
@@ -216,7 +203,6 @@ export const useStudioAutomationStore = create<StudioAutomationStore>((set, get)
 
   reset: () => set({
     globalEnabled: true,
-    expandAll: false,
     editMode: "draw",
     isRecording: false,
     tracks: {},

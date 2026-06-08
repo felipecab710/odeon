@@ -19,7 +19,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: "studio",   label: "Studio" },
   { id: "select",   label: "Select" },
-  { id: "research", label: "Research" },
+  { id: "research", label: "Set Builder" },
   { id: "settings", label: "Settings" },
 ];
 

@@ -356,6 +356,56 @@ async fn engine_solo_track(
 }
 
 #[tauri::command]
+async fn engine_exclusive_solo(
+    track_ids: Value,
+    solo_track_id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "exclusiveSolo",
+        json!({ "trackIds": track_ids, "soloTrackId": solo_track_id }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_create_stem_stack(
+    stack_id: String,
+    layers: Value,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "createStemStack",
+        json!({ "stackId": stack_id, "layers": layers }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_dispose_stem_stack(
+    stack_id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "disposeStemStack", json!({ "stackId": stack_id })).await
+}
+
+#[tauri::command]
+async fn engine_exclusive_solo_stack(
+    stack_id: String,
+    layer_id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "exclusiveSoloStack",
+        json!({ "stackId": stack_id, "layerId": layer_id }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn engine_set_master_volume(
     volume_db: f64,
     engine: State<'_, SharedEngine>,
@@ -659,6 +709,34 @@ async fn engine_deck_set_sync_mode(
 }
 
 #[tauri::command]
+async fn engine_deck_load_stem_layers(
+    deck_index: u32,
+    layers: Value,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckLoadStemLayers",
+        json!({ "deckIndex": deck_index, "layers": layers }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn engine_deck_set_stem_layer(
+    deck_index: u32,
+    layer_id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "deckSetStemLayer",
+        json!({ "deckIndex": deck_index, "layerId": layer_id }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn engine_get_track_meters(
     engine: State<'_, SharedEngine>,
 ) -> Result<Value, String> {
@@ -829,6 +907,10 @@ pub fn run() {
             engine_set_track_pan,
             engine_mute_track,
             engine_solo_track,
+            engine_exclusive_solo,
+            engine_create_stem_stack,
+            engine_dispose_stem_stack,
+            engine_exclusive_solo_stack,
             engine_get_track_meters,
             engine_set_master_volume,
             engine_move_clip,
@@ -852,6 +934,8 @@ pub fn run() {
             engine_deck_clear_hotcue,
             engine_deck_set_loop,
             engine_deck_set_sync_mode,
+            engine_deck_load_stem_layers,
+            engine_deck_set_stem_layer,
             engine_render_mix,
             engine_dispose_project,
             engine_list_audio_devices,

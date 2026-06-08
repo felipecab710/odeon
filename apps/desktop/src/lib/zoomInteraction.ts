@@ -1,7 +1,8 @@
 /**
- * Zoom gesture state — Ableton-style: layout updates every frame,
- * expensive waveform repaints deferred until the gesture ends.
+ * Zoom gesture state — Ableton-style camera: during pinch/scroll only viewport
+ * transform updates; committed layout + waveform tiles rebuild on gesture end.
  */
+import { flushZoomCommit } from "./zoomGestureViewport";
 
 let zoomEndTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
@@ -26,8 +27,9 @@ export function markZoomActivity(): void {
 
   if (zoomEndTimer) clearTimeout(zoomEndTimer);
   zoomEndTimer = setTimeout(() => {
+    flushZoomCommit();
     delete document.documentElement.dataset.zooming;
     notify();
     window.dispatchEvent(new CustomEvent("odeon:zoom-end"));
-  }, 100);
+  }, 60);
 }

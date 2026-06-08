@@ -527,6 +527,19 @@ function resolveSetLaneEngineVolume(
   return Math.max(-60, automated.faderDb);
 }
 
+const lastLanePushKey = new Map<string, string>();
+
+function lanePushFingerprint(mix: DeckMix, faderDb: number): string {
+  return [
+    faderDb.toFixed(1),
+    mix.mute ? 1 : 0,
+    mix.high.toFixed(0),
+    mix.mid.toFixed(0),
+    mix.low.toFixed(0),
+    mix.filter.toFixed(2),
+  ].join("|");
+}
+
 function pushSetLaneMixes(
   ctx: SetEnginePushContext,
   crossfaderPos: number,
@@ -561,12 +574,13 @@ function pushSetLaneMixes(
       globalEnabled: globalAutomation,
     });
 
+    const engineFaderDb = resolveSetLaneEngineVolume(
+      mix, lane, ctx.playheadSec, inTransition, transT, isOutgoing,
+    );
     const pushMix: DeckMix = {
       ...defaultDeckMix(),
       trimDb: mix.trimDb,
-      faderDb: resolveSetLaneEngineVolume(
-        mix, lane, ctx.playheadSec, inTransition, transT, isOutgoing,
-      ),
+      faderDb: engineFaderDb,
       high: automated.high,
       mid: automated.mid,
       low: automated.low,
@@ -577,7 +591,14 @@ function pushSetLaneMixes(
       mute: mix.mute,
       showAutomation: mix.showAutomation,
     };
-    applyDeckMixToEngine(lane.card.entryId, pushMix, crossfaderPos);
+
+    const entryId = lane.card.entryId;
+    const fp = lanePushFingerprint(pushMix, engineFaderDb);
+    if (!inTransition && lastLanePushKey.get(entryId) === fp) {
+      continue;
+    }
+    lastLanePushKey.set(entryId, fp);
+    applyDeckMixToEngine(entryId, pushMix, crossfaderPos);
   }
 }
 

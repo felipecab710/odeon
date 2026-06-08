@@ -36,7 +36,7 @@ from .models import (
     BlueprintProjectSummary,
     BlueprintTrackSummary,
 )
-from .separation.separator import get_separator
+from .separation.separator import demucs_required, get_separator, separator_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -76,8 +76,12 @@ app.include_router(select_router)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import threading
+
     init_db()
     logger.info("Odeon API ready. Storage root: %s", _BASE)
+    # Warm demucs availability probe off the /health hot path.
+    threading.Thread(target=lambda: get_separator().is_available(), daemon=True).start()
 
 
 # ─────────────────────────────────────────────
@@ -86,13 +90,13 @@ def on_startup() -> None:
 
 @app.get("/health")
 def health():
-    separator = get_separator()
-    return {
-        "status": "ok",
-        "version": "0.1.0",
-        "stem_separator": separator.__class__.__name__,
-        "stem_separation_available": separator.is_available(),
-    }
+    stem = separator_status()
+    if stem.get("error") and demucs_required():
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "version": "0.1.0", **stem},
+        )
+    return {"status": "ok", "version": "0.1.0", **stem}
 
 
 # ─────────────────────────────────────────────
