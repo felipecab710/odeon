@@ -146,9 +146,21 @@ export function registerZoomCommit(
 }
 
 export function flushZoomCommit(): void {
+  cancelPendingWheelZoom();
   const commit = peekZoomCommit();
   if (commit) {
     for (const h of commitHandlers) h(commit.pixelsPerSecond, commit.scrollLeft);
   }
   clearZoomGesture();
+}
+
+/** Registered by useTimelineWheel — drops buffered pinch momentum before commit. */
+let wheelCancel: (() => void) | null = null;
+
+export function registerWheelZoomCancel(fn: (() => void) | null): void {
+  wheelCancel = fn;
+}
+
+export function cancelPendingWheelZoom(): void {
+  wheelCancel?.();
 }

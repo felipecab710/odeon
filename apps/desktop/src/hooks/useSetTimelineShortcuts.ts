@@ -9,8 +9,7 @@
  * W   — fit entire set horizontally
  */
 import { useEffect, useCallback } from "react";
-import { ZOOM_BUTTON_FACTOR } from "../lib/timelineViewportZoom";
-import { applyZoomGesture, flushZoomCommit } from "../lib/zoomGestureViewport";
+import { ZOOM_BUTTON_FACTOR, zoomAtAnchor } from "../lib/timelineViewportZoom";
 import { useSetTimelineStore } from "../stores/setTimelineStore";
 import { MIN_PX_PER_SEC, MAX_PX_PER_SEC } from "../components/setbuilder/setTimelineLayout";
 import { useStudioLaneStore, MAX_LANE_TOTAL_H } from "../stores/studioLaneStore";
@@ -31,6 +30,8 @@ interface Options {
   syncDomScroll: () => void;
   /** Ableton-style zoom anchor at playhead. */
   readZoomAnchorViewportX: () => number;
+  /** When true, scroll/zoom state lives in the store (native GPU embed). */
+  nativeActive?: boolean;
 }
 
 export function useSetTimelineShortcuts({
@@ -40,23 +41,37 @@ export function useSetTimelineShortcuts({
   scrollRef,
   syncDomScroll,
   readZoomAnchorViewportX,
+  nativeActive = false,
 }: Options) {
+  const readScrollLeft = useCallback(() => {
+    if (nativeActive) return useSetTimelineStore.getState().scrollLeft;
+    return scrollRef.current?.scrollLeft ?? 0;
+  }, [nativeActive, scrollRef]);
+
+  const applyScrollLeft = useCallback((left: number) => {
+    if (!nativeActive) {
+      const el = scrollRef.current;
+      if (el) el.scrollLeft = left;
+    }
+    syncDomScroll();
+  }, [nativeActive, scrollRef, syncDomScroll]);
+
   const applyZoomStep = useCallback((factor: number) => {
     const el = scrollRef.current;
     if (!el) return;
-    const pps = useSetTimelineStore.getState().pixelsPerSecond;
-    if (applyZoomGesture(
+    const store = useSetTimelineStore.getState();
+    const result = zoomAtAnchor({
+      oldPps: store.pixelsPerSecond,
       factor,
-      readZoomAnchorViewportX(),
-      el.scrollLeft,
-      pps,
-      MIN_PX_PER_SEC,
-      MAX_PX_PER_SEC,
-    )) {
-      flushZoomCommit();
-      syncDomScroll();
-    }
-  }, [scrollRef, syncDomScroll, readZoomAnchorViewportX]);
+      scrollLeft: readScrollLeft(),
+      anchorViewportX: readZoomAnchorViewportX(),
+      minPps: MIN_PX_PER_SEC,
+      maxPps: MAX_PX_PER_SEC,
+    });
+    if (!result) return;
+    store.setView(result.newPps, result.newScrollLeft);
+    applyScrollLeft(result.newScrollLeft);
+  }, [scrollRef, readScrollLeft, applyScrollLeft, readZoomAnchorViewportX]);
 
   const smartZoomIn = useCallback(() => {
     const el = scrollRef.current;
@@ -72,14 +87,15 @@ export function useSetTimelineShortcuts({
       store.zoomToTimeRange(selected.startSec, selected.endSec, el.clientWidth);
     } else {
       const pps = store.pixelsPerSecond;
-      const t0 = el.scrollLeft / pps;
-      const t1 = (el.scrollLeft + el.clientWidth) / pps;
+      const left = readScrollLeft();
+      const t0 = left / pps;
+      const t1 = (left + el.clientWidth) / pps;
       const midSpan = (t1 - t0) * 0.35;
       const center = (t0 + t1) / 2;
       store.zoomToTimeRange(center - midSpan / 2, center + midSpan / 2, el.clientWidth);
     }
     syncDomScroll();
-  }, [scrollRef, syncDomScroll, lanes, selectedCardId]);
+  }, [scrollRef, syncDomScroll, readScrollLeft, lanes, selectedCardId]);
 
   const restoreZoom = useCallback(() => {
     if (useSetTimelineStore.getState().restorePreviousZoom()) {
@@ -92,10 +108,9 @@ export function useSetTimelineShortcuts({
     if (!el || lanes.length === 0) return;
     const totalSec = Math.max(...lanes.map(l => l.endSec));
     useSetTimelineStore.getState().fitToDuration(totalSec, el.clientWidth);
-    el.scrollLeft = 0;
     useSetTimelineStore.getState().setScrollLeft(0);
-    syncDomScroll();
-  }, [scrollRef, syncDomScroll, lanes]);
+    applyScrollLeft(0);
+  }, [scrollRef, applyScrollLeft, lanes]);
 
   const maximizeLanes = useCallback(() => {
     const setLaneHeight = useStudioLaneStore.getState().setLaneHeight;

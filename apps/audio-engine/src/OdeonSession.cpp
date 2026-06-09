@@ -31,10 +31,18 @@ void OdeonSession::initialise() {
 
     // Boot Tracktion's DeviceManager (wires the engine's audio callback to the
     // default CoreAudio output). Render works without a device; playback needs it.
-    engine_->getDeviceManager().initialise(0, 2);
+    auto& dm = engine_->getDeviceManager();
+    dm.initialise(0, 2);
     applyDiskCacheSize();
 
-    deviceReady_ = engine_->getDeviceManager().getNumWaveOutDevices() > 0;
+    deviceReady_ = dm.deviceManager.getCurrentAudioDevice() != nullptr
+                && dm.deviceManager.getCurrentAudioDevice()->isOpen();
+    if (!deviceReady_) {
+        dm.checkDefaultDevicesAreValid();
+        dm.rescanWaveDeviceList();
+        deviceReady_ = dm.deviceManager.getCurrentAudioDevice() != nullptr
+                    && dm.deviceManager.getCurrentAudioDevice()->isOpen();
+    }
     if (!deviceReady_)
         logEngineError("initialise", "No audio output device available.");
 
@@ -1741,15 +1749,33 @@ std::string OdeonSession::setPlaybackEngineSettings(const juce::var& p) {
     setup.bufferSize = playbackSettings_.bufferSizeSamples;
     setup.sampleRate = playbackSettings_.sampleRate;
 
+    const bool wasPlaying = transport_ && transport_->isPlaying();
+    const double savedPos = transport_
+        ? transport_->getPosition().inSeconds()
+        : 0.0;
+
     const auto err = dm.deviceManager.setAudioDeviceSetup(setup, true);
     if (err.isNotEmpty()) {
         logEngineError("setPlaybackEngineSettings", err.toStdString());
         return jsonErr("Device setup failed: " + err.toStdString());
     }
 
+    deviceReady_ = dm.deviceManager.getCurrentAudioDevice() != nullptr
+                && dm.deviceManager.getCurrentAudioDevice()->isOpen();
+
     dm.rescanWaveDeviceList();
     dm.checkDefaultDevicesAreValid();
     dm.saveSettings();
+
+    // Rebind the transport graph to the new CoreAudio device — without this,
+    // switching output (e.g. speakers → External Headphones) leaves playback silent.
+    if (transport_) {
+        transport_->stop(false, false);
+        transport_->ensureContextAllocated(true);
+        transport_->setPosition(tracktion::TimePosition::fromSeconds(savedPos));
+        if (wasPlaying)
+            transport_->play(false);
+    }
 
     return getPlaybackEngineSettings();
 }

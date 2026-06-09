@@ -9,6 +9,8 @@ import { useNavigationStore } from "./stores/navigationStore";
 import { engineClient } from "./lib/engineClient";
 import { apiClient } from "./lib/apiClient";
 import { useEngineSync } from "./lib/useEngineSync";
+import { ensureEngineAudioOutput } from "./lib/ensureEngineAudio";
+import { resetSetEngineSession } from "./lib/useSetEngineSync";
 import { useTransportShortcuts } from "./hooks/useTransportShortcuts";
 import { useUndoShortcuts } from "./hooks/useUndoShortcuts";
 import { prefetchProjectWaveformCaches } from "./lib/waveformEngine";
@@ -32,7 +34,7 @@ async function setWindowTitle(title: string) {
 
 export default function App() {
   const { project } = useProjectStore();
-  const { setBpm, setEngineReady } = useTransportStore();
+  const { setBpm, setEngineReady, setEngineTracksReady } = useTransportStore();
   const { initTrack } = useEngineStore();
   const view = useNavigationStore((s) => s.view);
   const engineProject = view === "studio" ? project : null;
@@ -64,11 +66,26 @@ export default function App() {
   useEffect(() => {
     const unsubs: Array<() => void> = [];
 
-    engineClient.onEngineReady(() => setEngineReady(true))
-      .then((u) => unsubs.push(u));
+    engineClient.onEngineReady(() => {
+      resetSetEngineSession();
+      void ensureEngineAudioOutput().finally(() => setEngineReady(true));
+    }).then((u) => unsubs.push(u));
 
-    engineClient.onEngineUnavailable(() => setEngineReady(false))
-      .then((u) => unsubs.push(u));
+    engineClient.onEngineUnavailable(() => {
+      setEngineReady(false);
+      setEngineTracksReady(false);
+    }).then((u) => unsubs.push(u));
+
+    engineClient.onEngineTerminated(() => {
+      setEngineReady(false);
+      setEngineTracksReady(false);
+      resetSetEngineSession();
+      void engineClient.restartEngine()
+        .then(() => ensureEngineAudioOutput())
+        .then(() => engineClient.getTransportState())
+        .then(() => setEngineReady(true))
+        .catch((err) => console.warn("[App] engine restart failed:", err));
+    }).then((u) => unsubs.push(u));
 
     engineClient.onTransportState((data) => {
       setEngineReady(true);
@@ -77,6 +94,7 @@ export default function App() {
 
     // engineReady fires before React registers listeners — poll once to catch it
     engineClient.getTransportState()
+      .then(() => ensureEngineAudioOutput())
       .then(() => setEngineReady(true))
       .catch(() => {});
 

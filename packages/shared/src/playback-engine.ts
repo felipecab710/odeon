@@ -58,8 +58,8 @@ export interface PlaybackEngineStatus {
 
 export const DEFAULT_PLAYBACK_SETTINGS: PlaybackEngineSettings = {
   outputDeviceName: "",
-  bufferSizeSamples: 256,
-  sampleRate: 48000,
+  bufferSizeSamples: 512,
+  sampleRate: 44100,
   errorRecovery: {
     cpuOverload: "continue",
     diskUnderrun: "silence",

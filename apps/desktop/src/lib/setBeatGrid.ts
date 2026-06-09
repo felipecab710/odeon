@@ -1,14 +1,21 @@
 /**
  * Ableton-style beat grid for Set Builder timeline.
- * Bar / beat / subdivision lines with zoom-adaptive density.
+ *
+ * DAW parity model (Audacity / Ardour / Ableton):
+ * - One global time axis in seconds; grid origin at t = 0.
+ * - Beat/bar spacing from BPM; adaptive density from zoom (px between lines).
+ * - Ruler ticks and vertical grid lines share the same time positions.
+ * - Paint uses gridViewportX (timeSec * pps - scrollLeft; never double-apply scroll).
  */
 
-export type BeatGridKind = "bar" | "beat" | "half" | "quarter";
+export type BeatGridKind = "bar" | "subBar" | "beat" | "half" | "quarter";
+
+/** Tolerance for floating grid alignment (≈1 ms at 120 BPM quarter-note). */
+export const BEAT_GRID_EPS = 1e-3;
 
 export interface BeatGridLevel {
   kind: BeatGridKind;
   intervalSec: number;
-  /** Min px between lines of this level to include it. */
   minPx: number;
   color: string;
 }
@@ -18,11 +25,18 @@ export interface BeatGridLine {
   kind: BeatGridKind;
 }
 
+export interface BeatGridMetrics {
+  bpm: number;
+  pixelsPerSecond: number;
+  beatsPerBar: number;
+}
+
 const BEAT_LEVELS: Omit<BeatGridLevel, "intervalSec">[] = [
-  { kind: "bar", minPx: 24, color: "rgba(255,255,255,0.16)" },
-  { kind: "beat", minPx: 12, color: "rgba(255,255,255,0.09)" },
-  { kind: "half", minPx: 8, color: "rgba(255,255,255,0.05)" },
-  { kind: "quarter", minPx: 4, color: "rgba(255,255,255,0.03)" },
+  { kind: "bar", minPx: 0, color: "rgba(255,255,255,0.11)" },
+  { kind: "subBar", minPx: 14, color: "rgba(255,255,255,0.045)" },
+  { kind: "beat", minPx: 22, color: "rgba(255,255,255,0.065)" },
+  { kind: "half", minPx: 10, color: "rgba(255,255,255,0.035)" },
+  { kind: "quarter", minPx: 8, color: "rgba(255,255,255,0.02)" },
 ];
 
 export function beatDurationSec(bpm: number): number {
@@ -33,7 +47,25 @@ export function barDurationSec(bpm: number, beatsPerBar = 4): number {
   return beatDurationSec(bpm) * beatsPerBar;
 }
 
-/** Major ruler label spacing — every N bars when zoomed out. */
+export function beatIndexAt(timeSec: number, bpm: number): number {
+  const beat = beatDurationSec(bpm);
+  return Math.round(timeSec / beat);
+}
+
+export function timeSecAtBeatIndex(index: number, bpm: number): number {
+  return index * beatDurationSec(bpm);
+}
+
+export function isOnGridInterval(
+  timeSec: number,
+  intervalSec: number,
+  originSec = 0,
+): boolean {
+  if (intervalSec <= 0) return false;
+  const n = (timeSec - originSec) / intervalSec;
+  return Math.abs(n - Math.round(n)) * intervalSec < BEAT_GRID_EPS;
+}
+
 export function labeledBarMultiple(bpm: number, pps: number, targetPx = 72): number {
   const bar = barDurationSec(bpm);
   for (const mult of [1, 2, 4, 8, 16, 32, 64]) {
@@ -42,56 +74,85 @@ export function labeledBarMultiple(bpm: number, pps: number, targetPx = 72): num
   return 64;
 }
 
-/**
- * Ableton-style bar-number density on the beat ruler.
- * Every bar when barPx ≥ 18; otherwise 1, 5, 9… or 1, 9, 17…
- */
 export function rulerBarLabelMultiple(bpm: number, pps: number): number {
-  const barPx = barDurationSec(bpm) * pps;
-  if (barPx >= 18) return 1;
-  for (const mult of [2, 4, 8, 16, 32, 64]) {
-    if (barDurationSec(bpm) * mult * pps >= 40) return mult;
+  return gridBarMultiple(bpm, pps, 40);
+}
+
+export function gridBarMultiple(bpm: number, pps: number, targetPx = 56): number {
+  const bar = barDurationSec(bpm);
+  for (const mult of [1, 2, 4, 8, 16, 32, 64]) {
+    if (bar * mult * pps >= targetPx) return mult;
   }
   return 64;
 }
 
-export function buildBeatGridLevels(bpm: number, pps: number): BeatGridLevel[] {
+export function buildBeatGridLevels(
+  bpm: number,
+  pps: number,
+  beatsPerBar = 4,
+): BeatGridLevel[] {
   const beat = beatDurationSec(bpm);
-  const bar = barDurationSec(bpm);
+  const bar = barDurationSec(bpm, beatsPerBar);
+  const barPx = bar * pps;
+  const barMult = gridBarMultiple(bpm, pps);
 
-  // Always draw every bar line — Ableton keeps bar grid even when zoomed out.
   const levels: BeatGridLevel[] = [
-    { kind: "bar", intervalSec: bar, minPx: 6, color: BEAT_LEVELS[0].color },
+    { kind: "bar", intervalSec: bar * barMult, minPx: 0, color: BEAT_LEVELS[0].color },
   ];
 
-  const subs: { kind: BeatGridKind; interval: number; template: Omit<BeatGridLevel, "intervalSec"> }[] = [
-    { kind: "beat", interval: beat, template: BEAT_LEVELS[1] },
-    { kind: "half", interval: beat / 2, template: BEAT_LEVELS[2] },
-    { kind: "quarter", interval: beat / 4, template: BEAT_LEVELS[3] },
-  ];
+  if (barMult > 1 && barPx >= BEAT_LEVELS[1].minPx) {
+    levels.push({
+      kind: "subBar",
+      intervalSec: bar,
+      minPx: BEAT_LEVELS[1].minPx,
+      color: BEAT_LEVELS[1].color,
+    });
+  }
 
-  for (const s of subs) {
-    if (s.interval * pps >= s.template.minPx) {
-      levels.push({ ...s.template, intervalSec: s.interval });
-    }
+  if (barPx >= 20) {
+    levels.push({ kind: "beat", intervalSec: beat, minPx: 20, color: BEAT_LEVELS[2].color });
+  }
+  if (barPx >= 44 && beat / 2 * pps >= BEAT_LEVELS[3].minPx) {
+    levels.push({ kind: "half", intervalSec: beat / 2, minPx: BEAT_LEVELS[3].minPx, color: BEAT_LEVELS[3].color });
+  }
+  if (barPx >= 72 && beat / 4 * pps >= BEAT_LEVELS[4].minPx) {
+    levels.push({ kind: "quarter", intervalSec: beat / 4, minPx: BEAT_LEVELS[4].minPx, color: BEAT_LEVELS[4].color });
   }
 
   return levels;
 }
 
-/** Iterate grid line times in [startSec, endSec] without building the full array. */
+/** Finest visible grid step — used for edit snap (matches visible grid). */
+export function finestVisibleGridInterval(bpm: number, pps: number, beatsPerBar = 4): number {
+  const levels = buildBeatGridLevels(bpm, pps, beatsPerBar);
+  if (levels.length === 0) return beatDurationSec(bpm);
+  return levels.reduce((min, l) => (l.intervalSec < min ? l.intervalSec : min), Infinity);
+}
+
+/** Snap to the visible beat grid at the current zoom (Ableton edit snap). */
+export function snapToVisibleBeatGrid(
+  timeSec: number,
+  bpm: number,
+  pps: number,
+  beatsPerBar = 4,
+): number {
+  const interval = finestVisibleGridInterval(bpm, pps, beatsPerBar);
+  if (interval <= 0) return Math.max(0, timeSec);
+  const snapped = Math.round(timeSec / interval) * interval;
+  return Math.max(0, Math.round(snapped * 1e6) / 1e6);
+}
+
 export function* iterGridLines(
   startSec: number,
   endSec: number,
   intervalSec: number,
+  originSec = 0,
 ): Generator<number> {
   if (intervalSec <= 0) return;
-  let t = Math.ceil(startSec / intervalSec) * intervalSec;
-  // Snap to grid with tolerance for float drift
-  t = Math.round(t * 10000) / 10000;
-  while (t <= endSec + 1e-6) {
-    yield t;
-    t = Math.round((t + intervalSec) * 10000) / 10000;
+  const first = Math.ceil((startSec - originSec - BEAT_GRID_EPS) / intervalSec);
+  const last = Math.floor((endSec - originSec + BEAT_GRID_EPS) / intervalSec);
+  for (let i = first; i <= last; i++) {
+    yield Math.round((originSec + i * intervalSec) * 1e6) / 1e6;
   }
 }
 
@@ -113,11 +174,10 @@ export function collectGridLines(
 
   lines.sort((a, b) => a.timeSec - b.timeSec || kindRank(a.kind) - kindRank(b.kind));
 
-  // One line per time — prefer bar > beat > half > quarter.
   const deduped: BeatGridLine[] = [];
   for (const line of lines) {
     const prev = deduped[deduped.length - 1];
-    if (prev && Math.abs(prev.timeSec - line.timeSec) < 0.001) {
+    if (prev && Math.abs(prev.timeSec - line.timeSec) < BEAT_GRID_EPS) {
       if (kindRank(line.kind) < kindRank(prev.kind)) {
         deduped[deduped.length - 1] = line;
       }
@@ -131,9 +191,10 @@ export function collectGridLines(
 function kindRank(k: BeatGridKind): number {
   switch (k) {
     case "bar": return 0;
-    case "beat": return 1;
-    case "half": return 2;
-    case "quarter": return 3;
+    case "subBar": return 1;
+    case "beat": return 2;
+    case "half": return 3;
+    case "quarter": return 4;
   }
 }
 
@@ -152,10 +213,6 @@ export interface TimeRulerMark {
   label: string;
 }
 
-/**
- * Beat-time ruler label (top strip): bar → "10", beat → "10.2", 16th → "10.3.2".
- * Half-beat labels are omitted — Ableton uses sixteenths, not ".2" halfway ticks as text.
- */
 export function formatBeatRulerLabel(
   timeSec: number,
   bpm: number,
@@ -169,20 +226,20 @@ export function formatBeatRulerLabel(
   const barPx = bar * pps;
   const mult = barLabelMult ?? rulerBarLabelMultiple(bpm, pps);
 
-  const totalBeats = timeSec / beat;
-  const barNum = Math.floor(totalBeats / beatsPerBar) + 1;
+  const beatIdx = beatIndexAt(timeSec, bpm);
+  const barNum = Math.floor(beatIdx / beatsPerBar) + 1;
   const barIndex = barNum - 1;
-  const beatInBar = (Math.floor(totalBeats) % beatsPerBar) + 1;
-  const fracBeat = totalBeats - Math.floor(totalBeats);
+  const beatInBar = (beatIdx % beatsPerBar) + 1;
 
-  const isBarLine = timeSec < 0.001 || Math.abs(timeSec % bar) < 0.002;
-  const isBeatLine = Math.abs(fracBeat) < 0.002;
-  const isSixteenth = Math.abs(fracBeat - 0.25) < 0.002 || Math.abs(fracBeat - 0.75) < 0.002;
+  const isBarLine = isOnGridInterval(timeSec, bar);
+  const isBeatLine = isOnGridInterval(timeSec, beat) && !isBarLine;
+  const isSixteenth = isOnGridInterval(timeSec, beat / 4) && !isOnGridInterval(timeSec, beat / 2);
 
   if (isBarLine && barPx >= 8 && barIndex % mult === 0) return String(barNum);
-  if (isBeatLine && !isBarLine && beatPx >= 18) return `${barNum}.${beatInBar}`;
+  if (isBeatLine && beatPx >= 18) return `${barNum}.${beatInBar}`;
   if (isSixteenth && beatPx >= 28) {
-    return `${barNum}.${beatInBar}.${fracBeat < 0.5 ? 2 : 4}`;
+    const sixteenthInBeat = Math.round((timeSec % beat) / (beat / 4));
+    return `${barNum}.${beatInBar}.${sixteenthInBeat || 2}`;
   }
 
   return null;
@@ -191,65 +248,33 @@ export function formatBeatRulerLabel(
 /** @deprecated Use formatBeatRulerLabel */
 export const formatAbletonRulerLabel = formatBeatRulerLabel;
 
-const MAX_RULER_TICKS = 400;
-
-/** Pick tick density so we never exceed MAX_RULER_TICKS in the view span. */
-export function rulerTickIntervalSec(
-  bpm: number,
-  pps: number,
-  viewSpanSec: number,
-): number {
-  const beat = beatDurationSec(bpm);
-  const bar = barDurationSec(bpm);
-  const candidates = [beat / 4, beat / 2, beat, bar, bar * 2, bar * 4, bar * 8];
-  for (const interval of candidates) {
-    if (viewSpanSec / interval <= MAX_RULER_TICKS) return interval;
-  }
-  return bar * 16;
-}
-
-/** Collect beat-time ruler marks with label collision filtering. */
+/**
+ * Beat ruler marks — same time positions as vertical grid (DAW parity).
+ */
 export function collectBeatRulerMarks(
   totalSec: number,
-  _levels: BeatGridLevel[],
+  levels: BeatGridLevel[],
   viewStartSec: number,
   viewEndSec: number,
   bpm: number,
   pps: number,
+  beatsPerBar = 4,
 ): BeatRulerMark[] {
-  const beat = beatDurationSec(bpm);
-  const bar = barDurationSec(bpm);
+  const bar = barDurationSec(bpm, beatsPerBar);
   const barPx = bar * pps;
   const barMult = rulerBarLabelMultiple(bpm, pps);
   const start = Math.max(0, viewStartSec);
   const end = Math.min(totalSec, viewEndSec);
-  const viewSpan = Math.max(0, end - start);
 
-  const tickInterval = rulerTickIntervalSec(bpm, pps, viewSpan);
-  const raw: BeatRulerMark[] = [];
-  for (const t of iterGridLines(start, end, tickInterval)) {
-    raw.push({ timeSec: t, kind: classifyGridLine(t, bpm), label: null });
-  }
-
-  const deduped: BeatRulerMark[] = [];
-  for (const mark of raw) {
-    const prev = deduped[deduped.length - 1];
-    if (prev && Math.abs(prev.timeSec - mark.timeSec) < 0.001) {
-      if (kindRank(mark.kind) < kindRank(prev.kind)) {
-        deduped[deduped.length - 1] = mark;
-      }
-    } else {
-      deduped.push(mark);
-    }
-  }
+  const lines = collectGridLines(totalSec, levels, start, end);
 
   let lastLabelRight = -Infinity;
-  return deduped.map((mark) => {
-    const label = formatBeatRulerLabel(mark.timeSec, bpm, pps, 4, barMult);
+  return lines.map((line) => {
+    const label = formatBeatRulerLabel(line.timeSec, bpm, pps, beatsPerBar, barMult);
     let showLabel: string | null = null;
 
     if (label) {
-      const leftPx = mark.timeSec * pps;
+      const leftPx = line.timeSec * pps;
       const approxWidth = label.length * 6 + 4;
       const minGap = label.includes(".")
         ? Math.max(20, approxWidth)
@@ -260,11 +285,10 @@ export function collectBeatRulerMarks(
       }
     }
 
-    return { ...mark, label: showLabel };
+    return { timeSec: line.timeSec, kind: line.kind, label: showLabel };
   });
 }
 
-/** Adaptive interval for bottom time ruler (~64–96px between labels). */
 export function timeRulerIntervalSec(pps: number, targetPx = 72): number {
   const candidates = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
   for (const sec of candidates) {
@@ -273,7 +297,6 @@ export function timeRulerIntervalSec(pps: number, targetPx = 72): number {
   return 600;
 }
 
-/** Ableton time ruler: m:ss (e.g. 0:00, 1:30). */
 export function formatTimeRulerLabel(timeSec: number): string {
   const t = Math.max(0, timeSec);
   const m = Math.floor(t / 60);
@@ -293,18 +316,15 @@ export function collectTimeRulerMarks(
   const marks: TimeRulerMark[] = [];
 
   for (const t of iterGridLines(start, end, interval)) {
-    marks.push({
-      timeSec: t,
-      label: formatTimeRulerLabel(t),
-    });
+    marks.push({ timeSec: t, label: formatTimeRulerLabel(t) });
   }
   return marks;
 }
 
-/** Ruler tick height in px — taller for stronger grid levels. */
 export function rulerTickHeight(kind: BeatGridKind): number {
   switch (kind) {
     case "bar": return 14;
+    case "subBar": return 10;
     case "beat": return 9;
     case "half": return 6;
     case "quarter": return 4;
@@ -314,28 +334,31 @@ export function rulerTickHeight(kind: BeatGridKind): number {
 export function classifyGridLine(timeSec: number, bpm: number, beatsPerBar = 4): BeatGridKind {
   const beat = beatDurationSec(bpm);
   const bar = barDurationSec(bpm, beatsPerBar);
-  const totalBeats = timeSec / beat;
-  const frac = totalBeats % 1;
 
-  if (Math.abs(timeSec % bar) < 0.02 || Math.abs(timeSec % bar - bar) < 0.02) return "bar";
-  if (Math.abs(frac) < 0.02) return "beat";
-  if (Math.abs(frac - 0.5) < 0.02) return "half";
+  if (isOnGridInterval(timeSec, bar)) return "bar";
+  if (isOnGridInterval(timeSec, beat)) return "beat";
+  if (isOnGridInterval(timeSec, beat / 2)) return "half";
   return "quarter";
 }
 
+/** @deprecated Use setTimelineViewport.viewTimeRange */
 export function viewTimeRange(
   scrollLeft: number,
   viewportWidth: number,
   pps: number,
   padSec = 2,
 ): { start: number; end: number } {
+  const safe = Math.max(pps, 1e-9);
   return {
-    start: Math.max(0, scrollLeft / pps - padSec),
-    end: (scrollLeft + viewportWidth) / pps + padSec,
+    start: Math.max(0, scrollLeft / safe - padSec),
+    end: (scrollLeft + viewportWidth) / safe + padSec,
   };
 }
 
-/** Paint beat ruler into a viewport-sized canvas (scroll-offset). */
+export function gridViewportX(timeSec: number, scrollLeft: number, pps: number): number {
+  return timeSec * pps - scrollLeft;
+}
+
 export function paintBeatRulerCanvas(
   ctx: CanvasRenderingContext2D,
   marks: BeatRulerMark[],
@@ -348,13 +371,13 @@ export function paintBeatRulerCanvas(
   ctx.fillRect(0, 0, width, height);
 
   for (const mark of marks) {
-    const x = Math.round(mark.timeSec * pps - scrollLeft) + 0.5;
+    const x = Math.round(gridViewportX(mark.timeSec, scrollLeft, pps)) + 0.5;
     if (x < -2 || x > width + 2) continue;
 
     const tickH = rulerTickHeight(mark.kind);
     ctx.fillStyle = mark.kind === "bar"
       ? "rgba(255,255,255,0.4)"
-      : mark.kind === "beat"
+      : mark.kind === "subBar" || mark.kind === "beat"
         ? "rgba(255,255,255,0.22)"
         : "rgba(255,255,255,0.1)";
     ctx.fillRect(x, height - tickH, 1, tickH);
@@ -368,7 +391,6 @@ export function paintBeatRulerCanvas(
   }
 }
 
-/** Paint time ruler into a viewport-sized canvas (scroll-offset). */
 export function paintTimeRulerCanvas(
   ctx: CanvasRenderingContext2D,
   marks: TimeRulerMark[],
@@ -381,7 +403,7 @@ export function paintTimeRulerCanvas(
   ctx.fillRect(0, 0, width, height);
 
   for (const mark of marks) {
-    const x = Math.round(mark.timeSec * pps - scrollLeft) + 0.5;
+    const x = Math.round(gridViewportX(mark.timeSec, scrollLeft, pps)) + 0.5;
     if (x < -12 || x > width + 12) continue;
 
     ctx.fillStyle = "rgba(255,255,255,0.35)";
@@ -395,7 +417,6 @@ export function paintTimeRulerCanvas(
   }
 }
 
-/** Paint beat grid lines into a viewport-sized canvas (scroll-offset). */
 export function paintBeatGridCanvas(
   ctx: CanvasRenderingContext2D,
   lines: BeatGridLine[],
@@ -406,7 +427,7 @@ export function paintBeatGridCanvas(
   levels: BeatGridLevel[],
 ): void {
   for (const line of lines) {
-    const x = Math.round(line.timeSec * pps - scrollLeft) + 0.5;
+    const x = Math.round(gridViewportX(line.timeSec, scrollLeft, pps)) + 0.5;
     if (x < 0 || x > width) continue;
     ctx.fillStyle = levelStyle(line.kind, levels);
     ctx.fillRect(x, 0, 1, height);

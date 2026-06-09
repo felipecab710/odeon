@@ -12,6 +12,9 @@ import { getActiveUserSet, useSetBuilderStore, type SetCard } from "../stores/se
 import { StudioWithBoothPanel } from "../components/setbuilder/StudioWithBoothPanel";
 import { SetSequencePanel } from "../components/setbuilder/SetSequencePanel";
 import { BoothPanel } from "../components/booth/BoothPanel";
+import { SetBuilderTransportControls } from "../components/setbuilder/SetBuilderTransportControls";
+import { computeSetLayout } from "../components/setbuilder/setTimelineLayout";
+import { resetSetEngineSession, useSetEngineSync } from "../lib/useSetEngineSync";
 import { ResizableRightSidebar } from "../components/layout/ResizableRightSidebar";
 import { FieldTooltip } from "../components/select/FieldTooltip";
 import type { CatalogEntry } from "@odeon/shared";
@@ -2396,6 +2399,20 @@ export function ResearchView() {
 
   const entryMap = useMemo(() => new Map(entries.map(e => [e.id, e])), [entries]);
   const sorted = useMemo(() => [...cards].sort((a, b) => a.order - b.order), [cards]);
+  const layout = useMemo(() => computeSetLayout(sorted, entryMap), [sorted, entryMap]);
+  const prevViewModeRef = useRef(viewMode);
+
+  // Booth view uses DJ deck sync — reset set-preview session when switching modes.
+  useEffect(() => {
+    if (prevViewModeRef.current !== viewMode) {
+      resetSetEngineSession();
+    }
+    prevViewModeRef.current = viewMode;
+  }, [viewMode]);
+
+  const { syncing: engineSyncing, syncError } = useSetEngineSync(
+    sorted.length >= 2 && viewMode !== "booth" ? layout.lanes : [],
+  );
   const selectedCard = cards.find(c => c.id === selectedCardId) ?? null;
   const timelineSelectedCard = cards.find(c => c.id === timelineSelectedCardId) ?? null;
 
@@ -2591,6 +2608,15 @@ export function ResearchView() {
             </button>
           ))}
         </div>
+
+        {sorted.length >= 2 && (
+          <SetBuilderTransportControls
+            sorted={sorted}
+            entryMap={entryMap}
+            engineSyncing={engineSyncing}
+            syncError={syncError}
+          />
+        )}
 
         <span style={{ flex: 1 }} />
 

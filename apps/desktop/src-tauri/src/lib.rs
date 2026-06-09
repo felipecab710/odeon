@@ -19,6 +19,12 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+mod timeline_embed;
+mod timeline_spike;
+
+use timeline_embed::{EmbedFrame, SharedTimelineEmbed, TimelineEmbedState};
+use odeon_timeline::TimelineScene;
+
 // ─────────────────────────────────────────────
 //  Shared engine state
 // ─────────────────────────────────────────────
@@ -52,8 +58,18 @@ type SharedEngine = Arc<Mutex<EngineState>>;
 //  Engine startup
 // ─────────────────────────────────────────────
 
+fn stop_engine_child(engine: &SharedEngine) {
+    let mut state = engine.lock().unwrap();
+    if let Some(child) = state.child.take() {
+        let _ = child.kill();
+    }
+    state.pending.clear();
+}
+
 fn start_engine(app: &AppHandle, engine: SharedEngine) -> Result<(), String> {
     use tauri_plugin_shell::process::CommandEvent;
+
+    stop_engine_child(&engine);
 
     let sidecar = app
         .shell()
@@ -89,6 +105,11 @@ fn start_engine(app: &AppHandle, engine: SharedEngine) -> Result<(), String> {
                 }
                 CommandEvent::Terminated(status) => {
                     log::warn!("[engine] process terminated: {:?}", status);
+                    {
+                        let mut state = engine_clone.lock().unwrap();
+                        state.child = None;
+                        state.pending.clear();
+                    }
                     app_handle
                         .emit("engine:terminated", ())
                         .ok();
@@ -786,36 +807,26 @@ async fn engine_set_playback_settings(
 }
 
 // ─────────────────────────────────────────────
-//  macOS window chrome — dark backing behind webview during resize
+//  macOS window chrome
 // ─────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn set_macos_window_background(window: &tauri::WebviewWindow) {
-    use cocoa::appkit::{NSColor, NSWindow};
-    use cocoa::base::{id, nil, YES};
-
-    if let Ok(ns_win) = window.ns_window() {
-        unsafe {
-            let ns_win = ns_win as id;
-            // studio-surface grey (#1A1A1A) — matches title bar chrome, not white or pure black
-            let color = NSColor::colorWithRed_green_blue_alpha_(
-                nil,
-                26.0 / 255.0,
-                26.0 / 255.0,
-                26.0 / 255.0,
-                1.0,
-            );
-            ns_win.setBackgroundColor_(color);
-            ns_win.setOpaque_(YES);
-        }
-    }
-}
+fn set_macos_window_background(_window: &tauri::WebviewWindow) {}
 
 #[cfg(not(target_os = "macos"))]
 fn set_macos_window_background(_window: &tauri::WebviewWindow) {}
 
 // ─────────────────────────────────────────────
 //  App entry point
+// ─────────────────────────────────────────────
+//  Engine restart (sidecar crashed or device change left it dead)
+// ─────────────────────────────────────────────
+
+#[tauri::command]
+fn engine_restart(app: AppHandle, engine: State<'_, SharedEngine>) -> Result<(), String> {
+    start_engine(&app, engine.inner().clone())
+}
+
 // ─────────────────────────────────────────────
 //  Utility commands
 // ─────────────────────────────────────────────
@@ -831,16 +842,79 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
 }
 
 // ─────────────────────────────────────────────
+//  Native timeline embed (Phase 1)
+// ─────────────────────────────────────────────
+
+#[tauri::command]
+fn timeline_embed_start(
+    window: tauri::WebviewWindow,
+    embed: State<'_, SharedTimelineEmbed>,
+    frame: EmbedFrame,
+) -> Result<(), String> {
+    let parent = window
+        .ns_view()
+        .map_err(|e| format!("ns_view: {e}"))?;
+    timeline_embed::embed_start(embed.inner(), parent, frame)
+}
+
+#[tauri::command]
+fn timeline_embed_wheel(
+    embed: State<'_, SharedTimelineEmbed>,
+    delta_y: f64,
+    ctrl: bool,
+    cursor_x: f64,
+) -> Result<(), String> {
+    timeline_embed::embed_wheel(embed.inner(), delta_y, ctrl, cursor_x)
+}
+
+#[tauri::command]
+fn timeline_embed_set_frame(
+    embed: State<'_, SharedTimelineEmbed>,
+    frame: EmbedFrame,
+) -> Result<(), String> {
+    timeline_embed::embed_set_frame(embed.inner(), frame)
+}
+
+#[tauri::command]
+fn timeline_embed_set_scene(
+    embed: State<'_, SharedTimelineEmbed>,
+    scene: TimelineScene,
+) -> Result<(), String> {
+    timeline_embed::embed_set_scene(embed.inner(), scene)
+}
+
+#[tauri::command]
+fn timeline_embed_set_playhead(
+    embed: State<'_, SharedTimelineEmbed>,
+    playhead_sec: f64,
+) -> Result<(), String> {
+    timeline_embed::embed_set_playhead(embed.inner(), playhead_sec)
+}
+
+#[tauri::command]
+fn timeline_embed_stop(embed: State<'_, SharedTimelineEmbed>) -> Result<(), String> {
+    timeline_embed::embed_stop(embed.inner())
+}
+
+#[tauri::command]
+fn timeline_embed_is_active(embed: State<'_, SharedTimelineEmbed>) -> Result<bool, String> {
+    Ok(timeline_embed::embed_is_active(embed.inner()))
+}
+
+// ─────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let engine_state: SharedEngine = Arc::new(Mutex::new(EngineState::new()));
+    let timeline_embed_state: SharedTimelineEmbed =
+        Arc::new(Mutex::new(TimelineEmbedState::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(engine_state.clone())
+        .manage(timeline_embed_state.clone())
         .setup(move |app| {
             // Start the odeon-engine sidecar
             if let Err(e) = start_engine(app.handle(), engine_state.clone()) {
@@ -852,9 +926,6 @@ pub fn run() {
             // Tauri intercepts these before they reach the WebView, so the HTML5
             // drag API never fires — we re-emit them as custom events instead.
             if let Some(window) = app.get_webview_window("main") {
-                // studio-surface grey shell — webview + NSWindow (no white title bar / resize gaps).
-                let chrome = tauri::window::Color::from((26u8, 26u8, 26u8));
-                let _ = window.set_background_color(Some(chrome));
                 let _ = window.set_theme(Some(tauri::Theme::Dark));
                 set_macos_window_background(&window);
 
@@ -941,8 +1012,23 @@ pub fn run() {
             engine_list_audio_devices,
             engine_get_playback_settings,
             engine_set_playback_settings,
+            engine_restart,
             reveal_in_finder,
+            timeline_spike::timeline_spike_open,
+            timeline_spike::timeline_spike_close,
+            timeline_embed_start,
+            timeline_embed_set_frame,
+            timeline_embed_set_scene,
+            timeline_embed_set_playhead,
+            timeline_embed_wheel,
+            timeline_embed_stop,
+            timeline_embed_is_active,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |handle, event| {
+            if matches!(event, tauri::RunEvent::MainEventsCleared { .. }) {
+                timeline_embed::embed_tick(&timeline_embed_state, &handle);
+            }
+        });
 }

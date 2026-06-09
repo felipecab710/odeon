@@ -1,48 +1,27 @@
 /**
  * Ableton-style beat grid — canvas-painted, viewport-culled.
  */
-import { memo, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { isZooming, subscribeZoom } from "../../lib/zoomInteraction";
-import {
-  buildBeatGridLevels,
-  collectGridLines,
-  paintBeatGridCanvas,
-  viewTimeRange,
-} from "../../lib/setBeatGrid";
+import { memo, useLayoutEffect, useMemo, useRef } from "react";
+import type { SetTimelineContext } from "../../lib/setTimelineContext";
 
 interface Props {
-  totalSec: number;
-  pixelsPerSecond: number;
-  bpm: number;
+  context: SetTimelineContext;
   height: number;
-  scrollLeft: number;
-  viewportWidth: number;
 }
 
 export const SetBeatTimelineGrid = memo(function SetBeatTimelineGrid({
-  totalSec,
-  pixelsPerSecond,
-  bpm,
+  context,
   height,
-  scrollLeft,
-  viewportWidth,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const zooming = useSyncExternalStore(subscribeZoom, isZooming, () => false);
-
-  const levels = useMemo(
-    () => buildBeatGridLevels(bpm, pixelsPerSecond),
-    [bpm, pixelsPerSecond],
-  );
+  const { viewportWidth } = context;
 
   const lines = useMemo(() => {
-    if (viewportWidth < 1 || totalSec <= 0) return [];
-    const { start, end } = viewTimeRange(scrollLeft, viewportWidth, pixelsPerSecond);
-    return collectGridLines(totalSec, levels, start, end);
-  }, [totalSec, levels, scrollLeft, viewportWidth, pixelsPerSecond]);
+    if (viewportWidth < 1 || context.totalSec <= 0) return [];
+    return context.gridLines();
+  }, [context, viewportWidth]);
 
-  useEffect(() => {
-    if (zooming) return;
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || viewportWidth < 1 || height < 1) return;
     const dpr = window.devicePixelRatio || 1;
@@ -55,9 +34,9 @@ export const SetBeatTimelineGrid = memo(function SetBeatTimelineGrid({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewportWidth, height);
     if (lines.length > 0) {
-      paintBeatGridCanvas(ctx, lines, scrollLeft, pixelsPerSecond, viewportWidth, height, levels);
+      context.paintGrid(ctx, lines, height);
     }
-  }, [lines, levels, scrollLeft, pixelsPerSecond, viewportWidth, height, zooming]);
+  }, [context, lines, viewportWidth, height]);
 
   if (viewportWidth < 1 || height < 1) return null;
 
@@ -67,7 +46,7 @@ export const SetBeatTimelineGrid = memo(function SetBeatTimelineGrid({
       style={{
         position: "absolute",
         top: 0,
-        left: scrollLeft,
+        left: 0,
         width: viewportWidth,
         height,
         pointerEvents: "none",

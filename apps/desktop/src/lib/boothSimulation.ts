@@ -529,6 +529,10 @@ function resolveSetLaneEngineVolume(
 
 const lastLanePushKey = new Map<string, string>();
 
+export function clearSetEngineMixPushCache(): void {
+  lastLanePushKey.clear();
+}
+
 function lanePushFingerprint(mix: DeckMix, faderDb: number): string {
   return [
     faderDb.toFixed(1),

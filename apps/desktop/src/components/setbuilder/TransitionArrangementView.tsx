@@ -2,7 +2,7 @@
  * Studio-style set arrangement — full timeline, stacked overlapping lanes,
  * automation curves on waveforms, per-deck EQ strips. Like DJ.Studio for set building.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CatalogEntry } from "@odeon/shared";
 import type { SetCard } from "../../stores/setBuilderStore";
 import {
@@ -14,9 +14,9 @@ import {
   type DeckMix,
   defaultDeckMix,
 } from "../../lib/deckMixEngine";
-import { useSetEngineSync } from "../../lib/useSetEngineSync";
 import { useTransportStore } from "../../stores/transportStore";
 import { useSetBuilderStore } from "../../stores/setBuilderStore";
+import { useNavigationStore } from "../../stores/navigationStore";
 import { useStudioDeckStore } from "../../stores/studioDeckStore";
 import { captureUndoState } from "../../stores/undoStore";
 import { ZOOM_BUTTON_FACTOR } from "../../lib/timelineViewportZoom";
@@ -27,24 +27,24 @@ import { useSetLocatorShortcuts } from "../../hooks/useSetLocatorShortcuts";
 import { useRulerMagnify } from "../../hooks/useRulerMagnify";
 import {
   seekSetTimeline,
-  timeSecFromContentX,
-  contentXFromClientX,
+  timeSecFromClientX,
   pixelsToTimeSec,
 } from "../../lib/setTimelineEngine";
 import { beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
+import { getZoomAnchorViewportX, subscribeTimelineCursor, getCursorTimeSec } from "../../lib/setTimelineViewport";
+import { SetTimelineContext } from "../../lib/setTimelineContext";
+import { useNativeTimelineEmbed } from "../../hooks/useNativeTimelineEmbed";
 import {
-  applyZoomGesture,
-  flushZoomCommit,
-  getGestureViewport,
-  registerZoomCommit,
-  subscribeGestureViewport,
-} from "../../lib/zoomGestureViewport";
-import { getZoomCursorAnchor } from "../../lib/zoomCursorAnchor";
+  nativeClipHitTest,
+  nativeLaneIndexFromClientY,
+  nativeTimeSecFromClientX,
+} from "../../lib/nativeTimelineHitTest";
+import { SetTimelineEditCursor } from "./SetTimelineEditCursor";
 import { useSetLocatorStore } from "../../stores/setLocatorStore";
 import { WaveformCanvas } from "../tracks/WaveformCanvas";
 import { DJMLaneStrip } from "./DJMLaneStrip";
 import {
-  LANE_STRIP_W, BEAT_RULER_H, TIME_RULER_H, MINIMAP_H,
+  LANE_STRIP_W, BEAT_RULER_H, TIME_RULER_H, minimapHeight,
   DEFAULT_PX_PER_SEC, MIN_PX_PER_SEC, MAX_PX_PER_SEC,
   HEADER_H,
   STUDIO_BG, STUDIO_BG_DEEP, STUDIO_SIDEBAR, STUDIO_RULER, STUDIO_GRID,
@@ -78,7 +78,15 @@ import {
   contrastingTextOn,
   resolveClipColor,
   shadeHex,
+  waveformColorsFromClip,
 } from "../../lib/clipColorPresets";
+import { resolveCardClipColor } from "../../lib/abletonClipPalette";
+import { ClipColorMenu } from "./ClipColorMenu";
+import { wavecachePath } from "../../lib/waveformEngine/cacheLoader";
+import { VisualPlayPosition } from "../../lib/visualPlayPosition";
+
+const NATIVE_GPU_DEFAULT =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform);
 
 // ─── Types & helpers ─────────────────────────────────────────────────────────
 
@@ -101,8 +109,6 @@ const CAMELOT: Record<string, string> = {
   "A# maj":"6B","A# min":"3A","B maj":"1B","B min":"10A",
 };
 
-// DJ.Studio deck accent colors
-const LANE_COLORS = ["#c8e650", "#b39ddb", "#4fc3f7", "#ffab40", "#f48fb1", "#fff176"];
 function camelot(k?: string | null) { return k ? CAMELOT[k] ?? k : "—"; }
 function trackTitle(e: CatalogEntry) {
   return e.title || e.file_name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").trim();
@@ -113,7 +119,7 @@ function trackTitle(e: CatalogEntry) {
 
 function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, waveHeight,
   automationExpanded, onSplitResize, color, mix, onMixChange, isSelected, isCardSelected, isDragging,
-  dragTranslatePx, pxPerSec, playheadSec, onHeaderPointerDown, onSeekAtClientX,
+  dragTranslatePx, pxPerSec, playheadSec, onHeaderPointerDown, onHeaderContextMenu, onSeekAtClientX,
   timelineScrollLeft, timelineViewportWidth,
 }: {
   lane: LaneLayout;
@@ -134,6 +140,7 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
   pxPerSec: number;
   playheadSec: number;
   onHeaderPointerDown: (e: React.MouseEvent) => void;
+  onHeaderContextMenu: (e: React.MouseEvent) => void;
   onSeekAtClientX: (clientX: number) => void;
   timelineScrollLeft: number;
   timelineViewportWidth: number;
@@ -147,6 +154,7 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
   const visEnd = Math.min(w, timelineScrollLeft + timelineViewportWidth - lane.leftPx);
   const visWidth = Math.max(0, visEnd - visStart);
   const clipBg = resolveClipColor(color);
+  const waveColors = waveformColorsFromClip(color);
 
   const seekAt = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -186,6 +194,7 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
       <div
         data-clip-header
         onMouseDown={onHeaderPointerDown}
+        onContextMenu={onHeaderContextMenu}
         style={{
           height: HEADER_H,
           display: "flex", alignItems: "center", gap: 5,
@@ -238,8 +247,8 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
             viewportWidth={visWidth}
             freezeRender={isDragging}
             waveLayout="stereo"
-            waveFill="#141414"
-            waveOutline="none"
+            waveFill={waveColors.fill}
+            waveOutline={waveColors.outline}
             showCenterLine
           />
         ) : (
@@ -392,14 +401,16 @@ export function TransitionArrangementView({
   boothVisible = true, onToggleBooth,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const nativeEmbedHostRef = useRef<HTMLDivElement>(null);
   const zoomCameraRef = useRef<HTMLDivElement>(null);
   const timelineZoneRef = useRef<HTMLDivElement>(null);
   const sidebarScrollRef = useRef<HTMLDivElement>(null);
   const pixelsPerSecond = useSetTimelineStore(s => s.pixelsPerSecond);
+  const timelineScrollLeft = useSetTimelineStore(s => s.scrollLeft);
   const setScrollLeft = useSetTimelineStore(s => s.setScrollLeft);
   const fitToDuration = useSetTimelineStore(s => s.fitToDuration);
   const pxPerSecRef = useRef(pixelsPerSecond);
-  const [scrollViewport, setScrollViewport] = useState({ left: 0, width: 0 });
+  const [viewportWidth, setViewportWidth] = useState(0);
   const [laneViewportH, setLaneViewportH] = useState(0);
   const mixes = useStudioDeckStore(s => s.mixes);
   const [plans, setPlans] = useState<Record<number, TransitionPlanData | null>>({});
@@ -410,11 +421,15 @@ export function TransitionArrangementView({
     bpm: number;
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
+  const [nativeGpuActive, setNativeGpuActive] = useState(NATIVE_GPU_DEFAULT);
+  const navView = useNavigationStore(s => s.view);
+  const setViewMode = useSetBuilderStore(s => s.viewMode);
 
   const activeSetId = useSetBuilderStore(s => s.activeSetId);
   const timelineSelectedCardId = useSetBuilderStore(s => s.timelineSelectedCardId);
   const selectTimelineCard = useSetBuilderStore(s => s.selectTimelineCard);
   const setTimelineStart = useSetBuilderStore(s => s.setTimelineStart);
+  const setCardClipColor = useSetBuilderStore(s => s.setCardClipColor);
 
   const locators = useSetLocatorStore(s => s.locators);
   const locatorSelectedId = useSetLocatorStore(s => s.selectedId);
@@ -430,6 +445,12 @@ export function TransitionArrangementView({
   const setRenamingId = useSetLocatorStore(s => s.setRenamingId);
   const requestKeyBinding = useSetLocatorStore(s => s.requestKeyBinding);
 
+  const [clipColorMenu, setClipColorMenu] = useState<{
+    x: number;
+    y: number;
+    cardId: string;
+  } | null>(null);
+
   const [locatorMenu, setLocatorMenu] = useState<{
     x: number;
     y: number;
@@ -438,8 +459,11 @@ export function TransitionArrangementView({
   } | null>(null);
 
   const playheadSec = useTransportStore(s => s.positionSeconds);
+  const setCursor = useTransportStore(s => s.setCursor);
+  const hoverTimeSec = useSyncExternalStore(subscribeTimelineCursor, getCursorTimeSec, () => null);
   const isPlaying = useTransportStore(s => s.isPlaying);
-  const togglePlayPause = useTransportStore(s => s.togglePlayPause);
+  const visualPosRef = useRef(new VisualPlayPosition());
+  const [nativePlayheadSec, setNativePlayheadSec] = useState(0);
   pxPerSecRef.current = pixelsPerSecond;
 
   const layout = useMemo(
@@ -447,39 +471,84 @@ export function TransitionArrangementView({
     [sorted, entryMap, pixelsPerSecond],
   );
 
-  const onViewportChange = useCallback((left: number, width: number) => {
-    setScrollViewport({ left, width });
+  const nativeEmbedLive =
+    nativeGpuActive
+    && navView === "research"
+    && setViewMode === "arrangement"
+    && layout.lanes.length > 0;
+
+  useEffect(() => {
+    visualPosRef.current.sync(playheadSec, isPlaying);
+    if (!isPlaying) setNativePlayheadSec(playheadSec);
+  }, [playheadSec, isPlaying]);
+
+  useEffect(() => {
+    if (!nativeEmbedLive || !isPlaying) return;
+    let raf = 0;
+    const tick = () => {
+      setNativePlayheadSec(visualPosRef.current.interpolate());
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [nativeEmbedLive, isPlaying]);
+
+  const gridBpm = layout.lanes[0]?.entry.bpm ?? 128;
+
+  const laneClipColors = useMemo(
+    () => layout.lanes.map((lane, i) =>
+      resolveCardClipColor(lane.card.clipColor, i),
+    ),
+    [layout.lanes],
+  );
+
+  const nativeLaneInputs = useMemo(
+    () => layout.lanes.map((lane, index) => ({
+      startSec: lane.startSec,
+      durationSec: lane.durationSec,
+      index,
+      colorHex: laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index),
+      wavecachePath: lane.entry.file_path
+        ? wavecachePath(lane.entry.file_path)
+        : undefined,
+    })),
+    [layout.lanes, laneClipColors],
+  );
+
+  const timelineContext = useMemo(
+    () => new SetTimelineContext({
+      pixelsPerSecond,
+      scrollLeft: timelineScrollLeft,
+      viewportWidth,
+      totalSec: layout.totalSec,
+      bpm: gridBpm,
+    }),
+    [pixelsPerSecond, timelineScrollLeft, viewportWidth, layout.totalSec, gridBpm],
+  );
+
+  const readTimelineContext = useCallback(() => timelineContext, [timelineContext]);
+
+  const onViewportChange = useCallback((_left: number, width: number) => {
+    setViewportWidth(width);
   }, []);
 
-  /** Direct DOM camera updates — no React re-render per zoom frame. */
-  useEffect(() => {
-    return subscribeGestureViewport(() => {
-      const cam = zoomCameraRef.current;
-      if (!cam) return;
-      const g = getGestureViewport();
-      if (g.active) {
-        cam.style.transform = `scaleX(${g.scaleX}) translateZ(0)`;
-        cam.style.transformOrigin = `${g.anchorContentX}px 0`;
-        cam.style.willChange = "transform";
-      } else {
-        cam.style.transform = "";
-        cam.style.transformOrigin = "";
-        cam.style.willChange = "";
-      }
-    });
-  }, []);
+  const readViewportMetrics = useCallback(() => timelineContext.toParams(), [timelineContext]);
 
   const readZoomAnchorViewportX = useCallback(() => {
     const el = scrollRef.current;
     const fallback = el ? el.clientWidth * 0.5 : 0;
-    return getZoomCursorAnchor(fallback);
+    return getZoomAnchorViewportX(fallback);
   }, []);
+
+  const onCursorTime = useCallback((timeSec: number) => {
+    setCursor(timeSec);
+  }, [setCursor]);
 
   // Seed viewport width on mount — avoids width=0 (no waveforms / ruler paint).
   useEffect(() => {
     const el = scrollRef.current;
     if (el && el.clientWidth > 0) {
-      setScrollViewport({ left: el.scrollLeft, width: el.clientWidth });
+      setViewportWidth(el.clientWidth);
     }
   }, [layout.lanes.length]);
 
@@ -491,18 +560,10 @@ export function TransitionArrangementView({
     enabled: layout.lanes.length > 0,
     lanesKey: layout.lanes.length,
     onViewportChange,
+    readTimelineContext,
+    onCursorTime,
+    nativeActive: nativeEmbedLive,
   });
-
-  useEffect(() => {
-    return registerZoomCommit((pps, sl) => {
-      useSetTimelineStore.getState().setView(pps, sl);
-      const el = scrollRef.current;
-      if (el) {
-        el.scrollLeft = sl;
-        setScrollViewport({ left: sl, width: el.clientWidth });
-      }
-    });
-  }, []);
 
   const seekTimeline = useCallback(async (timeSec: number) => {
     await seekSetTimeline(timeSec, {
@@ -515,19 +576,43 @@ export function TransitionArrangementView({
   const seekFromClientX = useCallback((clientX: number) => {
     const el = scrollRef.current;
     if (!el) return;
-    void seekTimeline(
-      timeSecFromContentX(
-        contentXFromClientX(clientX, el),
-        pixelsPerSecond,
-        layout.totalSec,
-      ),
-    );
-  }, [seekTimeline, pixelsPerSecond, layout.totalSec]);
+    void seekTimeline(timeSecFromClientX(clientX, el, readViewportMetrics()));
+  }, [seekTimeline, readViewportMetrics]);
+
+  const fitToSet = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || layout.totalSec <= 0) return;
+    fitToDuration(layout.totalSec, el.clientWidth);
+    el.scrollLeft = 0;
+    setScrollLeft(0);
+    setViewportWidth(el.clientWidth);
+  }, [layout.totalSec, fitToDuration, setScrollLeft]);
+
+  const fitToViewport = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const selected = layout.lanes.find(l => l.card.id === timelineSelectedCardId);
+    if (selected) {
+      useSetTimelineStore.getState().zoomToTimeRange(
+        selected.startSec,
+        selected.endSec,
+        el.clientWidth,
+      );
+      const sl = useSetTimelineStore.getState().scrollLeft;
+      if (scrollRef.current) scrollRef.current.scrollLeft = sl;
+      setScrollLeft(sl);
+      setViewportWidth(el.clientWidth);
+    } else {
+      fitToSet();
+    }
+  }, [layout.lanes, timelineSelectedCardId, fitToSet, setScrollLeft]);
 
   const rulerMagnify = useRulerMagnify({
     scrollRef,
     syncDomScroll,
+    onViewportChange,
     onRulerSeek: seekFromClientX,
+    readTimelineContext,
   });
 
   useSetLocatorShortcuts({
@@ -542,6 +627,7 @@ export function TransitionArrangementView({
     scrollRef,
     syncDomScroll,
     readZoomAnchorViewportX,
+    nativeActive: nativeEmbedLive,
   });
 
   const automationTracks = useStudioAutomationStore(s => s.tracks);
@@ -569,6 +655,134 @@ export function TransitionArrangementView({
     if (laneIndex < layout.transitions.length) onSelectTransition(laneIndex);
     else if (laneIndex > 0) onSelectTransition(laneIndex - 1);
   }, [layout.lanes, layout.transitions.length, selectTimelineCard, onSelectTransition]);
+
+  const selectedLaneIndex = useMemo(() => {
+    if (!timelineSelectedCardId) return null;
+    const idx = layout.lanes.findIndex(l => l.card.id === timelineSelectedCardId);
+    return idx >= 0 ? idx : null;
+  }, [timelineSelectedCardId, layout.lanes]);
+
+  const nativeSeekFromClientX = useCallback((clientX: number) => {
+    const el = nativeEmbedHostRef.current;
+    if (!el) return;
+    const timeSec = nativeTimeSecFromClientX(
+      clientX,
+      el,
+      timelineScrollLeft,
+      pixelsPerSecond,
+      layout.totalSec,
+    );
+    void seekTimeline(timeSec);
+  }, [seekTimeline, timelineScrollLeft, pixelsPerSecond, layout.totalSec]);
+
+  const nativeCursorFromClientX = useCallback((clientX: number) => {
+    const el = nativeEmbedHostRef.current;
+    if (!el) return;
+    const timeSec = nativeTimeSecFromClientX(
+      clientX,
+      el,
+      timelineScrollLeft,
+      pixelsPerSecond,
+      layout.totalSec,
+    );
+    setCursor(timeSec);
+  }, [setCursor, timelineScrollLeft, pixelsPerSecond, layout.totalSec]);
+
+  const nativePointerDown = useCallback((clientX: number, clientY: number) => {
+    const el = nativeEmbedHostRef.current;
+    if (!el) return;
+    const hit = nativeClipHitTest(
+      clientX,
+      clientY,
+      el,
+      layout.lanes,
+      laneYs,
+      laneHeights,
+      timelineScrollLeft,
+      pixelsPerSecond,
+    );
+    if (hit) {
+      if (timelineSelectedCardId !== hit.lane.card.id) {
+        selectLaneCard(hit.laneIndex);
+      }
+      beginUndoGesture();
+      setDragDeltaPx(0);
+      setDrag({
+        cardId: hit.lane.card.id,
+        startClientX: clientX,
+        startSec: hit.lane.startSec,
+        bpm: hit.lane.entry.bpm ?? 128,
+      });
+      return;
+    }
+    const laneIndex = nativeLaneIndexFromClientY(clientY, el, laneYs, laneHeights);
+    if (laneIndex != null) selectLaneCard(laneIndex);
+  }, [
+    layout.lanes,
+    laneYs,
+    laneHeights,
+    timelineScrollLeft,
+    pixelsPerSecond,
+    timelineSelectedCardId,
+    selectLaneCard,
+  ]);
+
+  const nativeDragPreview = useMemo(() => {
+    if (!drag) return null;
+    const laneIndex = layout.lanes.findIndex(l => l.card.id === drag.cardId);
+    if (laneIndex < 0) return null;
+    return { laneIndex, deltaPx: dragDeltaPx };
+  }, [drag, dragDeltaPx, layout.lanes]);
+
+  const nativePlayheadForScene =
+    nativeEmbedLive && isPlaying ? nativePlayheadSec : playheadSec;
+
+  const nativeContextMenu = useCallback((clientX: number, clientY: number) => {
+    const el = nativeEmbedHostRef.current;
+    if (!el) return;
+    const hit = nativeClipHitTest(
+      clientX,
+      clientY,
+      el,
+      layout.lanes,
+      laneYs,
+      laneHeights,
+      timelineScrollLeft,
+      pixelsPerSecond,
+    );
+    if (!hit) return;
+    selectTimelineCard(hit.lane.card.id);
+    setClipColorMenu({ x: clientX, y: clientY, cardId: hit.lane.card.id });
+  }, [
+    layout.lanes,
+    laneYs,
+    laneHeights,
+    timelineScrollLeft,
+    pixelsPerSecond,
+    selectTimelineCard,
+  ]);
+
+  useNativeTimelineEmbed({
+    active: nativeEmbedLive,
+    targetRef: nativeEmbedHostRef,
+    totalSec: layout.totalSec,
+    bpm: gridBpm,
+    pixelsPerSecond,
+    scrollLeft: timelineScrollLeft,
+    playheadSec: nativePlayheadForScene,
+    cursorSec: hoverTimeSec,
+    selectedLaneIndex,
+    laneYs,
+    laneHeights,
+    lanes: nativeLaneInputs,
+    dragPreview: nativeDragPreview,
+    locators,
+    onSeekAtClientX: nativeSeekFromClientX,
+    onCursorAtClientX: nativeCursorFromClientX,
+    onPointerDown: nativePointerDown,
+    onContextMenu: nativeContextMenu,
+    onDoubleClick: fitToViewport,
+  });
 
   const toggleLaneCard = useCallback((lane: LaneLayout) => {
     const current = useSetBuilderStore.getState().timelineSelectedCardId;
@@ -623,28 +837,19 @@ export function TransitionArrangementView({
     const el = scrollRef.current;
     if (!el) return;
     const anchor = readZoomAnchorViewportX();
-    const pps = useSetTimelineStore.getState().pixelsPerSecond;
-    if (applyZoomGesture(factor, anchor, el.scrollLeft, pps, MIN_PX_PER_SEC, MAX_PX_PER_SEC)) {
-      flushZoomCommit();
-      syncDomScroll();
+    const scrollOverride = nativeEmbedLive
+      ? useSetTimelineStore.getState().scrollLeft
+      : el.scrollLeft;
+    if (useSetTimelineStore.getState().zoomAt(factor, anchor, scrollOverride)) {
+      if (!nativeEmbedLive) {
+        el.scrollLeft = useSetTimelineStore.getState().scrollLeft;
+      }
+      if (el.clientWidth > 0) setViewportWidth(el.clientWidth);
     }
-  }, [syncDomScroll, readZoomAnchorViewportX]);
+  }, [readZoomAnchorViewportX, nativeEmbedLive]);
 
   const zoomIn = useCallback(() => applyZoomClick(ZOOM_BUTTON_FACTOR), [applyZoomClick]);
   const zoomOut = useCallback(() => applyZoomClick(1 / ZOOM_BUTTON_FACTOR), [applyZoomClick]);
-
-  const fitToSet = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el || layout.totalSec <= 0) return;
-    fitToDuration(layout.totalSec, el.clientWidth);
-    el.scrollLeft = 0;
-    setScrollLeft(0);
-    setScrollViewport({ left: 0, width: el.clientWidth });
-  }, [layout.totalSec, fitToDuration, setScrollLeft]);
-
-  const { syncing: engineSyncing } = useSetEngineSync(layout.lanes);
-  const engineTracksReady = useTransportStore(s => s.engineTracksReady);
-  const canPlay = engineTracksReady && !engineSyncing;
 
   useAutomationRecorder(layout.lanes.length > 0);
 
@@ -655,16 +860,19 @@ export function TransitionArrangementView({
     if (!isPlaying) return;
     const el = scrollRef.current;
     if (!el) return;
-    const playheadPx = playheadSec * pixelsPerSecond;
+    const headSec = nativeEmbedLive ? nativePlayheadSec : playheadSec;
+    const playheadPx = headSec * pixelsPerSecond;
     const margin = 80;
-    const viewLeft = el.scrollLeft;
+    const viewLeft = nativeEmbedLive
+      ? timelineScrollLeft
+      : el.scrollLeft;
     const viewRight = viewLeft + el.clientWidth;
     if (playheadPx < viewLeft + margin || playheadPx > viewRight - margin) {
       const next = Math.max(0, playheadPx - el.clientWidth * 0.35);
-      el.scrollLeft = next;
       setScrollLeft(next);
+      if (!nativeEmbedLive) el.scrollLeft = next;
     }
-  }, [playheadSec, isPlaying, pixelsPerSecond, setScrollLeft]);
+  }, [playheadSec, nativePlayheadSec, isPlaying, pixelsPerSecond, setScrollLeft, nativeEmbedLive, timelineScrollLeft]);
 
   const getMix = useCallback((i: number) => mixes[i] ?? defaultDeckMix(), [mixes]);
 
@@ -692,11 +900,14 @@ export function TransitionArrangementView({
   }, [activeSetId, loadLocatorsForSet]);
 
   useEffect(() => {
-    if (!locatorMenu) return;
-    const close = () => setLocatorMenu(null);
+    if (!locatorMenu && !clipColorMenu) return;
+    const close = () => {
+      setLocatorMenu(null);
+      setClipColorMenu(null);
+    };
     window.addEventListener("pointerdown", close, true);
     return () => window.removeEventListener("pointerdown", close, true);
-  }, [locatorMenu]);
+  }, [locatorMenu, clipColorMenu]);
 
   // Load transition plans
   useEffect(() => {
@@ -755,15 +966,17 @@ export function TransitionArrangementView({
       const el = scrollRef.current;
       if (el) {
         const rect = el.getBoundingClientRect();
-        const sl = el.scrollLeft;
+        const sl = nativeEmbedLive
+          ? useSetTimelineStore.getState().scrollLeft
+          : el.scrollLeft;
         if (e.clientX > rect.right - 48) {
           const next = sl + 16;
-          el.scrollLeft = next;
           setScrollLeft(next);
+          if (!nativeEmbedLive) el.scrollLeft = next;
         } else if (e.clientX < rect.left + 48) {
           const next = Math.max(0, sl - 16);
-          el.scrollLeft = next;
           setScrollLeft(next);
+          if (!nativeEmbedLive) el.scrollLeft = next;
         }
       }
     };
@@ -771,7 +984,7 @@ export function TransitionArrangementView({
     const onUp = (e: MouseEvent) => {
       const deltaSec = pixelsToTimeSec(e.clientX - drag.startClientX, pxPerSecRef.current);
       const raw = Math.max(0, drag.startSec + deltaSec);
-      const snapped = snapToBeat(raw, drag.bpm);
+      const snapped = snapToBeat(raw, drag.bpm, pxPerSecRef.current);
       setTimelineStart(drag.cardId, snapped);
       endUndoGesture();
       setDrag(null);
@@ -784,7 +997,7 @@ export function TransitionArrangementView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [drag, setTimelineStart, setScrollLeft]);
+  }, [drag, setTimelineStart, setScrollLeft, nativeEmbedLive]);
 
   const handleTrackPointerDown = useCallback((lane: LaneLayout, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -833,9 +1046,8 @@ export function TransitionArrangementView({
 
   const totalDur = layout.totalSec;
 
-  const gridBpm = layout.lanes[0]?.entry.bpm ?? 128;
-
-  const zoomPct = Math.round((pixelsPerSecond / DEFAULT_PX_PER_SEC) * 100);
+  const displayPps = pixelsPerSecond;
+  const zoomPct = Math.round((displayPps / DEFAULT_PX_PER_SEC) * 100);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: STUDIO_BG_DEEP }}>
@@ -894,6 +1106,22 @@ export function TransitionArrangementView({
               padding: "2px 8px", cursor: "pointer", marginLeft: 2,
             }}
           >Fit</button>
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              setNativeGpuActive(v => !v);
+            }}
+            title={nativeGpuActive
+              ? "Switch back to web timeline"
+              : "Embed native GPU timeline (Phase 1)"}
+            style={{
+              background: nativeGpuActive ? "rgba(120,80,255,0.35)" : "rgba(120,80,255,0.12)",
+              border: `1px solid ${nativeGpuActive ? "#a78bfa" : "#7850ff55"}`,
+              borderRadius: 3, color: "#a78bfa", fontSize: 9, fontWeight: 700,
+              padding: "2px 8px", cursor: "pointer", marginLeft: 2,
+            }}
+          >{nativeGpuActive ? "Native ✓" : "Native"}</button>
         </div>
 
         <button
@@ -944,20 +1172,6 @@ export function TransitionArrangementView({
             {boothVisible ? "◎ Booth" : "◎ Show Booth"}
           </button>
         )}
-        <button
-          onClick={() => canPlay && togglePlayPause()}
-          disabled={!canPlay}
-          title={!canPlay ? (engineSyncing ? "Loading tracks…" : "Engine not ready") : undefined}
-          style={{
-            background: "#333", border: "1px solid #444", borderRadius: 3,
-            color: !canPlay ? "#444" : isPlaying ? "#ffeb3b" : "#aaa",
-            fontSize: 10, fontWeight: 700,
-            padding: "2px 10px", cursor: canPlay ? "pointer" : "not-allowed",
-            opacity: canPlay ? 1 : 0.5,
-          }}
-        >
-          {isPlaying ? "⏸" : "▶"}
-        </button>
       </div>
 
       <SetAutomationPanel trackCount={layout.lanes.length} />
@@ -967,27 +1181,26 @@ export function TransitionArrangementView({
         style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}
       >
       {/* Ableton-style overview navigator — shows zoom window + playhead */}
-      <div style={{ height: MINIMAP_H, flexShrink: 0 }}>
+      <div style={{ height: minimapHeight(layout.lanes.length), flexShrink: 0 }}>
         <SetTimelineNavigator
           lanes={layout.lanes}
           totalSec={totalDur}
-          scrollLeft={scrollViewport.left}
-          viewportWidth={scrollViewport.width}
+          scrollLeft={timelineScrollLeft}
+          viewportWidth={viewportWidth}
           pixelsPerSecond={pixelsPerSecond}
           playheadSec={playheadSec}
           transitionIndex={transitionIndex}
-          laneColors={LANE_COLORS}
+          laneColors={laneClipColors}
           leftInset={LANE_STRIP_W}
           onScroll={sl => {
             if (scrollRef.current) scrollRef.current.scrollLeft = sl;
             setScrollLeft(sl);
-            setScrollViewport(prev => ({ ...prev, left: sl }));
           }}
           onViewChange={(pps, sl) => {
             useSetTimelineStore.getState().setView(pps, sl);
             if (scrollRef.current) {
               scrollRef.current.scrollLeft = sl;
-              setScrollViewport({ left: sl, width: scrollRef.current.clientWidth });
+              setViewportWidth(scrollRef.current.clientWidth);
             }
           }}
           onSeek={t => { void seekTimeline(t); }}
@@ -1000,7 +1213,6 @@ export function TransitionArrangementView({
             if (scrollRef.current) {
               scrollRef.current.scrollLeft = lane.leftPx;
               setScrollLeft(lane.leftPx);
-              setScrollViewport(prev => ({ ...prev, left: lane.leftPx }));
             }
             if (next) {
               if (i < layout.transitions.length) onSelectTransition(i);
@@ -1036,7 +1248,7 @@ export function TransitionArrangementView({
               {layout.lanes.map((lane, i) => {
                 const waveH = getWaveHeight(i);
                 const autoH = getAutomationPanelHeight(i);
-                const color = LANE_COLORS[i % LANE_COLORS.length];
+                const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
                 const mix = getMix(i);
 
                 return (
@@ -1100,7 +1312,7 @@ export function TransitionArrangementView({
                     zIndex: 2,
                     cursor: "pointer",
                     boxShadow: layout.lanes[laneCount - 1]?.card.id === timelineSelectedCardId
-                      ? `inset 0 0 0 1px ${LANE_COLORS[(laneCount - 1) % LANE_COLORS.length]}66`
+                      ? `inset 0 0 0 1px ${laneClipColors[laneCount - 1] ?? resolveCardClipColor(layout.lanes[laneCount - 1]?.card.clipColor, laneCount - 1)}66`
                       : undefined,
                   }}
                 />
@@ -1126,8 +1338,27 @@ export function TransitionArrangementView({
 
         {/* Scrollable timeline — cursor-anchored zoom camera */}
         <div
+          ref={nativeEmbedHostRef}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            position: "relative",
+            pointerEvents: nativeEmbedLive ? "auto" : "none",
+            zIndex: nativeEmbedLive ? 2 : undefined,
+          }}
+        >
+        <div
           ref={scrollRef}
-          style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "auto", background: STUDIO_BG }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            overflow: nativeEmbedLive ? "hidden" : "auto",
+            background: STUDIO_BG,
+            opacity: nativeEmbedLive ? 0 : 1,
+            visibility: nativeEmbedLive ? "hidden" : "visible",
+            pointerEvents: nativeEmbedLive ? "none" : "auto",
+          }}
           onClick={e => {
             if ((e.target as HTMLElement).closest("[data-lane-select]")) return;
             if ((e.target as HTMLElement).closest("[data-lane-resize]")) return;
@@ -1146,12 +1377,8 @@ export function TransitionArrangementView({
             {/* Ableton beat-time ruler (top) + locators */}
             <div style={{ height: BEAT_RULER_H, position: "sticky", top: 0, zIndex: 20 }}>
               <SetBeatRuler
-                totalSec={totalDur}
-                pixelsPerSecond={pixelsPerSecond}
-                bpm={gridBpm}
+                context={timelineContext}
                 height={BEAT_RULER_H}
-                scrollLeft={scrollViewport.left}
-                viewportWidth={scrollViewport.width}
                 onPointerDown={rulerMagnify.onRulerPointerDown}
                 onPointerMove={rulerMagnify.onRulerPointerMove}
                 onPointerUp={rulerMagnify.onRulerPointerUp}
@@ -1164,11 +1391,7 @@ export function TransitionArrangementView({
                     x: e.clientX,
                     y: e.clientY,
                     locatorId: null,
-                    timeSec: timeSecFromContentX(
-                      contentXFromClientX(e.clientX, el),
-                      pixelsPerSecond,
-                      totalDur,
-                    ),
+                    timeSec: timeSecFromClientX(e.clientX, el, readViewportMetrics()),
                   });
                 }}
               />
@@ -1244,7 +1467,7 @@ export function TransitionArrangementView({
                 laneHeights={laneHeights}
                 laneCount={laneCount}
                 extendedLaneH={extendedLaneH}
-                colors={LANE_COLORS}
+                colors={laneClipColors}
                 selectedCardId={timelineSelectedCardId}
                 onSelectLane={selectLaneCard}
                 onSeekAtClientX={seekFromClientX}
@@ -1309,16 +1532,13 @@ export function TransitionArrangementView({
               zIndex: 4,
             }}>
               <SetBeatTimelineGrid
-                totalSec={totalDur}
-                pixelsPerSecond={pixelsPerSecond}
-                bpm={gridBpm}
+                context={timelineContext}
                 height={extendedLaneH}
-                scrollLeft={scrollViewport.left}
-                viewportWidth={scrollViewport.width}
               />
             </div>
 
-            {/* Track blocks */}
+            {/* Track blocks — skip DOM waveforms when native GPU owns rendering */}
+            {!nativeEmbedLive && (
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: timelineH, zIndex: 10 }}>
               {layout.lanes.map((lane, i) => {
                 const isDragging = drag?.cardId === lane.card.id;
@@ -1335,7 +1555,7 @@ export function TransitionArrangementView({
                     automationExpanded={automationExpanded}
                     waveHeight={getWaveHeight(i)}
                     onSplitResize={startSplitResize}
-                    color={LANE_COLORS[i % LANE_COLORS.length]}
+                    color={laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i)}
                     mix={getMix(i)}
                     onMixChange={m => handleMixChange(i, m)}
                     isSelected={i === transitionIndex || i === transitionIndex + 1}
@@ -1345,28 +1565,42 @@ export function TransitionArrangementView({
                     pxPerSec={pixelsPerSecond}
                     playheadSec={playheadSec}
                     onHeaderPointerDown={e => handleTrackPointerDown(lane, e)}
+                    onHeaderContextMenu={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      selectTimelineCard(lane.card.id);
+                      setClipColorMenu({ x: e.clientX, y: e.clientY, cardId: lane.card.id });
+                    }}
                     onSeekAtClientX={seekFromClientX}
-                    timelineScrollLeft={scrollViewport.left}
-                    timelineViewportWidth={scrollViewport.width}
+                    timelineScrollLeft={timelineScrollLeft}
+                    timelineViewportWidth={viewportWidth}
                   />
                 );
               })}
             </div>
+            )}
 
             </div>
 
             {/* Ableton time ruler (bottom black strip) — m:ss */}
             <div style={{ position: "sticky", bottom: 0, zIndex: 20 }}>
               <SetTimeRuler
-                totalSec={totalDur}
-                pixelsPerSecond={pixelsPerSecond}
+                context={timelineContext}
                 height={TIME_RULER_H}
-                scrollLeft={scrollViewport.left}
-                viewportWidth={scrollViewport.width}
               />
             </div>
 
-            {/* Playhead — inside zoom camera so it stretches with the world */}
+            {/* Edit cursor — Audacity-style hover line (DOM fallback only) */}
+            {!nativeEmbedLive && hoverTimeSec !== null && (
+              <SetTimelineEditCursor
+                timeSec={hoverTimeSec}
+                pixelsPerSecond={pixelsPerSecond}
+                height={BEAT_RULER_H + extendedLaneH + TIME_RULER_H}
+              />
+            )}
+
+            {/* Playhead — DOM fallback when native GPU is off */}
+            {!nativeEmbedLive && (
             <div style={{
               position: "absolute",
               left: playheadSec * pixelsPerSecond,
@@ -1386,10 +1620,25 @@ export function TransitionArrangementView({
                 borderTop: "7px solid #5ec8e8",
               }} />
             </div>
+            )}
           </div>
         </div>
       </div>
       </div>
+      </div>
+
+      {clipColorMenu && (
+        <ClipColorMenu
+          x={clipColorMenu.x}
+          y={clipColorMenu.y}
+          currentColor={
+            layout.lanes.find(l => l.card.id === clipColorMenu.cardId)?.card.clipColor
+            ?? laneClipColors[layout.lanes.findIndex(l => l.card.id === clipColorMenu.cardId)]
+          }
+          onPick={color => setCardClipColor(clipColorMenu.cardId, color)}
+          onClose={() => setClipColorMenu(null)}
+        />
+      )}
 
       {locatorMenu && (
         <div

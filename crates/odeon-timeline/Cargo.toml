@@ -1,0 +1,27 @@
+[package]
+name = "odeon-timeline"
+version = "0.1.0"
+edition = "2021"
+description = "Native GPU timeline renderer for Odeon Set Builder"
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
+
+# Spike / GPU window (Phase 0)
+winit = { version = "0.29", optional = true }
+wgpu = { version = "23", optional = true }
+pollster = { version = "0.3", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+env_logger = { version = "0.11", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+[features]
+default = []
+spike = ["winit", "wgpu", "pollster", "bytemuck", "env_logger", "raw-window-handle"]
+embed = ["spike", "serde_json", "wavecache"]
+wavecache = ["serde_json"]
+
+[dev-dependencies]
+approx = "0.5"

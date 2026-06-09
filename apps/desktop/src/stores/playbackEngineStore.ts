@@ -6,6 +6,7 @@ import {
   type PlaybackEngineStatus,
 } from "@odeon/shared";
 import { engineClient } from "../lib/engineClient";
+import { useTransportStore } from "./transportStore";
 
 const STORAGE_KEY = "odeon:playback-engine";
 
@@ -83,7 +84,15 @@ export const usePlaybackEngineStore = create<PlaybackEngineState>((set, get) => 
       const status = (await engineClient.setPlaybackEngineSettings(
         draft as unknown as Record<string, unknown>
       )) as PlaybackEngineStatus;
-      set({ status, draft: status.settings ?? draft, isSaving: false });
+      set({ status, draft: status.settings ?? draft, isSaving: false, isOpen: false });
+
+      // Nudge transport after output device change (engine also rebinds on its side).
+      const { isPlaying } = useTransportStore.getState();
+      if (isPlaying) {
+        try {
+          await engineClient.play();
+        } catch { /* engine may still be reinitialising */ }
+      }
     } catch (e) {
       const message =
         e instanceof Error

@@ -63,11 +63,11 @@ export function resolveTrackClipColor(
   return resolveClipColor(trackColor);
 }
 
-/** Waveform bar fill + outline derived from clip/bus hue. */
+/** Waveform fill + outline — darker shades of the clip hue (Ableton-style). */
 export function waveformColorsFromClip(hex: string): { fill: string; outline: string } {
   return {
-    fill: shadeHex(hex, 0.32),
-    outline: shadeHex(hex, -0.18),
+    fill: shadeHex(hex, -0.26),
+    outline: shadeHex(hex, -0.36),
   };
 }
 

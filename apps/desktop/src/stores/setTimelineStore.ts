@@ -3,7 +3,7 @@
  * Same Audacity anchor model as timelineStore (ZoomInfo + Viewport).
  */
 import { create } from "zustand";
-import { markZoomActivity } from "../lib/zoomInteraction";
+import { markZoomActivity, setGestureBaselinePps, setGestureAnchorTimelineX, isZooming } from "../lib/zoomInteraction";
 import { flushZoomCommit } from "../lib/zoomGestureViewport";
 import { zoomAtAnchor } from "../lib/timelineViewportZoom";
 import {
@@ -118,6 +118,11 @@ export const useSetTimelineStore = create<SetTimelineState>((set, get) => ({
       maxPps: MAX_PX_PER_SEC,
     });
     if (!result) return false;
+    const sl = scrollLeftOverride ?? scrollLeft;
+    if (!isZooming()) {
+      setGestureBaselinePps(pixelsPerSecond);
+      setGestureAnchorTimelineX(sl + anchorViewportX);
+    }
     markZoomActivity();
     persistPps(result.newPps);
     set({ pixelsPerSecond: result.newPps, scrollLeft: result.newScrollLeft });

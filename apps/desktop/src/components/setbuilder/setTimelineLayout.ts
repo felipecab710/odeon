@@ -3,6 +3,7 @@
  */
 import type { CatalogEntry } from "@odeon/shared";
 import type { SetCard } from "../../stores/setBuilderStore";
+import { snapToVisibleBeatGrid } from "../../lib/setBeatGrid";
 
 export const HEADER_H = 18;
 export const AUTO_H = 20;
@@ -19,7 +20,15 @@ export const TIME_RULER_H = 20;
 export const RULER_H = BEAT_RULER_H;
 /** Ableton arrangement ruler background. */
 export const ABLETON_RULER_BG = "#0a0a0a";
-export const MINIMAP_H = 24;
+export const MINIMAP_H = 28;
+export const MINIMAP_ROW_H = 14;
+export const MINIMAP_H_MAX = 88;
+
+/** Overview bar height scales with deck count (Ableton-style stacked lanes). */
+export function minimapHeight(laneCount: number): number {
+  if (laneCount <= 0) return MINIMAP_H;
+  return Math.min(MINIMAP_H_MAX, Math.max(MINIMAP_H, laneCount * MINIMAP_ROW_H + 2));
+}
 
 /** DJ.Studio palette */
 export const STUDIO_BG = "#2a2a2a";
@@ -32,8 +41,17 @@ export const DEFAULT_PX_PER_SEC = 3.2;
 /** @deprecated Use DEFAULT_PX_PER_SEC or dynamic zoom pxPerSec */
 export const PX_PER_SEC = DEFAULT_PX_PER_SEC;
 export const MIN_PX_PER_SEC = 0.35;
-/** Tile renderer paints viewport only — safe to zoom further than the old 48 cap. */
-export const MAX_PX_PER_SEC = 128;
+/** Absolute zoom ceiling — clip-edit depth, not sample-level. */
+export const MAX_PX_PER_SEC = 256;
+/** At max zoom, ~this many seconds fit in the viewport (Ableton clip-edit feel). */
+export const ABLETON_CLIP_EDIT_MIN_SEC = 10;
+
+/** Viewport-aware max px/sec — caps pinch so ~8–12 s stay visible at full zoom. */
+export function maxPxPerSecForViewport(viewportWidth: number): number {
+  const w = Math.max(200, viewportWidth);
+  const clipEditCap = w / ABLETON_CLIP_EDIT_MIN_SEC;
+  return Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC + 0.01, clipEditCap));
+}
 
 export interface LaneLayout {
   card: SetCard;
@@ -131,11 +149,15 @@ export function rulerMarkInterval(pxPerSec: number): number {
   return 600;
 }
 
-export function clampPxPerSec(px: number): number {
-  return Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, px));
+export function clampPxPerSec(px: number, viewportWidth?: number): number {
+  const max = viewportWidth != null ? maxPxPerSecForViewport(viewportWidth) : MAX_PX_PER_SEC;
+  return Math.max(MIN_PX_PER_SEC, Math.min(max, px));
 }
 
-export function snapToBeat(sec: number, bpm: number): number {
+export function snapToBeat(sec: number, bpm: number, pps?: number): number {
+  if (pps != null && pps > 0) {
+    return snapToVisibleBeatGrid(sec, bpm, pps);
+  }
   const beatDur = 60 / (bpm || 128);
   return Math.max(0, Math.round(sec / beatDur) * beatDur);
 }

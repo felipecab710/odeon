@@ -1,21 +1,12 @@
 /**
- * Pro Tools / Ableton-style waveform canvas.
- *
- * Scroll model: tiles of 512px are rendered and cached; scroll blits from cache
- * via drawImage — no per-pixel repaint on scroll change.
- *
- * Zoom gesture: Ableton camera — no repaint during pinch; stretch cached tiles
- * via parent CSS scale. Zoom end: invalidate tiles and rebuild at exact LOD.
+ * Waveform canvas — tile cache + viewport blit.
+ * Zoom uses the same live pps/scrollLeft as the grid (no CSS scale).
  */
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import type { TrackAnalysis } from "@odeon/shared";
 import { useWaveformCache } from "../../hooks/useWaveformCache";
-import {
-  blitVisibleTiles,
-  invalidateWaveformBitmap,
-} from "../../lib/waveformEngine/renderBitmap";
-import { paintWaveform } from "../../lib/waveformEngine";
-import { isZooming } from "../../lib/zoomInteraction";
+import { blitVisibleTiles, prefetchClipTiles } from "../../lib/waveformEngine/renderBitmap";
+import { isZooming, subscribeZoom } from "../../lib/zoomInteraction";
 import { scheduleWavePaint } from "../../lib/wavePaintScheduler";
 
 export const WaveformCanvas = memo(function WaveformCanvas({
@@ -55,76 +46,115 @@ export const WaveformCanvas = memo(function WaveformCanvas({
   waveOutline?: string;
   showCenterLine?: boolean;
 }) {
+  const cameraRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wasZoomingRef = useRef(false);
+  const prefetchGenRef = useRef(0);
   const { cache } = useWaveformCache(audioPath, analysis, { cachePath, entryId });
 
   const renderW = viewportWidth ?? width;
   const offsetX = Math.max(0, Math.min(viewportOffsetX, width - 1));
-  const [zoomEpoch, setZoomEpoch] = useState(0);
+  const zooming = useSyncExternalStore(subscribeZoom, isZooming, () => false);
 
-  useEffect(() => {
-    const onEnd = () => {
-      invalidateWaveformBitmap(trackId);
-      setZoomEpoch((n) => n + 1);
-    };
-    window.addEventListener("odeon:zoom-end", onEnd);
-    return () => window.removeEventListener("odeon:zoom-end", onEnd);
-  }, [trackId]);
+  const renderKey = useCallback((fastMode: boolean) => ({
+    trackId,
+    width,
+    height,
+    pps: pixelsPerSecond,
+    clipStartSec,
+    clipBgColor,
+    waveLayout,
+    waveFill,
+    waveOutline,
+    showCenterLine,
+    fastMode,
+  }), [
+    trackId, width, height, pixelsPerSecond, clipStartSec, clipBgColor,
+    waveLayout, waveFill, waveOutline, showCenterLine,
+  ]);
 
   const paint = useCallback((fastMode: boolean) => {
+    const camera = cameraRef.current;
     const canvas = canvasRef.current;
-    if (!canvas || !cache || renderW < 1 || height < 2) return;
+    if (!camera || !canvas || !cache || renderW < 1 || height < 2) return;
+
+    camera.style.left = `${offsetX}px`;
+    camera.style.width = `${renderW}px`;
 
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.floor(renderW * dpr);
     canvas.height = Math.floor(height * dpr);
     canvas.style.width = `${renderW}px`;
     canvas.style.height = `${height}px`;
-    canvas.style.transform = "";
-    canvas.style.transformOrigin = "";
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
-    const key = {
-      trackId,
-      width,
+    blitVisibleTiles(
+      ctx,
+      cache,
+      renderKey(fastMode),
+      offsetX,
+      renderW,
       height,
-      pps: pixelsPerSecond,
-      clipStartSec,
-      clipBgColor,
-      waveLayout,
-      waveFill,
-      waveOutline,
-      showCenterLine,
+    );
+  }, [cache, height, renderW, offsetX, renderKey]);
+
+  // Idle: warm tile cache for the full clip.
+  useEffect(() => {
+    if (!cache || width < 1 || height < 2 || zooming) return;
+
+    const gen = ++prefetchGenRef.current;
+    let nextTile = 0;
+
+    const step = () => {
+      if (gen !== prefetchGenRef.current || isZooming()) return;
+      const result = prefetchClipTiles(cache, renderKey(false), nextTile, 10);
+      nextTile = result.nextTile;
+      if (!result.done) requestAnimationFrame(step);
     };
 
-    if (fastMode) {
-      paintWaveform(ctx, cache, {
-        ...key,
-        offsetX,
-        renderWidth: renderW,
-        fastMode: true,
-      }, renderW, height);
-    } else {
-      blitVisibleTiles(ctx, cache, key, offsetX, renderW, height);
-    }
+    requestAnimationFrame(step);
+    return () => { prefetchGenRef.current++; };
+  }, [cache, renderKey, height, zooming]);
+
+  // Scroll / idle: async repaint (never blocks scroll).
+  useEffect(() => {
+    if (freezeRender || zooming) return;
+    scheduleWavePaint(() => paint(false));
   }, [
-    cache, renderW, height, offsetX,
-    trackId, width, pixelsPerSecond, clipStartSec, clipBgColor,
+    freezeRender, zooming, paint,
+    trackId, cache, width, height, pixelsPerSecond,
+    clipStartSec, clipBgColor, offsetX, renderW,
     waveLayout, waveFill, waveOutline, showCenterLine,
   ]);
 
-  useEffect(() => {
-    if (freezeRender || isZooming()) return;
-    scheduleWavePaint(() => paint(false));
+  // Zoom: sync repaint at live pps/scroll (coarse LOD, full quality on release).
+  useLayoutEffect(() => {
+    if (freezeRender) return;
+
+    if (zooming) {
+      wasZoomingRef.current = true;
+      paint(true);
+      return;
+    }
+
+    if (wasZoomingRef.current) {
+      wasZoomingRef.current = false;
+      paint(false);
+      return;
+    }
+
+    const camera = cameraRef.current;
+    if (camera) {
+      camera.style.left = `${offsetX}px`;
+      camera.style.width = `${renderW}px`;
+    }
   }, [
-    freezeRender, paint,
-    trackId, cache, width, height, pixelsPerSecond,
-    clipStartSec, clipBgColor, offsetX, renderW, zoomEpoch,
-    waveLayout, waveFill, waveOutline, showCenterLine,
+    freezeRender, zooming, paint, offsetX, renderW,
+    pixelsPerSecond, width, height,
   ]);
 
   if (!cache) {
@@ -136,10 +166,16 @@ export const WaveformCanvas = memo(function WaveformCanvas({
   }
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={cameraRef}
       className="absolute top-0 bottom-0 pointer-events-none"
-      style={{ left: offsetX, width: renderW, height: "100%", willChange: "transform" }}
-    />
+      style={{ height: "100%" }}
+    >
+      <canvas
+        ref={canvasRef}
+        className="block pointer-events-none"
+        style={{ width: "100%", height: "100%" }}
+      />
+    </div>
   );
 });

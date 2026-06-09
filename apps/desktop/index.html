@@ -24,7 +24,20 @@
   </head>
   <body>
     <div id="window-bleed" aria-hidden="true"></div>
+    <div id="boot-fallback" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fbbf24;font:bold 16px system-ui,sans-serif;z-index:9999;pointer-events:none">
+      Loading Odeon…
+    </div>
     <div id="root"></div>
+    <script>
+      window.addEventListener("error", function (e) {
+        var el = document.getElementById("root");
+        if (el) {
+          el.innerHTML = "<pre style=\"padding:24px;color:#f87171;font:12px monospace;white-space:pre-wrap\">"
+            + (e.error && e.error.stack ? e.error.stack : e.message)
+            + "</pre>";
+        }
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

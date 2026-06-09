@@ -51,8 +51,9 @@ function tileCacheKey(
   clipBgColor: string,
   waveLayout = "stereo",
   waveFill = "",
+  fastMode = false,
 ): string {
-  return `${COLOR_REV}:${clipBgColor}:${waveLayout}:${waveFill}:${trackId}:${height}:${pps.toFixed(2)}:bs${blockSize}:t${tileIndex}`;
+  return `${COLOR_REV}:${clipBgColor}:${waveLayout}:${waveFill}:${trackId}:${height}:${pps.toFixed(2)}:bs${blockSize}:t${tileIndex}${fastMode ? ":fast" : ""}`;
 }
 
 export function getTileCache() { return tileCache; }
@@ -242,7 +243,7 @@ export function getOrRenderTile(
   const clipBg = key.clipBgColor ?? PT_TRACK_BG;
   const ck = tileCacheKey(
     key.trackId, tileIndex, key.height, blockSize, key.pps, clipBg,
-    key.waveLayout ?? "stereo", key.waveFill ?? "",
+    key.waveLayout ?? "stereo", key.waveFill ?? "", key.fastMode === true,
   );
 
   const cached = tileCache.get(ck);
@@ -318,6 +319,35 @@ export function blitVisibleTiles(
     ctx.lineTo(viewportWidth, h / 2);
     ctx.stroke();
   }
+}
+
+/** Warm tile cache for an entire clip (time-sliced — safe on idle frames). */
+export function prefetchClipTiles(
+  cache: WaveformCache,
+  key: Omit<RenderKey, "offsetX" | "renderWidth">,
+  startTile = 0,
+  budgetMs = 10,
+): { nextTile: number; totalTiles: number; done: boolean } {
+  const totalTiles = Math.max(1, Math.ceil(key.width / TILE_WIDTH));
+  const t0 = performance.now();
+  let ti = startTile;
+  for (; ti < totalTiles; ti++) {
+    getOrRenderTile(cache, key, ti);
+    if (performance.now() - t0 >= budgetMs) {
+      return { nextTile: ti + 1, totalTiles, done: false };
+    }
+  }
+  return { nextTile: ti, totalTiles, done: true };
+}
+
+/** Blit every tile in the clip (used once at zoom-gesture start). */
+export function blitFullClip(
+  ctx: CanvasRenderingContext2D,
+  cache: WaveformCache,
+  key: Omit<RenderKey, "offsetX" | "renderWidth">,
+  h: number,
+) {
+  blitVisibleTiles(ctx, cache, key, 0, key.width, h);
 }
 
 // ── Legacy bitmap render (kept for compatibility) ──────────────────────────

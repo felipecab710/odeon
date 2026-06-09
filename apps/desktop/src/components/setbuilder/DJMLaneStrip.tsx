@@ -49,6 +49,10 @@ export function DJMLaneStrip({
 
   const patch = (p: Partial<DeckMix>) => onChange({ ...mix, ...p });
 
+  const stripPad = 8;
+  const faderAreaH = Math.max(52, height - stripPad);
+  const meterSegments = Math.min(48, Math.max(14, Math.round(faderAreaH / 3.5)));
+
   return (
     <div
       onClick={() => onSelect?.()}
@@ -56,6 +60,7 @@ export function DJMLaneStrip({
         height,
         padding: "4px 6px",
         display: "flex", gap: 4,
+        alignItems: "stretch",
         background: STUDIO_SIDEBAR,
         cursor: onSelect ? "pointer" : undefined,
         boxShadow: selected ? `inset 0 0 0 2px ${color}` : undefined,
@@ -121,17 +126,18 @@ export function DJMLaneStrip({
         </div>
       </div>
 
-      {/* Fader + meter */}
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
+      {/* Fader + meter — stretch to full lane height when expanded */}
+      <div style={{ display: "flex", alignItems: "stretch", gap: 2, flexShrink: 0 }}>
         <SchematicMeter
           leftDb={meters?.leftMeterDb ?? -90}
           rightDb={meters?.rightMeterDb ?? -90}
-          height={52}
-          segments={14}
+          height={faderAreaH}
+          segments={meterSegments}
         />
         <DJMVerticalFader
           valueDb={mix.faderDb}
           onChange={v => patch({ faderDb: v })}
+          height={faderAreaH}
         />
       </div>
     </div>

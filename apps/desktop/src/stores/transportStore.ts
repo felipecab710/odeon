@@ -7,6 +7,7 @@
 import { create } from "zustand";
 import { engineClient } from "../lib/engineClient";
 import { useEngineStore } from "./engineStore";
+import { primeSetBuilderPlaybackIfNeeded } from "../lib/setBuilderPlayback";
 import type { Timebase } from "../lib/timeFormat";
 
 export type ABMode = "reference" | "my-mix" | "matched-preview";
@@ -102,9 +103,29 @@ export const useTransportStore = create<TransportState>((set, get) => {
     play: async () => {
       const { isPlaying, positionSeconds } = get();
       if (isPlaying) return;
-      await engineClient.seek(positionSeconds);
-      await engineClient.play();
-      set({ isPlaying: true });
+      primeSetBuilderPlaybackIfNeeded();
+      const tryPlay = async () => {
+        await engineClient.seek(positionSeconds);
+        await engineClient.play();
+      };
+      try {
+        await tryPlay();
+        set({ isPlaying: true });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes("Engine not running")) {
+          console.error("[transport] play failed:", e);
+          return;
+        }
+        try {
+          await engineClient.restartEngine();
+          await tryPlay();
+          set({ isPlaying: true, engineReady: true });
+        } catch (retryErr) {
+          console.error("[transport] play failed after engine restart:", retryErr);
+          set({ engineReady: false, engineTracksReady: false });
+        }
+      }
     },
 
     pause: async () => {
@@ -125,8 +146,8 @@ export const useTransportStore = create<TransportState>((set, get) => {
     },
 
     seek: async (timeSeconds) => {
-      await engineClient.seek(timeSeconds);
       set({ positionSeconds: timeSeconds });
+      await engineClient.seek(timeSeconds);
     },
   };
 });

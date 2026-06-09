@@ -8,10 +8,10 @@
     "packages/shared"
   ],
   "scripts": {
-    "desktop": "pnpm --filter desktop dev",
+    "desktop": "pnpm --filter desktop tauri:dev",
     "api": "cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000",
     "dev": "pnpm api & pnpm desktop",
-    "dev:all": "concurrently -n api,desktop -c blue,green \"pnpm api\" \"pnpm --filter desktop tauri dev\""
+    "dev:all": "pnpm --filter desktop dev:stop && concurrently -n api,desktop -c blue,green \"pnpm api\" \"pnpm --filter desktop tauri:dev\""
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

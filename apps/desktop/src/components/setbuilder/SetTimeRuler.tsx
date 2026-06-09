@@ -1,42 +1,28 @@
 /**
  * Ableton time ruler — bottom black strip with m:ss labels (canvas-painted).
  */
-import { memo, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { isZooming, subscribeZoom } from "../../lib/zoomInteraction";
+import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { ABLETON_RULER_BG } from "./setTimelineLayout";
-import {
-  collectTimeRulerMarks,
-  paintTimeRulerCanvas,
-  viewTimeRange,
-} from "../../lib/setBeatGrid";
+import type { SetTimelineContext } from "../../lib/setTimelineContext";
 
 interface Props {
-  totalSec: number;
-  pixelsPerSecond: number;
+  context: SetTimelineContext;
   height: number;
-  scrollLeft: number;
-  viewportWidth: number;
 }
 
 export const SetTimeRuler = memo(function SetTimeRuler({
-  totalSec,
-  pixelsPerSecond,
+  context,
   height,
-  scrollLeft,
-  viewportWidth,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  const zooming = useSyncExternalStore(subscribeZoom, isZooming, () => false);
+  const { viewportWidth } = context;
 
   const marks = useMemo(() => {
-    if (viewportWidth < 1 || totalSec <= 0) return [];
-    const { start, end } = viewTimeRange(scrollLeft, viewportWidth, pixelsPerSecond);
-    return collectTimeRulerMarks(totalSec, start, end, pixelsPerSecond);
-  }, [totalSec, scrollLeft, viewportWidth, pixelsPerSecond]);
+    if (viewportWidth < 1 || context.totalSec <= 0) return [];
+    return context.timeRulerMarks();
+  }, [context, viewportWidth]);
 
-  useEffect(() => {
-    if (zooming) return;
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || viewportWidth < 1) return;
     const dpr = window.devicePixelRatio || 1;
@@ -47,8 +33,8 @@ export const SetTimeRuler = memo(function SetTimeRuler({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    paintTimeRulerCanvas(ctx, marks, scrollLeft, pixelsPerSecond, viewportWidth, height);
-  }, [marks, scrollLeft, pixelsPerSecond, viewportWidth, height, zooming]);
+    context.paintTimeRuler(ctx, marks, height);
+  }, [context, marks, viewportWidth, height]);
 
   return (
     <div style={{
@@ -62,7 +48,7 @@ export const SetTimeRuler = memo(function SetTimeRuler({
         ref={canvasRef}
         style={{
           position: "absolute",
-          left: scrollLeft,
+          left: 0,
           top: 0,
           display: "block",
           pointerEvents: "none",

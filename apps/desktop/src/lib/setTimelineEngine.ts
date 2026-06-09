@@ -6,43 +6,37 @@ import { useTransportStore } from "../stores/transportStore";
 import { useBoothStore } from "../stores/boothStore";
 import { useStudioDeckStore } from "../stores/studioDeckStore";
 import { pushSetEngineMixes } from "./boothSimulation";
-import { viewTimeRange } from "./setBeatGrid";
+import { viewTimeRangeFromMetrics } from "./setTimelineViewport";
 import type { LaneLayout, TransitionRegion } from "../components/setbuilder/setTimelineLayout";
+import {
+  contentXFromTimeSec,
+  timeToViewportX as playheadAnchorViewportXFn,
+} from "./setTimelineViewport";
+
+export {
+  contentXFromClientX,
+  timeSecFromClientX,
+  timeSecFromContentX,
+  contentXFromTimeSec,
+  timeToViewportX,
+  viewportXFromClientX,
+  positionToTimeSec,
+  hitTestClientX,
+  viewTimeRange,
+  viewTimeRangeFromMetrics,
+} from "./setTimelineViewport";
 
 /** Default project sample rate for sample-accurate snap at clip boundaries. */
 export const SET_TIMELINE_SAMPLE_RATE = 44100;
 
-export interface SetTimelineContext {
+export interface SetTimelineSeekContext {
   lanes: LaneLayout[];
   transitions: TransitionRegion[];
   totalSec: number;
 }
 
-export function timeSecFromContentX(
-  contentX: number,
-  pixelsPerSecond: number,
-  totalSec: number,
-): number {
-  return Math.max(0, Math.min(totalSec, contentX / Math.max(pixelsPerSecond, 1e-9)));
-}
-
-export function contentXFromClientX(clientX: number, scrollEl: HTMLElement): number {
-  const rect = scrollEl.getBoundingClientRect();
-  return clientX - rect.left + scrollEl.scrollLeft;
-}
-
-export function timeSecFromClientX(
-  clientX: number,
-  scrollEl: HTMLElement,
-  pixelsPerSecond: number,
-  totalSec: number,
-): number {
-  return timeSecFromContentX(
-    contentXFromClientX(clientX, scrollEl),
-    pixelsPerSecond,
-    totalSec,
-  );
-}
+/** @deprecated Use SetTimelineSeekContext — viewport math is SetTimelineContext in setTimelineContext.ts */
+export type SetTimelineContext = SetTimelineSeekContext;
 
 export function pixelsToTimeSec(deltaPx: number, pixelsPerSecond: number): number {
   return deltaPx / Math.max(pixelsPerSecond, 1e-9);
@@ -61,27 +55,31 @@ export function getSetViewTimeRange(
   viewportWidth: number,
   pixelsPerSecond: number,
 ) {
-  return viewTimeRange(scrollLeft, viewportWidth, pixelsPerSecond);
+  return viewTimeRangeFromMetrics({
+    scrollLeft,
+    viewportWidth,
+    pixelsPerSecond,
+    totalSec: Infinity,
+  });
 }
 
-/** Playhead X in timeline content coordinates — use as CSS transform-origin during zoom. */
+/** Playhead X in timeline content coordinates. */
 export function playheadAnchorContentX(playheadSec: number, pixelsPerSecond: number): number {
-  return Math.max(0, playheadSec * pixelsPerSecond);
+  return Math.max(0, contentXFromTimeSec(playheadSec, pixelsPerSecond));
 }
 
-/** Playhead X in scroll viewport coordinates — Ableton-style zoom anchor. */
 export function playheadAnchorViewportX(
   playheadSec: number,
   pixelsPerSecond: number,
   scrollLeft: number,
 ): number {
-  return playheadSec * pixelsPerSecond - scrollLeft;
+  return playheadAnchorViewportXFn(playheadSec, pixelsPerSecond, scrollLeft);
 }
 
 /** Seek transport + booth + lane mixes so playback is ready at the new position. */
 export async function seekSetTimeline(
   timeSec: number,
-  ctx: SetTimelineContext,
+  ctx: SetTimelineSeekContext,
 ): Promise<number> {
   const t = Math.max(0, Math.min(ctx.totalSec, timeSec));
   const transport = useTransportStore.getState();

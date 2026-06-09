@@ -2,6 +2,7 @@ import { usePlaybackEngineStore, formatBufferLabel } from "../../stores/playback
 import type { BufferSizeSamples, DiskCacheSize } from "@odeon/shared";
 
 const BUFFER_OPTIONS: BufferSizeSamples[] = [64, 128, 256, 512, 1024];
+const SAMPLE_RATE_OPTIONS = [44100, 48000, 96000] as const;
 const CACHE_OPTIONS: { value: DiskCacheSize; label: string }[] = [
   { value: "small", label: "Small" },
   { value: "normal", label: "Normal" },
@@ -86,7 +87,11 @@ export function PlaybackEngineDialog() {
 
   if (!isOpen) return null;
 
-  const sampleRate = status?.sampleRate ?? draft.sampleRate;
+  const liveSampleRate = status?.sampleRate ?? draft.sampleRate;
+  const sampleRates =
+    status?.availableSampleRates?.length
+      ? status.availableSampleRates
+      : [...SAMPLE_RATE_OPTIONS];
   const devices = status?.outputDevices ?? [];
   const bufferSizes =
     status?.availableBufferSizes?.length
@@ -113,7 +118,8 @@ export function PlaybackEngineDialog() {
           <h2 className="text-sm font-semibold text-[#e8e8e8]">Playback Engine</h2>
           {status && (
             <span className="text-[10px] text-[#6a6a6a]">
-              {status.deviceType} · CPU {(status.cpuUsage * 100).toFixed(0)}%
+              {status.deviceType} · {liveSampleRate.toLocaleString()} Hz · CPU{" "}
+              {(status.cpuUsage * 100).toFixed(0)}%
             </span>
           )}
         </div>
@@ -150,7 +156,30 @@ export function PlaybackEngineDialog() {
           {/* Settings */}
           <section>
             <SectionTitle>Settings</SectionTitle>
-            <FieldLabel>H/W Buffer Size</FieldLabel>
+            <FieldLabel>In/Out Sample Rate</FieldLabel>
+            <Select
+              value={draft.sampleRate}
+              disabled={isLoading}
+              onChange={(v) =>
+                patchDraft({ sampleRate: Number(v) as 44100 | 48000 | 96000 })
+              }
+            >
+              {sampleRates.map((rate) => (
+                <option key={rate} value={rate}>
+                  {rate.toLocaleString()} Hz
+                  {rate === liveSampleRate ? " (active)" : ""}
+                </option>
+              ))}
+            </Select>
+            {status && draft.sampleRate !== liveSampleRate && (
+              <p className="text-[10px] text-[#e8a87c] mt-1">
+                Device is currently running at {liveSampleRate.toLocaleString()} Hz — click OK to
+                apply {draft.sampleRate.toLocaleString()} Hz.
+              </p>
+            )}
+
+            <div className="mt-3">
+              <FieldLabel>H/W Buffer Size</FieldLabel>
             <Select
               value={draft.bufferSizeSamples}
               disabled={isLoading}
@@ -160,10 +189,11 @@ export function PlaybackEngineDialog() {
             >
               {bufferSizes.map((s) => (
                 <option key={s} value={s}>
-                  {formatBufferLabel(s, sampleRate)}
+                  {formatBufferLabel(s, draft.sampleRate)}
                 </option>
               ))}
             </Select>
+            </div>
           </section>
 
           {/* Optimizations */}

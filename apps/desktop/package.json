@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:stop": "sh -c 'lsof -ti :1420 | xargs kill -9 2>/dev/null; pkill -9 -f odeon-desktop 2>/dev/null; pkill -9 -f odeon-engine 2>/dev/null; true'",
+    "dev:web": "vite",
+    "tauri:dev": "pnpm dev:stop && tauri dev",
+    "tauri:web": "pnpm dev:stop && tauri dev --config src-tauri/tauri.web.conf.json",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

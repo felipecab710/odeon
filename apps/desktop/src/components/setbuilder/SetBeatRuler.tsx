@@ -1,23 +1,13 @@
 /**
  * Ableton beat-time ruler — top black strip (canvas-painted, viewport-culled).
  */
-import { memo, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { isZooming, subscribeZoom } from "../../lib/zoomInteraction";
+import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { ABLETON_RULER_BG } from "./setTimelineLayout";
-import {
-  buildBeatGridLevels,
-  collectBeatRulerMarks,
-  paintBeatRulerCanvas,
-  viewTimeRange,
-} from "../../lib/setBeatGrid";
+import type { SetTimelineContext } from "../../lib/setTimelineContext";
 
 interface Props {
-  totalSec: number;
-  pixelsPerSecond: number;
-  bpm: number;
+  context: SetTimelineContext;
   height: number;
-  scrollLeft: number;
-  viewportWidth: number;
   onPointerDown?: (e: React.PointerEvent) => void;
   onPointerMove?: (e: React.PointerEvent) => void;
   onPointerUp?: (e: React.PointerEvent) => void;
@@ -26,12 +16,8 @@ interface Props {
 }
 
 export const SetBeatRuler = memo(function SetBeatRuler({
-  totalSec,
-  pixelsPerSecond,
-  bpm,
+  context,
   height,
-  scrollLeft,
-  viewportWidth,
   onPointerDown,
   onPointerMove,
   onPointerUp,
@@ -39,21 +25,14 @@ export const SetBeatRuler = memo(function SetBeatRuler({
   onContextMenu,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const levels = useMemo(
-    () => buildBeatGridLevels(bpm, pixelsPerSecond),
-    [bpm, pixelsPerSecond],
-  );
-
-  const zooming = useSyncExternalStore(subscribeZoom, isZooming, () => false);
+  const { viewportWidth } = context;
 
   const marks = useMemo(() => {
-    if (viewportWidth < 1 || totalSec <= 0) return [];
-    const { start, end } = viewTimeRange(scrollLeft, viewportWidth, pixelsPerSecond);
-    return collectBeatRulerMarks(totalSec, levels, start, end, bpm, pixelsPerSecond);
-  }, [totalSec, levels, scrollLeft, viewportWidth, pixelsPerSecond, bpm]);
+    if (viewportWidth < 1 || context.totalSec <= 0) return [];
+    return context.beatRulerMarks();
+  }, [context, viewportWidth]);
 
-  useEffect(() => {
-    if (zooming) return;
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || viewportWidth < 1) return;
     const dpr = window.devicePixelRatio || 1;
@@ -64,8 +43,8 @@ export const SetBeatRuler = memo(function SetBeatRuler({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    paintBeatRulerCanvas(ctx, marks, scrollLeft, pixelsPerSecond, viewportWidth, height);
-  }, [marks, scrollLeft, pixelsPerSecond, viewportWidth, height, zooming]);
+    context.paintBeatRuler(ctx, marks, height);
+  }, [context, marks, viewportWidth, height]);
 
   const interactive = Boolean(onPointerDown);
 
@@ -81,7 +60,7 @@ export const SetBeatRuler = memo(function SetBeatRuler({
         ref={canvasRef}
         style={{
           position: "absolute",
-          left: scrollLeft,
+          left: 0,
           top: 0,
           display: "block",
           pointerEvents: "none",

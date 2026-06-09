@@ -117,6 +117,8 @@ export const engineClient = {
     _invoke("engine_remove_track", { trackId }),
 
   play: () => _invoke("engine_play"),
+
+  restartEngine: () => _invoke("engine_restart"),
   pause: () => _invoke("engine_pause"),
   stop: () => _invoke("engine_stop"),
   seek: (timeSeconds: number) => _invoke("engine_seek", { timeSeconds }),
@@ -308,4 +310,7 @@ export const engineClient = {
 
   onEngineUnavailable: (cb: (reason: string) => void) =>
     safeListenImpl("engine:unavailable", (e) => cb(e.payload as string)),
+
+  onEngineTerminated: (cb: () => void) =>
+    safeListenImpl("engine:terminated", () => cb()),
 };

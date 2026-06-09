@@ -9,6 +9,8 @@ export interface SetCard {
   order: number;
   /** Manual start time on arrangement timeline (seconds). null = auto-overlap layout. */
   timelineStartSec: number | null;
+  /** User-chosen clip colour (Ableton palette hex). */
+  clipColor?: string;
 }
 
 export interface UserSet {
@@ -50,6 +52,7 @@ interface SetBuilderState {
   reorder: (id: string, newOrder: number) => void;
   connectAfter: (fromCardId: string, toCardId: string) => void;
   setTimelineStart: (id: string, startSec: number | null) => void;
+  setCardClipColor: (id: string, color: string) => void;
   clearTimelinePositions: () => void;
   clearSet: () => void;
   isEntryInSet: (entryId: string, setId?: string) => boolean;
@@ -297,6 +300,17 @@ export const useSetBuilderStore = create<SetBuilderState>((set, get) => ({
       ...mapActiveSet(s, userSet => ({
         ...userSet,
         cards: userSet.cards.map(c => (c.id === id ? { ...c, timelineStartSec: startSec } : c)),
+        updatedAt: Date.now(),
+      })),
+    }));
+  },
+
+  setCardClipColor: (id, color) => {
+    captureUndoState();
+    set(s => ({
+      ...mapActiveSet(s, userSet => ({
+        ...userSet,
+        cards: userSet.cards.map(c => (c.id === id ? { ...c, clipColor: color } : c)),
         updatedAt: Date.now(),
       })),
     }));

@@ -1,21 +1,36 @@
 /**
- * Timeline wheel — cursor-anchored buttery zoom camera (CSS scale during gesture).
+ * Timeline wheel — cursor-anchored live layout zoom.
  */
 import { useEffect, useRef, useCallback } from "react";
-import { markZoomActivity } from "../lib/zoomInteraction";
+import {
+  markZoomActivity,
+  flushZoomCommitNow,
+  setGestureBaselinePps,
+  isZooming,
+} from "../lib/zoomInteraction";
 import {
   applyZoomGesture,
-  getGestureViewport,
+  peekZoomCommit,
+  registerWheelZoomCancel,
+  clearZoomGesture,
 } from "../lib/zoomGestureViewport";
-import { setZoomCursorAnchor } from "../lib/zoomCursorAnchor";
+import {
+  beginZoomGestureAnchor,
+  clearZoomGestureAnchor,
+  getZoomAnchorViewportX,
+  updateTimelineCursor,
+  clearTimelineCursor,
+} from "../lib/setTimelineViewport";
+import type { SetTimelineContext } from "../lib/setTimelineContext";
 import {
   isZoomWheelEvent,
   wheelStepsFromEvent,
   zoomMultiplierFromSteps,
+  zoomAtAnchor,
 } from "../lib/timelineViewportZoom";
 import {
   MIN_PX_PER_SEC,
-  MAX_PX_PER_SEC,
+  maxPxPerSecForViewport,
 } from "../components/setbuilder/setTimelineLayout";
 import { useSetTimelineStore } from "../stores/setTimelineStore";
 
@@ -32,11 +47,12 @@ interface Options {
   enabled?: boolean;
   lanesKey?: number;
   onViewportChange?: (left: number, width: number) => void;
-}
-
-function anchorFromClientX(scrollEl: HTMLDivElement, clientX: number): number {
-  const rect = scrollEl.getBoundingClientRect();
-  return Math.max(0, Math.min(scrollEl.clientWidth, clientX - rect.left));
+  /** Current timeline context for cursor / zoom anchor hit-testing. */
+  readTimelineContext: () => SetTimelineContext;
+  /** Called when hover cursor time updates (edit cursor line + transport readout). */
+  onCursorTime?: (timeSec: number) => void;
+  /** Native GPU embed owns scroll via store — DOM scrollLeft stays 0. */
+  nativeActive?: boolean;
 }
 
 export function useTimelineWheel({
@@ -47,44 +63,107 @@ export function useTimelineWheel({
   enabled = true,
   lanesKey = 0,
   onViewportChange,
+  readTimelineContext,
+  onCursorTime,
+  nativeActive = false,
 }: Options) {
   const wheelStepsAccum = useRef(0);
   const wheelRaf = useRef<number | null>(null);
   const pinchScaleRef = useRef(1);
   const wheelClientXRef = useRef<number | null>(null);
+  const cursorRaf = useRef<number | null>(null);
 
-  const notifyViewport = useCallback((el: HTMLDivElement, includeScroll = true) => {
-    onViewportChange?.(includeScroll ? el.scrollLeft : getGestureViewport().liveScrollLeft, el.clientWidth);
+  const notifyViewport = useCallback((el: HTMLDivElement) => {
+    onViewportChange?.(el.scrollLeft, el.clientWidth);
   }, [onViewportChange]);
 
   const syncDomScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const gesture = getGestureViewport();
-    el.scrollLeft = gesture.active ? gesture.liveScrollLeft : readScrollLeft();
-    notifyViewport(el, !gesture.active);
+    el.scrollLeft = readScrollLeft();
+    notifyViewport(el);
   }, [scrollRef, readScrollLeft, notifyViewport]);
 
-  const applyGestureStep = useCallback((factor: number, anchorViewportX: number) => {
+  const trackCursor = useCallback((clientX: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (cursorRaf.current !== null) cancelAnimationFrame(cursorRaf.current);
+    cursorRaf.current = requestAnimationFrame(() => {
+      cursorRaf.current = null;
+      const { timeSec } = updateTimelineCursor(clientX, el, readTimelineContext().toParams());
+      onCursorTime?.(timeSec);
+    });
+  }, [scrollRef, readTimelineContext, onCursorTime]);
+
+  const applyNativeZoom = useCallback((e: WheelEvent) => {
+    const steps = wheelStepsFromEvent(e);
+    if (Math.abs(steps) < 1e-9) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const store = useSetTimelineStore.getState();
+    trackCursor(e.clientX);
+    const metrics = readTimelineContext().toParams();
+    const anchorViewportX = getZoomAnchorViewportX(
+      updateTimelineCursor(e.clientX, el, metrics).viewportX,
+    );
+    const maxPps = maxPxPerSecForViewport(el.clientWidth);
+    const result = zoomAtAnchor({
+      oldPps: store.pixelsPerSecond,
+      factor: zoomMultiplierFromSteps(steps),
+      scrollLeft: readScrollLeft(),
+      anchorViewportX,
+      minPps: MIN_PX_PER_SEC,
+      maxPps,
+    });
+    if (!result) return;
+    clearZoomGesture();
+    store.setView(result.newPps, result.newScrollLeft);
+    setScrollLeft(result.newScrollLeft);
+    notifyViewport(el);
+  }, [scrollRef, readTimelineContext, trackCursor, readScrollLeft, setScrollLeft, notifyViewport]);
+
+  const applyGestureStep = useCallback((factor: number, clientX: number) => {
     if (Math.abs(factor - 1) < 1e-9) return false;
     const el = scrollRef.current;
     if (!el) return false;
 
-    setZoomCursorAnchor(anchorViewportX);
+    const metrics = readTimelineContext().toParams();
+    trackCursor(clientX);
+
+    const store = useSetTimelineStore.getState();
+    if (!isZooming()) {
+      setGestureBaselinePps(store.pixelsPerSecond);
+      beginZoomGestureAnchor(clientX, el, metrics);
+    }
     markZoomActivity();
 
-    const committedPps = useSetTimelineStore.getState().pixelsPerSecond;
-    // Scroll stays frozen during gesture — only CSS scaleX moves the world.
-    // Committed scroll + pps apply on gesture end (flushZoomCommit).
-    return applyZoomGesture(
+    const anchorViewportX = getZoomAnchorViewportX(
+      updateTimelineCursor(clientX, el, metrics).viewportX,
+    );
+    const currentScrollLeft = nativeActive ? readScrollLeft() : el.scrollLeft;
+    const maxPps = maxPxPerSecForViewport(el.clientWidth);
+    const ok = applyZoomGesture(
       factor,
       anchorViewportX,
-      el.scrollLeft,
-      committedPps,
+      currentScrollLeft,
+      store.pixelsPerSecond,
       MIN_PX_PER_SEC,
-      MAX_PX_PER_SEC,
+      maxPps,
     );
-  }, [scrollRef]);
+    if (!ok) return false;
+
+    const commit = peekZoomCommit();
+    if (!commit) return false;
+
+    store.setView(commit.pixelsPerSecond, commit.scrollLeft);
+    if (!nativeActive) {
+      el.scrollLeft = commit.scrollLeft;
+    } else {
+      setScrollLeft(commit.scrollLeft);
+    }
+    notifyViewport(el);
+    return true;
+  }, [scrollRef, readTimelineContext, trackCursor, notifyViewport, nativeActive, readScrollLeft, setScrollLeft]);
 
   const flushWheelZoom = useCallback(() => {
     wheelRaf.current = null;
@@ -94,15 +173,12 @@ export function useTimelineWheel({
 
     const el = scrollRef.current;
     if (!el) return;
-    const anchor = wheelClientXRef.current ?? el.clientWidth * 0.5;
-    applyGestureStep(zoomMultiplierFromSteps(steps), anchor);
+    const clientX = wheelClientXRef.current ?? el.getBoundingClientRect().left + el.clientWidth * 0.5;
+    applyGestureStep(zoomMultiplierFromSteps(steps), clientX);
   }, [applyGestureStep]);
 
   const queueWheelZoom = useCallback((e: WheelEvent) => {
-    const el = scrollRef.current;
-    if (el) {
-      wheelClientXRef.current = anchorFromClientX(el, e.clientX);
-    }
+    wheelClientXRef.current = e.clientX;
     wheelStepsAccum.current += wheelStepsFromEvent(e);
     if (wheelRaf.current === null) {
       wheelRaf.current = requestAnimationFrame(flushWheelZoom);
@@ -111,6 +187,16 @@ export function useTimelineWheel({
 
   useEffect(() => {
     if (!enabled) return;
+
+    const cancelPending = () => {
+      wheelStepsAccum.current = 0;
+      wheelClientXRef.current = null;
+      if (wheelRaf.current !== null) {
+        cancelAnimationFrame(wheelRaf.current);
+        wheelRaf.current = null;
+      }
+    };
+    registerWheelZoomCancel(cancelPending);
 
     const inZone = (target: EventTarget | null) => {
       const zone = zoneRef?.current ?? scrollRef.current;
@@ -124,12 +210,30 @@ export function useTimelineWheel({
       if (isZoomWheelEvent(e)) {
         e.preventDefault();
         e.stopPropagation();
+        if (nativeActive) {
+          applyNativeZoom(e);
+          return;
+        }
         queueWheelZoom(e);
         return;
       }
 
       const el = scrollRef.current;
       if (!el) return;
+
+      if (nativeActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        const sl = readScrollLeft();
+        if (e.shiftKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+          const delta = e.shiftKey ? e.deltaY : -e.deltaY;
+          setScrollLeft(Math.max(0, sl + delta));
+        } else if (Math.abs(e.deltaX) > 0) {
+          setScrollLeft(Math.max(0, sl + e.deltaX));
+        }
+        notifyViewport(el);
+        return;
+      }
 
       if (e.shiftKey) {
         e.preventDefault();
@@ -159,20 +263,23 @@ export function useTimelineWheel({
     const onScroll = () => {
       const scroll = scrollRef.current;
       if (!scroll) return;
-      if (!getGestureViewport().active) {
-        setScrollLeft(scroll.scrollLeft);
-        notifyViewport(scroll);
-      }
+      setScrollLeft(scroll.scrollLeft);
+      notifyViewport(scroll);
     };
 
     const onMouseMove = (e: MouseEvent) => {
       const el = scrollRef.current;
       if (!el || !inZone(e.target)) return;
-      setZoomCursorAnchor(anchorFromClientX(el, e.clientX));
+      trackCursor(e.clientX);
+    };
+
+    const onMouseLeave = () => {
+      clearTimelineCursor();
     };
 
     if (scrollEl) {
       scrollEl.addEventListener("scroll", onScroll, { passive: true });
+      scrollEl.addEventListener("mouseleave", onMouseLeave);
       notifyViewport(scrollEl);
     }
     document.addEventListener("mousemove", onMouseMove, { passive: true });
@@ -190,15 +297,15 @@ export function useTimelineWheel({
       pinchScaleRef.current = ge.scale;
       if (Math.abs(factor - 1) < 0.0005) return;
 
-      const scroll = scrollRef.current;
-      if (!scroll) return;
-      const anchor = anchorFromClientX(scroll, ge.clientX);
-      applyGestureStep(factor, anchor);
+      applyGestureStep(factor, ge.clientX);
     };
 
     const onGestureEnd = (e: Event) => {
       e.preventDefault();
       pinchScaleRef.current = 1;
+      cancelPending();
+      flushZoomCommitNow();
+      clearZoomGestureAnchor();
     };
 
     if (gestureEl) {
@@ -208,15 +315,21 @@ export function useTimelineWheel({
     }
 
     return () => {
+      registerWheelZoomCancel(null);
       document.removeEventListener("wheel", onWheelCapture, { capture: true });
       document.removeEventListener("mousemove", onMouseMove);
-      if (scrollEl) scrollEl.removeEventListener("scroll", onScroll);
+      if (scrollEl) {
+        scrollEl.removeEventListener("scroll", onScroll);
+        scrollEl.removeEventListener("mouseleave", onMouseLeave);
+      }
       if (gestureEl) {
         gestureEl.removeEventListener("gesturestart", onGestureStart as EventListener);
         gestureEl.removeEventListener("gesturechange", onGestureChange as EventListener);
         gestureEl.removeEventListener("gestureend", onGestureEnd as EventListener);
       }
       if (wheelRaf.current !== null) cancelAnimationFrame(wheelRaf.current);
+      if (cursorRaf.current !== null) cancelAnimationFrame(cursorRaf.current);
+      clearZoomGestureAnchor();
     };
   }, [
     enabled,
@@ -227,6 +340,10 @@ export function useTimelineWheel({
     notifyViewport,
     queueWheelZoom,
     applyGestureStep,
+    trackCursor,
+    nativeActive,
+    readScrollLeft,
+    applyNativeZoom,
   ]);
 
   return { syncDomScroll };

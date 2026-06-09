@@ -8,6 +8,7 @@ import { engineClient, unwrapEngineResult } from "./engineClient";
 import { useEngineStore } from "../stores/engineStore";
 import { useTransportStore } from "../stores/transportStore";
 import { SET_PROJECT_ID, setTrackId } from "./routeIds";
+import { clearSetEngineMixPushCache } from "./boothSimulation";
 import { resetSelectEngineSession } from "./useSelectEngineSync";
 import type { LaneLayout } from "../components/setbuilder/setTimelineLayout";
 
@@ -23,9 +24,14 @@ function clipIdFromPath(filePath: string): string {
 }
 
 let setProjectReady = false;
+let setEngineSessionEpoch = 0;
+const resetListeners = new Set<() => void>();
 
 export function resetSetEngineSession(): void {
   setProjectReady = false;
+  clearSetEngineMixPushCache();
+  setEngineSessionEpoch += 1;
+  resetListeners.forEach(l => l());
 }
 
 export function useSetEngineSync(lanes: LaneLayout[]) {
@@ -33,6 +39,13 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
   const syncGen = useRef(0);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [resetEpoch, setResetEpoch] = useState(setEngineSessionEpoch);
+
+  useEffect(() => {
+    const bump = () => setResetEpoch(setEngineSessionEpoch);
+    resetListeners.add(bump);
+    return () => { resetListeners.delete(bump); };
+  }, []);
 
   const sessionKey = lanes.map(l => `${l.card.entryId}:${l.entry.file_path ?? ""}`).join("|");
   const positionKey = lanes.map(l => `${l.card.entryId}:${Math.round(l.startSec * 10)}`).join("|");
@@ -56,10 +69,10 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
 
       try {
         if (!setProjectReady) {
+          synced.current = new Map();
           await unwrapEngineResult(await engineClient.createProject(SET_PROJECT_ID));
           resetSelectEngineSession();
           setProjectReady = true;
-          synced.current = new Map();
         }
         if (gen !== syncGen.current) return;
 
@@ -149,7 +162,7 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
 
     void sync();
     return () => { syncGen.current++; };
-  }, [sessionKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionKey, resetEpoch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fast clip reposition when overlap layout shifts (no debounce — DAW responsiveness).
   useEffect(() => {

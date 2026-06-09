@@ -21,7 +21,7 @@ enum class DiskCacheSize {
 struct PlaybackEngineSettings {
     std::string outputDeviceName;
     int         bufferSizeSamples  = 512;
-    double      sampleRate         = 48000.0;
+    double      sampleRate         = 44100.0;
 
     ErrorRecoveryPolicy cpuOverload      = ErrorRecoveryPolicy::continue_;
     ErrorRecoveryPolicy diskUnderrun     = ErrorRecoveryPolicy::silence;
