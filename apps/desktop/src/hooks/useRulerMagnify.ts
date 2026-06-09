@@ -4,7 +4,7 @@
 import { useCallback, useRef } from "react";
 import { markZoomActivity, flushZoomCommitNow, setGestureBaselinePps, isZooming } from "../lib/zoomInteraction";
 import { applyZoomGestureAbsolute, peekZoomCommit } from "../lib/zoomGestureViewport";
-import { clampPxPerSec, MIN_PX_PER_SEC, MAX_PX_PER_SEC } from "../components/setbuilder/setTimelineLayout";
+import { clampPxPerSec, MIN_PX_PER_SEC, maxPxPerSecForViewport } from "../components/setbuilder/setTimelineLayout";
 import { useSetTimelineStore } from "../stores/setTimelineStore";
 import {
   beginZoomGestureAnchor,
@@ -47,7 +47,8 @@ export function useRulerMagnify({
     if (Math.abs(dy) > TAP_THRESHOLD_PX) drag.magnified = true;
 
     const factor = Math.pow(2, dy / DRAG_PX_PER_OCTAVE);
-    const targetPps = clampPxPerSec(drag.baselinePps * factor);
+    const maxPps = maxPxPerSecForViewport(el.clientWidth);
+    const targetPps = clampPxPerSec(drag.baselinePps * factor, el.clientWidth);
 
     const metrics = readTimelineContext().toParams();
     if (!isZooming()) {
@@ -63,7 +64,7 @@ export function useRulerMagnify({
       el.scrollLeft,
       store.pixelsPerSecond,
       MIN_PX_PER_SEC,
-      MAX_PX_PER_SEC,
+      maxPps,
     );
     if (!ok) return;
 

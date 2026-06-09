@@ -11,7 +11,7 @@
 import { useEffect, useCallback } from "react";
 import { ZOOM_BUTTON_FACTOR, zoomAtAnchor } from "../lib/timelineViewportZoom";
 import { useSetTimelineStore } from "../stores/setTimelineStore";
-import { MIN_PX_PER_SEC, MAX_PX_PER_SEC } from "../components/setbuilder/setTimelineLayout";
+import { MIN_PX_PER_SEC, maxPxPerSecForViewport } from "../components/setbuilder/setTimelineLayout";
 import { useStudioLaneStore, MAX_LANE_TOTAL_H } from "../stores/studioLaneStore";
 import type { LaneLayout } from "../components/setbuilder/setTimelineLayout";
 
@@ -60,13 +60,14 @@ export function useSetTimelineShortcuts({
     const el = scrollRef.current;
     if (!el) return;
     const store = useSetTimelineStore.getState();
+    const maxPps = maxPxPerSecForViewport(el.clientWidth);
     const result = zoomAtAnchor({
       oldPps: store.pixelsPerSecond,
       factor,
       scrollLeft: readScrollLeft(),
       anchorViewportX: readZoomAnchorViewportX(),
       minPps: MIN_PX_PER_SEC,
-      maxPps: MAX_PX_PER_SEC,
+      maxPps,
     });
     if (!result) return;
     store.setView(result.newPps, result.newScrollLeft);

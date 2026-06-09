@@ -10,8 +10,8 @@ out/
 .next/
 *.local
 
-# Tauri build
-apps/desktop/src-tauri/target/
+# Rust / Cargo
+**/target/
 apps/desktop/src-tauri/WixTools/
 
 # C++ build
