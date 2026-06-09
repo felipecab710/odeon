@@ -36,6 +36,7 @@ import { SetTimelineContext } from "../../lib/setTimelineContext";
 import { useNativeTimelineEmbed } from "../../hooks/useNativeTimelineEmbed";
 import {
   nativeClipHitTest,
+  nativeClipCursor,
   nativeLaneIndexFromClientY,
   nativeTimeSecFromClientX,
 } from "../../lib/nativeTimelineHitTest";
@@ -503,15 +504,21 @@ export function TransitionArrangementView({
   );
 
   const nativeLaneInputs = useMemo(
-    () => layout.lanes.map((lane, index) => ({
-      startSec: lane.startSec,
-      durationSec: lane.durationSec,
-      index,
-      colorHex: laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index),
-      wavecachePath: lane.entry.file_path
-        ? wavecachePath(lane.entry.file_path)
-        : undefined,
-    })),
+    () => layout.lanes.map((lane, index) => {
+      const colorHex = laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index);
+      return {
+        startSec: lane.startSec,
+        durationSec: lane.durationSec,
+        index,
+        colorHex,
+        wavecachePath: lane.entry.file_path
+          ? wavecachePath(lane.entry.file_path)
+          : undefined,
+        label: trackTitle(lane.entry).slice(0, 48),
+        badge: camelot(lane.entry.key),
+        labelColorHex: contrastingTextOn(colorHex),
+      };
+    }),
     [layout.lanes, laneClipColors],
   );
 
@@ -705,6 +712,7 @@ export function TransitionArrangementView({
       if (timelineSelectedCardId !== hit.lane.card.id) {
         selectLaneCard(hit.laneIndex);
       }
+      if (hit.edge === "right") return;
       beginUndoGesture();
       setDragDeltaPx(0);
       setDrag({
@@ -762,6 +770,22 @@ export function TransitionArrangementView({
     selectTimelineCard,
   ]);
 
+  const nativePointerMove = useCallback((clientX: number, clientY: number) => {
+    const el = nativeEmbedHostRef.current;
+    if (!el || drag) return;
+    const cursor = nativeClipCursor(
+      clientX,
+      clientY,
+      el,
+      layout.lanes,
+      laneYs,
+      laneHeights,
+      timelineScrollLeft,
+      pixelsPerSecond,
+    );
+    el.style.cursor = cursor ?? "default";
+  }, [layout.lanes, laneYs, laneHeights, timelineScrollLeft, pixelsPerSecond, drag]);
+
   useNativeTimelineEmbed({
     active: nativeEmbedLive,
     targetRef: nativeEmbedHostRef,
@@ -780,6 +804,7 @@ export function TransitionArrangementView({
     onSeekAtClientX: nativeSeekFromClientX,
     onCursorAtClientX: nativeCursorFromClientX,
     onPointerDown: nativePointerDown,
+    onPointerMove: nativePointerMove,
     onContextMenu: nativeContextMenu,
     onDoubleClick: fitToViewport,
   });

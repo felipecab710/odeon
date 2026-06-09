@@ -3,6 +3,9 @@ pub mod scene;
 pub mod viewport;
 
 #[cfg(feature = "spike")]
+pub mod bitmap_font;
+
+#[cfg(feature = "spike")]
 pub mod spike;
 
 #[cfg(feature = "embed")]

@@ -1,6 +1,16 @@
 import type { LaneLayout } from "../components/setbuilder/setTimelineLayout";
 import { SetTimelineContext } from "./setTimelineContext";
 
+export type NativeClipEdge = "left" | "right" | "body";
+
+export interface NativeClipHit {
+  laneIndex: number;
+  lane: LaneLayout;
+  edge: NativeClipEdge;
+}
+
+const EDGE_HIT_PX = 8;
+
 export function nativeViewportXFromClientX(clientX: number, hostEl: HTMLElement): number {
   return SetTimelineContext.viewportXFromClientX(clientX, hostEl);
 }
@@ -39,20 +49,47 @@ export function nativeClipHitTest(
   laneHeights: number[],
   scrollLeft: number,
   pixelsPerSecond: number,
-): { laneIndex: number; lane: LaneLayout } | null {
+): NativeClipHit | null {
   const laneIndex = nativeLaneIndexFromClientY(clientY, hostEl, laneYs, laneHeights);
   if (laneIndex == null) return null;
   const lane = lanes[laneIndex];
   if (!lane) return null;
-  const timeSec = nativeTimeSecFromClientX(
+
+  const viewportX = nativeViewportXFromClientX(clientX, hostEl);
+  const clipLeft = lane.startSec * pixelsPerSecond - scrollLeft;
+  const clipRight = lane.endSec * pixelsPerSecond - scrollLeft;
+
+  if (viewportX < clipLeft - 2 || viewportX > clipRight + 2) return null;
+
+  let edge: NativeClipEdge = "body";
+  if (viewportX - clipLeft <= EDGE_HIT_PX) edge = "left";
+  else if (clipRight - viewportX <= EDGE_HIT_PX) edge = "right";
+
+  return { laneIndex, lane, edge };
+}
+
+/** Cursor for hover over native clips — null when not over a clip edge. */
+export function nativeClipCursor(
+  clientX: number,
+  clientY: number,
+  hostEl: HTMLElement,
+  lanes: LaneLayout[],
+  laneYs: number[],
+  laneHeights: number[],
+  scrollLeft: number,
+  pixelsPerSecond: number,
+): string | null {
+  const hit = nativeClipHitTest(
     clientX,
+    clientY,
     hostEl,
+    lanes,
+    laneYs,
+    laneHeights,
     scrollLeft,
     pixelsPerSecond,
-    Number.POSITIVE_INFINITY,
   );
-  if (timeSec >= lane.startSec && timeSec <= lane.endSec) {
-    return { laneIndex, lane };
-  }
-  return null;
+  if (!hit) return null;
+  if (hit.edge === "left" || hit.edge === "right") return "ew-resize";
+  return "grab";
 }

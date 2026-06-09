@@ -10,7 +10,7 @@ import {
   type EmbedFrame,
   type NativeTimelineScene,
 } from "../lib/nativeTimelineEmbed";
-import { waveformColorsFromClip } from "../lib/clipColorPresets";
+import { waveformColorsFromClip, contrastingTextOn } from "../lib/clipColorPresets";
 
 function hexToRgba(hex: string): [number, number, number, number] {
   const h = hex.replace("#", "");
@@ -34,6 +34,9 @@ interface LaneInput {
   index: number;
   colorHex: string;
   wavecachePath?: string;
+  label?: string;
+  badge?: string;
+  labelColorHex?: string;
 }
 
 interface DragPreview {
@@ -59,6 +62,7 @@ interface Options {
   onSeekAtClientX?: (clientX: number) => void;
   onCursorAtClientX?: (clientX: number) => void;
   onPointerDown?: (clientX: number, clientY: number) => void;
+  onPointerMove?: (clientX: number, clientY: number) => void;
   onContextMenu?: (clientX: number, clientY: number) => void;
   onDoubleClick?: () => void;
 }
@@ -81,6 +85,7 @@ export function useNativeTimelineEmbed({
   onSeekAtClientX,
   onCursorAtClientX,
   onPointerDown,
+  onPointerMove,
   onContextMenu,
   onDoubleClick,
 }: Options) {
@@ -116,6 +121,9 @@ export function useNativeTimelineEmbed({
           color: hexToRgba(lane.colorHex),
           wave_color: hexToRgba(waveformColorsFromClip(lane.colorHex).fill),
           wavecache_path: lane.wavecachePath ?? null,
+          label: lane.label ?? "",
+          badge: lane.badge ?? "",
+          label_color: hexToRgba(lane.labelColorHex ?? contrastingTextOn(lane.colorHex)),
         };
       }),
       playhead_sec: 0,
@@ -252,6 +260,7 @@ export function useNativeTimelineEmbed({
 
     const onMouseMove = (e: MouseEvent) => {
       onCursorAtClientX?.(e.clientX);
+      onPointerMove?.(e.clientX, e.clientY);
     };
 
     const onDblClick = (e: MouseEvent) => {
@@ -277,5 +286,5 @@ export function useNativeTimelineEmbed({
       el.removeEventListener("dblclick", onDblClick);
       el.removeEventListener("contextmenu", onContextMenuHandler);
     };
-  }, [active, targetRef, syncFrame, onSeekAtClientX, onCursorAtClientX, onPointerDown, onContextMenu, onDoubleClick]);
+  }, [active, targetRef, syncFrame, onSeekAtClientX, onCursorAtClientX, onPointerDown, onPointerMove, onContextMenu, onDoubleClick]);
 }

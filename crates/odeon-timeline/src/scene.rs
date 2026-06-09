@@ -32,6 +32,19 @@ pub struct TimelineClip {
     /// Path to `.odeon.wavecache` sidecar (optional).
     #[serde(default)]
     pub wavecache_path: Option<String>,
+    /// Clip title (truncated in renderer).
+    #[serde(default)]
+    pub label: String,
+    /// Short badge e.g. Camelot key.
+    #[serde(default)]
+    pub badge: String,
+    /// Label text colour (RGBA 0–1).
+    #[serde(default = "default_label_color")]
+    pub label_color: [f32; 4],
+}
+
+fn default_label_color() -> [f32; 4] {
+    [0.97, 0.97, 0.97, 1.0]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -23,6 +23,9 @@ export interface NativeTimelineClip {
   color: [number, number, number, number];
   wave_color?: [number, number, number, number];
   wavecache_path?: string | null;
+  label?: string;
+  badge?: string;
+  label_color?: [number, number, number, number];
 }
 
 export interface NativeTimelineViewport {

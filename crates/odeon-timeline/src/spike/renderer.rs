@@ -300,6 +300,9 @@ impl GpuRenderer {
                 color: clip.color,
                 wave_color: [0.08, 0.08, 0.08, 1.0],
                 wavecache_path: None,
+                label: String::new(),
+                badge: String::new(),
+                label_color: [0.97, 0.97, 0.97, 1.0],
             }],
             playhead_sec,
             cursor_sec: None,
@@ -309,6 +312,7 @@ impl GpuRenderer {
                 height: (lane_bottom - lane_top).max(1.0),
             }],
             locators: Vec::new(),
+            dom_rulers: false,
         };
         self.draw_internal(&scene, grid, p99_ms, None);
     }
@@ -451,6 +455,66 @@ impl GpuRenderer {
                 push_vline(&mut lines, x0, inner_top, inner_bottom, w, h, border);
                 push_vline(&mut lines, x1, inner_top, inner_bottom, w, h, border);
                 push_hline(&mut lines, x0, x1, header_bottom, w, h, [0.0, 0.0, 0.0, 0.25]);
+
+                let text_scale = 1.0;
+                let text_y = inner_top + 4.0;
+                let label_color = clip.label_color;
+                let mut text_x = x0 + 7.0;
+                if !clip.badge.is_empty() {
+                    let badge_w = clip.badge.len() as f32 * 6.0 * text_scale + 6.0;
+                    push_rect_tris(
+                        &mut tris,
+                        text_x - 2.0,
+                        inner_top + 2.0,
+                        text_x + badge_w,
+                        inner_top + 14.0,
+                        [0.0, 0.0, 0.0, 0.22],
+                        w,
+                        h,
+                    );
+                    crate::bitmap_font::push_text(
+                        &mut tris,
+                        text_x,
+                        text_y,
+                        text_scale,
+                        label_color,
+                        w,
+                        h,
+                        &clip.badge,
+                        badge_w,
+                        |tris, x0, y0, x1, y1, color, cw, ch| {
+                            push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
+                        },
+                    );
+                    text_x += badge_w + 4.0;
+                }
+                if !clip.label.is_empty() {
+                    let title_w = (x1 - text_x - 8.0).max(0.0);
+                    if title_w > 6.0 {
+                        crate::bitmap_font::push_text(
+                            &mut tris,
+                            text_x,
+                            text_y,
+                            text_scale,
+                            label_color,
+                            w,
+                            h,
+                            &clip.label,
+                            title_w,
+                            |tris, x0, y0, x1, y1, color, cw, ch| {
+                                push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
+                            },
+                        );
+                    }
+                }
+
+                let grip = [1.0, 1.0, 1.0, 0.28];
+                for i in 0..3i32 {
+                    let gx = x0 + 3.0 + i as f32 * 2.0;
+                    push_vline(&mut lines, gx, inner_top + 5.0, inner_bottom - 5.0, w, h, grip);
+                    let gx_r = x1 - 8.0 + i as f32 * 2.0;
+                    push_vline(&mut lines, gx_r, inner_top + 5.0, inner_bottom - 5.0, w, h, grip);
+                }
 
                 let wave_top = body_top + 6.0;
                 let wave_bottom = inner_bottom - 4.0;
