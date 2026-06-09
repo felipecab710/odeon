@@ -1,4 +1,3 @@
-import { BEAT_RULER_H } from "../components/setbuilder/setTimelineLayout";
 import type { LaneLayout } from "../components/setbuilder/setTimelineLayout";
 import { SetTimelineContext } from "./setTimelineContext";
 
@@ -24,7 +23,7 @@ export function nativeLaneIndexFromClientY(
   laneYs: number[],
   laneHeights: number[],
 ): number | null {
-  const y = clientY - hostEl.getBoundingClientRect().top - BEAT_RULER_H;
+  const y = clientY - hostEl.getBoundingClientRect().top;
   for (let i = 0; i < laneYs.length; i++) {
     if (y >= laneYs[i] && y < laneYs[i] + laneHeights[i]) return i;
   }

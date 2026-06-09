@@ -10,7 +10,6 @@ import {
   type EmbedFrame,
   type NativeTimelineScene,
 } from "../lib/nativeTimelineEmbed";
-import { BEAT_RULER_H } from "../components/setbuilder/setTimelineLayout";
 import { waveformColorsFromClip } from "../lib/clipColorPresets";
 
 function hexToRgba(hex: string): [number, number, number, number] {
@@ -123,10 +122,11 @@ export function useNativeTimelineEmbed({
       cursor_sec: cursorSec ?? null,
       selected_lane_index: selectedLaneIndex ?? null,
       lane_metrics: laneYs.map((y, i) => ({
-        y: BEAT_RULER_H + y,
+        y,
         height: laneHeights[i] ?? 0,
       })),
       locators: locators.map(l => ({ time_sec: l.timeSec })),
+      dom_rulers: true,
     };
   }, [
     targetRef,

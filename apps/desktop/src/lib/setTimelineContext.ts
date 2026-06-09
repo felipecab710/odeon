@@ -133,7 +133,7 @@ export class SetTimelineContext {
 
   hitTestClientX(clientX: number, scrollEl: HTMLElement): TimelineHitTest {
     const viewportX = SetTimelineContext.viewportXFromClientX(clientX, scrollEl);
-    const contentX = scrollEl.scrollLeft + viewportX;
+    const contentX = this.scrollLeft + viewportX;
     const timeSec = this.clampTimeSec(contentX / this.safePps);
     return { viewportX, contentX, timeSec };
   }

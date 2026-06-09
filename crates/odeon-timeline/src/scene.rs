@@ -51,6 +51,9 @@ pub struct TimelineScene {
     /// Arrangement locators (vertical markers).
     #[serde(default)]
     pub locators: Vec<TimelineLocator>,
+    /// When true, beat/time rulers are drawn by DOM — GPU paints lane area only.
+    #[serde(default)]
+    pub dom_rulers: bool,
 }
 
 impl Default for TimelineScene {
@@ -63,6 +66,7 @@ impl Default for TimelineScene {
             selected_lane_index: None,
             lane_metrics: Vec::new(),
             locators: Vec::new(),
+            dom_rulers: false,
         }
     }
 }

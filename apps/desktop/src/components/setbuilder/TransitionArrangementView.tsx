@@ -1336,18 +1336,79 @@ export function TransitionArrangementView({
           }} />
         </div>
 
-        {/* Scrollable timeline — cursor-anchored zoom camera */}
-        <div
-          ref={nativeEmbedHostRef}
-          style={{
-            flex: 1,
-            minHeight: 0,
-            minWidth: 0,
+        {/* Timeline column — DOM rulers live outside the native GPU embed rect */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
+          <div style={{
+            height: BEAT_RULER_H,
+            flexShrink: 0,
             position: "relative",
-            pointerEvents: nativeEmbedLive ? "auto" : "none",
-            zIndex: nativeEmbedLive ? 2 : undefined,
-          }}
-        >
+            zIndex: 15,
+            overflow: "hidden",
+          }}>
+            <SetBeatRuler
+              context={timelineContext}
+              height={BEAT_RULER_H}
+              onPointerDown={rulerMagnify.onRulerPointerDown}
+              onPointerMove={rulerMagnify.onRulerPointerMove}
+              onPointerUp={rulerMagnify.onRulerPointerUp}
+              onPointerCancel={rulerMagnify.onRulerPointerCancel}
+              onContextMenu={e => {
+                e.preventDefault();
+                const el = nativeEmbedHostRef.current ?? scrollRef.current;
+                if (!el) return;
+                setLocatorMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  locatorId: null,
+                  timeSec: timelineContext.timeSecFromClientX(e.clientX, el),
+                });
+              }}
+            />
+            <div style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: BEAT_RULER_H,
+              pointerEvents: "none",
+              overflow: "visible",
+            }}>
+              <SetLocatorsLane
+                locators={locators}
+                pixelsPerSecond={pixelsPerSecond}
+                totalSec={totalDur}
+                rulerHeight={BEAT_RULER_H}
+                selectedId={locatorSelectedId}
+                renamingId={locatorRenamingId}
+                keyMapMode={keyMapMode}
+                onSelect={selectLocator}
+                onSeek={t => { void seekTimeline(t); }}
+                onMove={(id, t) => updateLocator(id, { timeSec: t })}
+                onRename={(id, name) => {
+                  updateLocator(id, { name });
+                  setRenamingId(null);
+                }}
+                onAssignKey={requestKeyBinding}
+                onCancelRenaming={() => setRenamingId(null)}
+                onContextMenu={(id, x, y, timeSec) => {
+                  setLocatorMenu({ x, y, locatorId: id, timeSec });
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Lane workspace — native Metal panel aligns to this rect only */}
+          <div
+            ref={nativeEmbedHostRef}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              minWidth: 0,
+              position: "relative",
+              pointerEvents: nativeEmbedLive ? "auto" : "none",
+              zIndex: nativeEmbedLive ? 2 : undefined,
+            }}
+          >
         <div
           ref={scrollRef}
           style={{
@@ -1370,65 +1431,11 @@ export function TransitionArrangementView({
             ref={zoomCameraRef}
             style={{
               width: layout.totalWidthPx + 200,
-              minHeight: extendedLaneH + BEAT_RULER_H + TIME_RULER_H,
+              minHeight: extendedLaneH,
               position: "relative",
             }}
           >
-            {/* Ableton beat-time ruler (top) + locators */}
-            <div style={{ height: BEAT_RULER_H, position: "sticky", top: 0, zIndex: 20 }}>
-              <SetBeatRuler
-                context={timelineContext}
-                height={BEAT_RULER_H}
-                onPointerDown={rulerMagnify.onRulerPointerDown}
-                onPointerMove={rulerMagnify.onRulerPointerMove}
-                onPointerUp={rulerMagnify.onRulerPointerUp}
-                onPointerCancel={rulerMagnify.onRulerPointerCancel}
-                onContextMenu={e => {
-                  e.preventDefault();
-                  const el = scrollRef.current;
-                  if (!el) return;
-                  setLocatorMenu({
-                    x: e.clientX,
-                    y: e.clientY,
-                    locatorId: null,
-                    timeSec: timeSecFromClientX(e.clientX, el, readViewportMetrics()),
-                  });
-                }}
-              />
-              <div style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                height: BEAT_RULER_H,
-                pointerEvents: "none",
-                overflow: "visible",
-              }}>
-                <SetLocatorsLane
-                  locators={locators}
-                  pixelsPerSecond={pixelsPerSecond}
-                  totalSec={totalDur}
-                  rulerHeight={BEAT_RULER_H}
-                  selectedId={locatorSelectedId}
-                  renamingId={locatorRenamingId}
-                  keyMapMode={keyMapMode}
-                  onSelect={selectLocator}
-                  onSeek={t => { void seekTimeline(t); }}
-                  onMove={(id, t) => updateLocator(id, { timeSec: t })}
-                  onRename={(id, name) => {
-                    updateLocator(id, { name });
-                    setRenamingId(null);
-                  }}
-                  onAssignKey={requestKeyBinding}
-                  onCancelRenaming={() => setRenamingId(null)}
-                  onContextMenu={(id, x, y, timeSec) => {
-                    setLocatorMenu({ x, y, locatorId: id, timeSec });
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Arrangement workspace — lanes, clips, grid (between the two rulers) */}
+            {/* Arrangement workspace — lanes, clips, grid */}
             <div style={{ position: "relative", height: extendedLaneH, flexShrink: 0 }}>
               {laneYs.map((y, i) => {
                 const rowH = i < laneCount - 1 ? laneHeights[i] : extendedLaneH - y;
@@ -1582,30 +1589,20 @@ export function TransitionArrangementView({
 
             </div>
 
-            {/* Ableton time ruler (bottom black strip) — m:ss */}
-            <div style={{ position: "sticky", bottom: 0, zIndex: 20 }}>
-              <SetTimeRuler
-                context={timelineContext}
-                height={TIME_RULER_H}
-              />
-            </div>
-
-            {/* Edit cursor — Audacity-style hover line (DOM fallback only) */}
             {!nativeEmbedLive && hoverTimeSec !== null && (
               <SetTimelineEditCursor
                 timeSec={hoverTimeSec}
                 pixelsPerSecond={pixelsPerSecond}
-                height={BEAT_RULER_H + extendedLaneH + TIME_RULER_H}
+                height={extendedLaneH}
               />
             )}
 
-            {/* Playhead — DOM fallback when native GPU is off */}
             {!nativeEmbedLive && (
             <div style={{
               position: "absolute",
               left: playheadSec * pixelsPerSecond,
               top: 0,
-              height: BEAT_RULER_H + extendedLaneH + TIME_RULER_H,
+              height: extendedLaneH,
               width: 1,
               background: "rgba(94,200,232,0.85)",
               zIndex: 30,
@@ -1623,7 +1620,20 @@ export function TransitionArrangementView({
             )}
           </div>
         </div>
-      </div>
+          </div>
+
+          <div style={{
+            height: TIME_RULER_H,
+            flexShrink: 0,
+            zIndex: 15,
+            position: "relative",
+          }}>
+            <SetTimeRuler
+              context={timelineContext}
+              height={TIME_RULER_H}
+            />
+          </div>
+        </div>
       </div>
       </div>
 

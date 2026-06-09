@@ -46,6 +46,7 @@ export interface NativeTimelineScene {
   selected_lane_index?: number | null;
   lane_metrics?: NativeTimelineLaneMetrics[];
   locators?: { time_sec: number }[];
+  dom_rulers?: boolean;
 }
 
 export async function measureNativeEmbedFrame(el: HTMLElement): Promise<EmbedFrame> {

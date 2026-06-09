@@ -337,12 +337,15 @@ impl GpuRenderer {
         let mut tris: Vec<Vertex> = Vec::new();
         let mut lines: Vec<Vertex> = Vec::new();
 
-        let lane_area_top = BEAT_RULER_H;
-        let lane_area_bottom = h - TIME_RULER_H;
+        let dom_rulers = scene.dom_rulers;
+        let lane_area_top = if dom_rulers { 0.0 } else { BEAT_RULER_H };
+        let lane_area_bottom = if dom_rulers { h } else { h - TIME_RULER_H };
         let lane_area_h = (lane_area_bottom - lane_area_top).max(1.0);
 
         push_rect_tris(&mut tris, 0.0, 0.0, w, h, [0.06, 0.06, 0.06, 1.0], w, h);
-        push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
+        if !dom_rulers {
+            push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
+        }
         push_rect_tris(
             &mut tris,
             0.0,
@@ -368,16 +371,18 @@ impl GpuRenderer {
                 h,
             );
         }
-        push_rect_tris(
-            &mut tris,
-            0.0,
-            h - TIME_RULER_H,
-            w,
-            h,
-            [0.04, 0.04, 0.04, 1.0],
-            w,
-            h,
-        );
+        if !dom_rulers {
+            push_rect_tris(
+                &mut tris,
+                0.0,
+                h - TIME_RULER_H,
+                w,
+                h,
+                [0.04, 0.04, 0.04, 1.0],
+                w,
+                h,
+            );
+        }
 
         for line in grid {
             let x = vp.time_to_viewport_x(line.time_sec) as f32;
@@ -386,11 +391,13 @@ impl GpuRenderer {
             }
             let color = grid_line_color(line.kind);
             push_vline(&mut lines, x, lane_area_top, lane_area_bottom, w, h, color);
-            if line.kind == GridKind::Bar {
-                push_vline(&mut lines, x, 0.0, BEAT_RULER_H, w, h, [0.55, 0.55, 0.55, 0.85]);
-                push_hline(&mut lines, x - 6.0, x + 6.0, BEAT_RULER_H - 1.0, w, h, [0.7, 0.7, 0.7, 0.9]);
-            } else if line.kind == GridKind::Beat {
-                push_vline(&mut lines, x, BEAT_RULER_H - 6.0, BEAT_RULER_H, w, h, [0.35, 0.35, 0.35, 0.7]);
+            if !dom_rulers {
+                if line.kind == GridKind::Bar {
+                    push_vline(&mut lines, x, 0.0, BEAT_RULER_H, w, h, [0.55, 0.55, 0.55, 0.85]);
+                    push_hline(&mut lines, x - 6.0, x + 6.0, BEAT_RULER_H - 1.0, w, h, [0.7, 0.7, 0.7, 0.9]);
+                } else if line.kind == GridKind::Beat {
+                    push_vline(&mut lines, x, BEAT_RULER_H - 6.0, BEAT_RULER_H, w, h, [0.35, 0.35, 0.35, 0.7]);
+                }
             }
         }
 
@@ -410,7 +417,9 @@ impl GpuRenderer {
             );
         }
 
-        push_time_ruler_ticks(&mut lines, vp, w, h);
+        if !dom_rulers {
+            push_time_ruler_ticks(&mut lines, vp, w, h);
+        }
 
         for clip in clips {
             let (lane_top, lane_bottom) = lane_bounds(
