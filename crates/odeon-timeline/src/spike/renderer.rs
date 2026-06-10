@@ -106,7 +106,7 @@ impl GpuRenderer {
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
-        let alpha_mode = caps
+        let mut alpha_mode = caps
             .alpha_modes
             .iter()
             .copied()
