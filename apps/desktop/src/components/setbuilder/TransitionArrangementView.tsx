@@ -67,6 +67,7 @@ import { useAutomationRecorder } from "../../hooks/useAutomationRecorder";
 import {
   useStudioAutomationStore,
   trackAutomationHeight,
+  bindAutomationToSet,
 } from "../../stores/studioAutomationStore";
 import {
   useStudioLaneStore,
@@ -1059,6 +1060,11 @@ export function TransitionArrangementView({
   useEffect(() => {
     loadLocatorsForSet();
   }, [activeSetId, loadLocatorsForSet]);
+
+  useEffect(() => {
+    if (!activeSetId) return;
+    return bindAutomationToSet(activeSetId);
+  }, [activeSetId]);
 
   useEffect(() => {
     if (!locatorMenu && !clipColorMenu) return;

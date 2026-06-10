@@ -244,7 +244,7 @@ function buildChannelState(
     cfAssign,
     mute,
   };
-  const meterFaderDb = effectiveVolumeDb(meterMix, crossfaderPos, engineRoute);
+  const meterFaderDb = effectiveVolumeDb(meterMix, crossfaderPos);
   const { meterL, meterR } = simulateChannelMeters({
     entryId: lane?.card.entryId ?? `ch-${chIndex}`,
     cache,
@@ -507,36 +507,18 @@ export interface SetEnginePushContext {
 }
 
 /** Volume for set-preview engine — clips gate playback; don't silence by lane-active UI. */
-function resolveSetLaneEngineVolume(
-  mix: DeckMix,
-  lane: LaneLayout,
-  playheadSec: number,
-  inTransition: boolean,
-  transT: number,
-  isOutgoing: boolean,
-): number {
-  if (mix.mute) return -60;
-  const globalAutomation = useStudioAutomationStore.getState().globalEnabled;
-  const curves = useStudioAutomationStore.getState().tracks[lane.index]?.curves;
-  const automated = applyLaneAutomation(mix, curves, playheadSec, {
-    inTransition,
-    transT,
-    isOutgoing,
-    globalEnabled: globalAutomation,
-  });
-  return Math.max(-60, automated.faderDb);
-}
-
 const lastLanePushKey = new Map<string, string>();
 
 export function clearSetEngineMixPushCache(): void {
   lastLanePushKey.clear();
 }
 
-function lanePushFingerprint(mix: DeckMix, faderDb: number): string {
+function lanePushFingerprint(mix: DeckMix): string {
   return [
-    faderDb.toFixed(1),
+    mix.trimDb.toFixed(1),
+    mix.faderDb.toFixed(1),
     mix.mute ? 1 : 0,
+    mix.cfAssign,
     mix.high.toFixed(0),
     mix.mid.toFixed(0),
     mix.low.toFixed(0),
@@ -548,6 +530,7 @@ function pushSetLaneMixes(
   ctx: SetEnginePushContext,
   crossfaderPos: number,
 ): void {
+  void engineClient.setCrossfader(crossfaderPos);
   for (const lane of ctx.lanes) {
     let mix = { ...(ctx.mixes[lane.index] ?? defaultDeckMix()) };
     let inTransition = false;
@@ -578,26 +561,18 @@ function pushSetLaneMixes(
       globalEnabled: globalAutomation,
     });
 
-    const engineFaderDb = resolveSetLaneEngineVolume(
-      mix, lane, ctx.playheadSec, inTransition, transT, isOutgoing,
-    );
     const pushMix: DeckMix = {
-      ...defaultDeckMix(),
-      trimDb: mix.trimDb,
-      faderDb: engineFaderDb,
+      ...mix,
+      faderDb: automated.faderDb,
       high: automated.high,
       mid: automated.mid,
       low: automated.low,
       filter: automated.filter,
-      cfAssign: "THRU",
-      cue: false,
-      solo: false,
-      mute: mix.mute,
-      showAutomation: mix.showAutomation,
+      cfAssign: automated.cfAssign,
     };
 
     const entryId = lane.card.entryId;
-    const fp = lanePushFingerprint(pushMix, engineFaderDb);
+    const fp = lanePushFingerprint(pushMix);
     if (!inTransition && lastLanePushKey.get(entryId) === fp) {
       continue;
     }

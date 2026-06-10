@@ -377,6 +377,37 @@ async fn engine_solo_track(
 }
 
 #[tauri::command]
+async fn engine_set_track_channel_mix(
+    track_id: String,
+    trim_db: f32,
+    fader_db: f32,
+    low_db: f32,
+    mid_db: f32,
+    high_db: f32,
+    filter: f32,
+    orientation: String,
+    muted: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setTrackChannelMix",
+        json!({
+            "trackId": track_id,
+            "trimDb": trim_db,
+            "faderDb": fader_db,
+            "lowDb": low_db,
+            "midDb": mid_db,
+            "highDb": high_db,
+            "filter": filter,
+            "orientation": orientation,
+            "muted": muted,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn engine_exclusive_solo(
     track_ids: Value,
     solo_track_id: String,
@@ -978,6 +1009,7 @@ pub fn run() {
             engine_set_track_pan,
             engine_mute_track,
             engine_solo_track,
+            engine_set_track_channel_mix,
             engine_exclusive_solo,
             engine_create_stem_stack,
             engine_dispose_stem_stack,

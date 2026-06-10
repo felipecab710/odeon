@@ -336,6 +336,25 @@ std::string OdeonSession::soloTrack(const std::string& trackId, bool soloed) {
     return jsonOk();
 }
 
+std::string OdeonSession::setTrackChannelMix(const std::string& trackId, float trimDb, float faderDb,
+                                             float lowDb, float midDb, float highDb, float filter,
+                                             const std::string& orientation, bool muted) {
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findRoute(trackId);
+    if (!route) return jsonErr("Track not found: " + trackId);
+
+    route->mix.trimDb   = std::clamp(trimDb, -12.f, 12.f);
+    route->mix.faderDb  = std::clamp(faderDb, -60.f, 12.f);
+    route->mix.lowDb    = std::clamp(lowDb, -20.f, 20.f);
+    route->mix.midDb    = std::clamp(midDb, -20.f, 20.f);
+    route->mix.highDb   = std::clamp(highDb, -20.f, 20.f);
+    route->mix.filter   = std::clamp(filter, -12.f, 12.f);
+    route->mix.cfOrient = cfFromString(orientation);
+    route->mix.muted    = muted;
+    applyDjRouteMix(*route);
+    return jsonOk();
+}
+
 std::string OdeonSession::stackRouteId(const std::string& stackId, const std::string& layerId) const {
     return "stack:" + stackId + ":" + layerId;
 }
@@ -1038,12 +1057,16 @@ std::string OdeonSession::setDeckChannelMix(int deckIndex, float trimDb, float f
 }
 
 std::string OdeonSession::setCrossfader(float position) {
-    if (!djMode_) return jsonErr("Not in DJ session mode.");
     crossfaderPos_ = std::clamp(position, 0.f, 1.f);
 
     std::lock_guard<std::mutex> lk(routesMutex_);
-    for (int i = 0; i < numDjDecks_; ++i) {
-        if (auto* route = findDeckRoute(i))
+    if (djMode_) {
+        for (int i = 0; i < numDjDecks_; ++i) {
+            if (auto* route = findDeckRoute(i))
+                applyDjRouteMix(*route);
+        }
+    } else {
+        for (auto& [id, route] : routes_)
             applyDjRouteMix(*route);
     }
     return jsonOk("{\"crossfader\":" + std::to_string(crossfaderPos_) + "}");
@@ -1441,6 +1464,13 @@ std::string OdeonSession::serializeProjectJson() const {
            << ",\"pan\":" << route->mix.pan
            << ",\"muted\":" << (route->mix.muted ? "true" : "false")
            << ",\"soloed\":" << (route->mix.soloed ? "true" : "false")
+           << ",\"trimDb\":" << route->mix.trimDb
+           << ",\"faderDb\":" << route->mix.faderDb
+           << ",\"lowDb\":" << route->mix.lowDb
+           << ",\"midDb\":" << route->mix.midDb
+           << ",\"highDb\":" << route->mix.highDb
+           << ",\"filter\":" << route->mix.filter
+           << ",\"cfOrient\":" << jsonQuote(toString(route->mix.cfOrient))
            << ",\"clips\":[";
         bool firstClip = true;
         for (auto& c : route->clips) {
@@ -1563,8 +1593,23 @@ std::string OdeonSession::openSession(const std::string& projectId, const std::s
                 }
             }
 
-            // Reapply mix state.
-            setTrackVolume(id, (float) (double) rv.getProperty("volumeDb", 0.0));
+            // Reapply mix state (channel strip when present, else legacy volume).
+            const bool hasChannelStrip = rv.hasProperty("trimDb") || rv.hasProperty("faderDb")
+                                         || rv.hasProperty("lowDb");
+            if (hasChannelStrip) {
+                setTrackChannelMix(
+                    id,
+                    (float) (double) rv.getProperty("trimDb", 0.0),
+                    (float) (double) rv.getProperty("faderDb", 0.0),
+                    (float) (double) rv.getProperty("lowDb", 0.0),
+                    (float) (double) rv.getProperty("midDb", 0.0),
+                    (float) (double) rv.getProperty("highDb", 0.0),
+                    (float) (double) rv.getProperty("filter", 0.0),
+                    rv.getProperty("cfOrient", "THRU").toString().toStdString(),
+                    (bool) rv.getProperty("muted", false));
+            } else {
+                setTrackVolume(id, (float) (double) rv.getProperty("volumeDb", 0.0));
+            }
             setTrackPan(id, (float) (double) rv.getProperty("pan", 0.0));
             muteTrack(id, (bool) rv.getProperty("muted", false));
             soloTrack(id, (bool) rv.getProperty("soloed", false));

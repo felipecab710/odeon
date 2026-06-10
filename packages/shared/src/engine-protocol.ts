@@ -30,6 +30,7 @@ export type EngineRpcMethod =
   | "setTrackPan"
   | "muteTrack"
   | "soloTrack"
+  | "setTrackChannelMix"
   | "exclusiveSolo"
   | "createStemStack"
   | "disposeStemStack"

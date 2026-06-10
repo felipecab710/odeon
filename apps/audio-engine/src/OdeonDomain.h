@@ -115,6 +115,15 @@ inline CfOrientation cfFromString(const std::string& s) {
     return CfOrientation::THRU;
 }
 
+inline std::string toString(CfOrientation o) {
+    switch (o) {
+        case CfOrientation::A: return "A";
+        case CfOrientation::B: return "B";
+        case CfOrientation::THRU:
+        default: return "THRU";
+    }
+}
+
 // Mix parameters that persist per route.
 struct RouteMixState {
     float volumeDb = 0.0f;

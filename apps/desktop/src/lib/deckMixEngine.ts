@@ -80,18 +80,11 @@ export function crossfaderWeightToDb(weight: number): number {
 }
 
 /**
- * @param route — Studio set timeline uses per-clip levels only (no A/B bus).
- *   Crossfader is visual on the booth; the engine already mixes overlapping clips.
+ * @param route — Set timeline uses engine channel strip (trim+fader+cf on route).
+ *   Crossfader position is pushed via setCrossfader before lane mixes.
  */
-export function effectiveVolumeDb(
-  mix: DeckMix,
-  crossfaderPos: number,
-  route: "set" | "dj" = "dj",
-): number {
+export function effectiveVolumeDb(mix: DeckMix, crossfaderPos: number): number {
   const base = mix.trimDb + mix.faderDb;
-  if (route === "set") {
-    return Math.max(-120, Math.min(12, base));
-  }
   const cfDb = crossfaderWeightToDb(crossfaderWeight(mix.cfAssign, crossfaderPos));
   return Math.max(-120, Math.min(12, base + cfDb));
 }
@@ -123,7 +116,7 @@ function applyDeckMixByTrackId(
   crossfaderPos: number,
 ): void {
   const route = trackId.startsWith("set:") ? "set" : "dj";
-  const volumeDb = effectiveVolumeDb(mix, crossfaderPos, route);
+  const volumeDb = effectiveVolumeDb(mix, crossfaderPos);
   const soloed = mix.solo || mix.cue;
   const deckIndex = parseDeckIndex(trackId);
 
@@ -148,14 +141,23 @@ function applyDeckMixByTrackId(
     return;
   }
 
+  if (route === "set") {
+    engineClient.setTrackChannelMix(trackId, {
+      trimDb: mix.trimDb,
+      faderDb: mix.faderDb,
+      lowDb: mix.low,
+      midDb: mix.mid,
+      highDb: mix.high,
+      filter: mix.filter,
+      orientation: mix.cfAssign,
+      muted: mix.mute,
+    });
+    return;
+  }
+
   engineClient.setTrackVolume(trackId, volumeDb);
   engineClient.muteTrack(trackId, mix.mute);
-  // Set timeline has no PFL bus — cue/solo would silence non-soloed arrangement lanes.
-  if (route === "dj") {
-    engineClient.soloTrack(trackId, soloed);
-  } else {
-    engineClient.soloTrack(trackId, false);
-  }
+  engineClient.soloTrack(trackId, soloed);
 }
 
 export function applyAllDeckMixes(
@@ -163,6 +165,7 @@ export function applyAllDeckMixes(
   entryIds: string[],
   crossfaderPos: number,
 ): void {
+  void engineClient.setCrossfader(crossfaderPos);
   entryIds.forEach((entryId, i) => {
     const mix = mixes[i] ?? defaultDeckMix();
     applyDeckMixToEngine(entryId, mix, crossfaderPos);

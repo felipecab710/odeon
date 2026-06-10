@@ -144,6 +144,20 @@ export const engineClient = {
   soloTrack: (trackId: string, soloed: boolean) =>
     _invoke("engine_solo_track", { trackId, soloed }),
 
+  setTrackChannelMix: (
+    trackId: string,
+    mix: {
+      trimDb: number;
+      faderDb: number;
+      lowDb: number;
+      midDb: number;
+      highDb: number;
+      filter: number;
+      orientation: string;
+      muted: boolean;
+    },
+  ) => _invoke("engine_set_track_channel_mix", { trackId, ...mix }),
+
   exclusiveSolo: (trackIds: string[], soloTrackId: string) =>
     _invoke("engine_exclusive_solo", { trackIds, soloTrackId }),
 

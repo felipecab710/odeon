@@ -54,6 +54,36 @@ const DEFAULT_TRACK_STATE: TrackAutomationState = {
   curves: {},
 };
 
+const STORAGE_KEY = "odeon-studio-automation-v1";
+
+interface PersistedAutomationSet {
+  globalEnabled: boolean;
+  editMode: AutomationEditMode;
+  tracks: Record<number, TrackAutomationState>;
+}
+
+function loadAutomationForSet(setId: string): PersistedAutomationSet | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const all = JSON.parse(raw) as Record<string, PersistedAutomationSet>;
+    return all[setId] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAutomationForSet(setId: string, state: PersistedAutomationSet): void {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const all = raw ? (JSON.parse(raw) as Record<string, PersistedAutomationSet>) : {};
+    all[setId] = state;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
 function defaultTrackState(): TrackAutomationState {
   return {
     ...DEFAULT_TRACK_STATE,
@@ -208,6 +238,36 @@ export const useStudioAutomationStore = create<StudioAutomationStore>((set, get)
     tracks: {},
   }),
 }));
+
+/** Load/save automation curves per active set. Returns unsubscribe. */
+export function bindAutomationToSet(setId: string): () => void {
+  const loaded = loadAutomationForSet(setId);
+  if (loaded) {
+    useStudioAutomationStore.setState({
+      globalEnabled: loaded.globalEnabled,
+      editMode: loaded.editMode,
+      tracks: loaded.tracks,
+      isRecording: false,
+    });
+  } else {
+    useStudioAutomationStore.getState().reset();
+  }
+
+  return useStudioAutomationStore.subscribe((state, prev) => {
+    if (
+      state.tracks === prev.tracks
+      && state.globalEnabled === prev.globalEnabled
+      && state.editMode === prev.editMode
+    ) {
+      return;
+    }
+    saveAutomationForSet(setId, {
+      globalEnabled: state.globalEnabled,
+      editMode: state.editMode,
+      tracks: state.tracks,
+    });
+  });
+}
 
 export const AUTO_PARAM_ROW_H = 44;
 export const AUTO_COLLAPSED_H = 20;

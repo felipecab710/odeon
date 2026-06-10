@@ -493,7 +493,11 @@ impl GpuRenderer {
 
             let x0 = vp.time_to_viewport_x(clip.start_sec) as f32 + tx;
             let x1 = vp.time_to_viewport_x(clip.start_sec + clip.duration_sec) as f32 + tx;
-            if x1 > tx && x0 < w {
+            if x1 <= tx {
+                continue;
+            }
+            x0 = x0.max(tx);
+            if x0 < w {
                 let pad = 4.0;
                 let inner_top = lane_top + pad;
                 let inner_bottom = lane_bottom - pad;
@@ -649,6 +653,23 @@ impl GpuRenderer {
                     );
                 }
             }
+        }
+
+        // Clips draw over the strip column when scrolled — repaint strips on top.
+        if dom_rulers && strip_w > 0.5 {
+            let strip_bg = [0.094, 0.094, 0.094, 1.0];
+            for m in &scene.lane_metrics {
+                push_rect_tris(&mut tris, 0.0, m.y, strip_w, m.y + m.height, strip_bg, w, h);
+            }
+            push_deck_strips(
+                &mut tris,
+                &mut lines,
+                &scene.deck_strips,
+                &scene.lane_metrics,
+                strip_w,
+                w,
+                h,
+            );
         }
 
         push_automation_lanes(

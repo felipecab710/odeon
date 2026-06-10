@@ -99,6 +99,12 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
         return s.muteTrack(extractString(p, "trackId"), extractBool(p, "muted"));
     if (method == "soloTrack")
         return s.soloTrack(extractString(p, "trackId"), extractBool(p, "soloed"));
+    if (method == "setTrackChannelMix")
+        return s.setTrackChannelMix(extractString(p, "trackId"),
+                                    extractFloat(p, "trimDb"), extractFloat(p, "faderDb"),
+                                    extractFloat(p, "lowDb"), extractFloat(p, "midDb"), extractFloat(p, "highDb"),
+                                    extractFloat(p, "filter"), extractString(p, "orientation", "THRU"),
+                                    extractBool(p, "muted"));
     if (method == "exclusiveSolo")
         return s.exclusiveSolo(p.getProperty("trackIds", juce::var()), extractString(p, "soloTrackId"));
     if (method == "createStemStack")
