@@ -819,6 +819,8 @@ export function TransitionArrangementView({
     laneYs,
     laneHeights,
     waveBandHeights,
+    laneStackHeight: timelineH,
+    alignRef: sidebarScrollRef,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,
@@ -1460,12 +1462,19 @@ export function TransitionArrangementView({
           <div
             ref={nativeEmbedHostRef}
             style={{
-              flex: 1,
-              minHeight: 0,
+              ...(nativeEmbedLive
+                ? {
+                  flex: "0 0 auto",
+                  height: timelineH,
+                  minHeight: timelineH,
+                  maxHeight: timelineH,
+                }
+                : { flex: 1, minHeight: 0 }),
               minWidth: 0,
               position: "relative",
               pointerEvents: nativeEmbedLive ? "auto" : "none",
               zIndex: nativeEmbedLive ? 2 : undefined,
+              overflow: "hidden",
             }}
           >
         <div

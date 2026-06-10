@@ -58,6 +58,10 @@ interface Options {
   laneHeights: number[];
   /** Header + waveform band height per lane (automation sits below in DOM). */
   waveBandHeights?: number[];
+  /** Total lane stack height — Metal viewport matches DOM laneYs layout. */
+  laneStackHeight: number;
+  /** Sidebar lane stack element — Metal Y origin aligns with deck strips. */
+  alignRef: React.RefObject<HTMLElement | null>;
   lanes: LaneInput[];
   dragPreview?: DragPreview | null;
   locators?: { timeSec: number }[];
@@ -84,6 +88,8 @@ export function useNativeTimelineEmbed({
   laneYs,
   laneHeights,
   waveBandHeights,
+  laneStackHeight,
+  alignRef,
   lanes,
   dragPreview,
   locators = [],
@@ -98,11 +104,16 @@ export function useNativeTimelineEmbed({
   const [embedReady, setEmbedReady] = useState(false);
   const frameRef = useRef<EmbedFrame | null>(null);
 
+  const measureOpts = useCallback(() => ({
+    alignEl: alignRef.current,
+    laneStackHeight,
+  }), [alignRef, laneStackHeight]);
+
   const buildScene = useCallback((): NativeTimelineScene => {
     const frame = frameRef.current;
     const el = targetRef.current;
     const w = frame?.width ?? el?.clientWidth ?? 800;
-    const h = frame?.height ?? el?.clientHeight ?? 200;
+    const h = laneStackHeight;
     const laneCount = Math.max(1, lanes.length);
     return {
       viewport: {
@@ -138,7 +149,7 @@ export function useNativeTimelineEmbed({
       lane_metrics: laneYs.map((y, i) => ({
         y,
         height: laneHeights[i] ?? 0,
-        wave_height: waveBandHeights?.[i],
+        wave_height: waveBandHeights?.[i] ?? (laneHeights[i] ?? 0),
       })),
       locators: locators.map(l => ({ time_sec: l.timeSec })),
       dom_rulers: true,
@@ -154,6 +165,7 @@ export function useNativeTimelineEmbed({
     laneYs,
     laneHeights,
     waveBandHeights,
+    laneStackHeight,
     lanes,
     dragPreview,
     locators,
@@ -168,16 +180,16 @@ export function useNativeTimelineEmbed({
   const syncFrame = useCallback(async () => {
     const el = targetRef.current;
     if (!el || !active || !embedReady) return;
-    const frame = await measureNativeEmbedFrame(el);
+    const frame = await measureNativeEmbedFrame(el, measureOpts());
     frameRef.current = frame;
     await resizeNativeTimelineEmbed(frame);
     await updateNativeTimelineScene(buildSceneRef.current());
-  }, [active, embedReady, targetRef]);
+  }, [active, embedReady, targetRef, measureOpts]);
 
   const syncFrameRef = useRef(syncFrame);
   syncFrameRef.current = syncFrame;
 
-  const laneLayoutKey = `${laneYs.length}:${laneHeights.join(",")}:${(waveBandHeights ?? []).join(",")}`;
+  const laneLayoutKey = `${laneYs.length}:${laneHeights.join(",")}:${(waveBandHeights ?? []).join(",")}:${laneStackHeight}`;
 
   // Start/stop embed once when `active` flips — never restart on zoom/playhead changes.
   useEffect(() => {
@@ -199,11 +211,11 @@ export function useNativeTimelineEmbed({
       await waitForLayout();
       if (cancelled) return;
 
-      let frame = await measureNativeEmbedFrame(el);
-      if (frame.height < 80) {
-        await waitForLayout();
-        frame = await measureNativeEmbedFrame(el);
-      }
+            let frame = await measureNativeEmbedFrame(el, measureOpts());
+            if (frame.height < 40) {
+                await waitForLayout();
+                frame = await measureNativeEmbedFrame(el, measureOpts());
+            }
       if (cancelled) return;
 
       frameRef.current = frame;
@@ -238,7 +250,7 @@ export function useNativeTimelineEmbed({
       unlistenResize?.();
       void stopNativeTimelineEmbed();
     };
-  }, [active, targetRef, laneLayoutKey, generation]);
+  }, [active, targetRef, laneLayoutKey, generation, measureOpts]);
 
   useEffect(() => {
     if (!active || !embedReady) return;

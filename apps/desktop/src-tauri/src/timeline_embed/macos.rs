@@ -130,7 +130,16 @@ impl MacTimelinePanel {
     pub fn set_scene(&mut self, scene: TimelineScene) {
         let mut scene = scene;
         scene.viewport.viewport_width = self.applied_frame.width;
-        scene.viewport.viewport_height = self.applied_frame.height;
+        let stack_h: f32 = scene
+            .lane_metrics
+            .iter()
+            .map(|m| m.y + m.height)
+            .fold(0.0_f32, f32::max);
+        if stack_h > 1.0 {
+            scene.viewport.viewport_height = stack_h as f64;
+        } else {
+            scene.viewport.viewport_height = self.applied_frame.height;
+        }
         self.last_emitted_viewport = (
             scene.viewport.pixels_per_second,
             scene.viewport.scroll_left,

@@ -364,6 +364,21 @@ impl GpuRenderer {
                 };
                 push_rect_tris(&mut tris, 0.0, m.y, w, m.y + m.height, bg, w, h);
             }
+            // Lane dividers — same positions as sidebar deck strip borders.
+            for m in &scene.lane_metrics {
+                let y = m.y + m.height;
+                if y < h - 0.5 {
+                    push_hline(
+                        &mut lines,
+                        0.0,
+                        w,
+                        y,
+                        w,
+                        h,
+                        [0.2, 0.2, 0.2, 1.0],
+                    );
+                }
+            }
         } else {
             push_rect_tris(&mut tris, 0.0, 0.0, w, h, [0.06, 0.06, 0.06, 1.0], w, h);
             push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
@@ -469,13 +484,13 @@ impl GpuRenderer {
                 let base = [clip.color[0], clip.color[1], clip.color[2], 1.0];
                 let wave_color = clip.wave_color;
 
-                // Clip body gradient — header + wave band only (automation stays transparent for DOM).
+                // Full-lane clip gradient — matches DOM TrackBlock arrangementClipBackground.
                 push_arrangement_clip_gradient(
                     &mut tris,
                     x0,
                     inner_top,
                     x1,
-                    wave_band_bottom,
+                    inner_bottom,
                     base,
                     w,
                     h,

@@ -53,15 +53,23 @@ export interface NativeTimelineScene {
   dom_rulers?: boolean;
 }
 
-export async function measureNativeEmbedFrame(el: HTMLElement): Promise<EmbedFrame> {
+export async function measureNativeEmbedFrame(
+  el: HTMLElement,
+  opts?: { alignEl?: HTMLElement | null; laneStackHeight?: number },
+): Promise<EmbedFrame> {
   const scale = await getCurrentWindow().scaleFactor();
   const elRect = el.getBoundingClientRect();
+  const alignRect = opts?.alignEl?.getBoundingClientRect() ?? elRect;
   const rootRect = document.documentElement.getBoundingClientRect();
   const width = Math.max(1, el.offsetWidth || elRect.width);
-  const height = Math.max(1, el.offsetHeight || elRect.height);
+  const height = Math.max(
+    1,
+    opts?.laneStackHeight ?? el.offsetHeight ?? elRect.height,
+  );
   return {
     x: elRect.left - rootRect.left,
-    y: elRect.top - rootRect.top,
+    // Y from sidebar lane stack so Metal rows line up with deck strips.
+    y: alignRect.top - rootRect.top,
     width,
     height,
     scale,
