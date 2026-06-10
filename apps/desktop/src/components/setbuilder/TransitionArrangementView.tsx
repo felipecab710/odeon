@@ -776,6 +776,9 @@ export function TransitionArrangementView({
   const embedLaneYs = nativeEmbedLive ? waveAutoLayout.waveYs : laneYs;
   const embedLaneHeights = nativeEmbedLive ? waveAutoLayout.waveHeights : laneHeights;
   const embedAreaH = nativeEmbedLive ? waveAutoLayout.waveTotalH : extendedLaneH;
+  const sidebarStripYs = embedLaneYs;
+  const sidebarStripHeights = embedLaneHeights;
+  const sidebarWaveAreaH = nativeEmbedLive ? waveAutoLayout.waveTotalH : extendedLaneH;
 
   const selectLaneCard = useCallback((laneIndex: number) => {
     const lane = layout.lanes[laneIndex];
@@ -1387,7 +1390,93 @@ export function TransitionArrangementView({
             borderBottom: `1px solid ${STUDIO_GRID}`,
             background: STUDIO_RULER,
           }} />
-          <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            position: "relative",
+          }}>
+            {nativeEmbedLive ? (
+              <>
+                <div style={{
+                  height: sidebarWaveAreaH,
+                  flexShrink: 0,
+                  position: "relative",
+                  overflow: "hidden",
+                }}>
+                  {layout.lanes.map((lane, i) => {
+                    const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
+                    const mix = getMix(i);
+                    const isSelected = lane.card.id === timelineSelectedCardId;
+                    return (
+                      <div
+                        key={`sidebar-wave-${lane.card.id}`}
+                        style={{
+                          position: "absolute",
+                          top: sidebarStripYs[i],
+                          left: 0,
+                          right: 0,
+                          height: sidebarStripHeights[i],
+                          borderBottom: i < laneCount - 1 ? `1px solid ${STUDIO_GRID}` : undefined,
+                          boxShadow: isSelected ? `inset 0 0 0 1px ${color}88` : undefined,
+                        }}
+                      >
+                        <DJMLaneStrip
+                          index={i}
+                          entryId={lane.card.entryId}
+                          mix={mix}
+                          height={sidebarStripHeights[i]}
+                          selected={isSelected}
+                          onSelect={() => selectLaneCard(i)}
+                          onChange={m => handleMixChange(i, m)}
+                          color={color}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                {waveAutoLayout.autoTotalH > 0 && (
+                  <div style={{
+                    height: waveAutoLayout.autoTotalH,
+                    flexShrink: 0,
+                    position: "relative",
+                    borderTop: `1px solid ${STUDIO_GRID}`,
+                    background: STUDIO_BG,
+                  }}>
+                    {layout.lanes.map((lane, i) => {
+                      const autoH = waveAutoLayout.autoHeights[i] ?? 0;
+                      if (autoH <= 0 || !(automationTracks[i]?.expanded ?? false)) return null;
+                      const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
+                      const mix = getMix(i);
+                      return (
+                        <div
+                          key={`sidebar-auto-${lane.card.id}`}
+                          style={{
+                            position: "absolute",
+                            top: waveAutoLayout.autoStackYs[i],
+                            left: 0,
+                            right: 0,
+                            height: autoH,
+                            borderBottom: `1px solid ${STUDIO_GRID}`,
+                          }}
+                        >
+                          <AutomationLaneControls
+                            laneIndex={i}
+                            color={color}
+                            panelHeight={autoH}
+                            playheadSec={playheadSec}
+                            showAutomation={mix.showAutomation}
+                            mix={mix}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            ) : (
             <div
               ref={sidebarScrollRef}
               style={{ position: "absolute", left: 0, right: 0, top: 0, height: extendedLaneH }}
@@ -1397,6 +1486,7 @@ export function TransitionArrangementView({
                 const autoH = getAutomationPanelHeight(i);
                 const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
                 const mix = getMix(i);
+                const isSelected = lane.card.id === timelineSelectedCardId;
 
                 return (
                   <div key={lane.card.id}>
@@ -1407,6 +1497,8 @@ export function TransitionArrangementView({
                         left: 0,
                         right: 0,
                         height: laneHeights[i],
+                        borderBottom: i < laneCount - 1 ? `1px solid ${STUDIO_GRID}` : undefined,
+                        boxShadow: isSelected ? `inset 0 0 0 1px ${color}88` : undefined,
                       }}
                     >
                       <DJMLaneStrip
@@ -1414,7 +1506,7 @@ export function TransitionArrangementView({
                         entryId={lane.card.entryId}
                         mix={mix}
                         height={laneHeights[i]}
-                        selected={lane.card.id === timelineSelectedCardId}
+                        selected={isSelected}
                         onSelect={() => selectLaneCard(i)}
                         onChange={m => handleMixChange(i, m)}
                         color={color}
@@ -1474,6 +1566,7 @@ export function TransitionArrangementView({
                 />
               </div>
             </div>
+            )}
           </div>
           <div style={{
             height: TIME_RULER_H,
@@ -1588,6 +1681,8 @@ export function TransitionArrangementView({
             <div style={{ position: "relative", height: embedAreaH, flexShrink: 0 }}>
               {embedLaneYs.map((y, i) => {
                 const rowH = i < laneCount - 1 ? embedLaneHeights[i] : embedAreaH - y;
+                const color = laneClipColors[i] ?? resolveCardClipColor(layout.lanes[i]?.card.clipColor, i);
+                const isSelected = layout.lanes[i]?.card.id === timelineSelectedCardId;
                 return (
                   <div
                     key={`lane-bg-${i}`}
@@ -1599,6 +1694,7 @@ export function TransitionArrangementView({
                       height: rowH,
                       background: i % 2 === 1 ? "rgba(0,0,0,0.18)" : "transparent",
                       pointerEvents: "none",
+                      boxShadow: isSelected ? `inset 0 0 0 1px ${color}88` : undefined,
                     }}
                   />
                 );

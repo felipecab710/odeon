@@ -979,37 +979,52 @@ fn push_waveform_cached(
     h: f32,
     color: [f32; 4],
 ) {
-    let mid = (top + bottom) * 0.5;
-    let half = (bottom - top) * 0.46;
-    let clip_w_px = (clip_duration_sec * pixels_per_second).max(2.0) as usize;
-    let columns = crate::wavecache::clip_peak_columns(
+    let wave_h = bottom - top;
+    let mid = top + wave_h * 0.5;
+    let half_h = (wave_h * 0.25) * 0.96;
+    let left_center = top + wave_h * 0.25;
+    let right_center = top + wave_h * 0.75;
+    let clip_w_px = (clip_duration_sec * pixels_per_second).max(2.0) as f32;
+    let columns = crate::wavecache::clip_stereo_peak_columns(
         cache,
         0.0,
         clip_duration_sec.min(cache.duration_sec),
         pixels_per_second,
-        clip_w_px.min(2048),
+        (clip_w_px.max(2.0) as usize).min(4096),
     );
-    let mut prev: Option<(f32, f32, f32)> = None;
+    if columns.is_empty() {
+        return;
+    }
+    let col_w = (clip_w_px / columns.len() as f32).max(1.0);
+    let fill = [color[0], color[1], color[2], color[3].min(0.95)];
+    let outline = shade_color(color, 0.72);
 
-    for (local_x, mn, mx) in columns {
-        let x = clip_x0 + local_x;
-        if x < -4.0 || x > w + 4.0 {
-            prev = None;
+    for (local_x, lm, lx, rm, rx) in columns {
+        let x0 = clip_x0 + local_x;
+        if x0 > w + 4.0 {
             continue;
         }
-        // mn/lx are signed normalized peaks — mirror DOM renderBitmap stereo envelope.
-        let amp_top = (mx.max(0.0) * WAVEFORM_GAIN).min(1.0);
-        let amp_bot = ((-mn).max(0.0) * WAVEFORM_GAIN).min(1.0);
-        let y_top = mid - amp_top * half;
-        let y_bot = mid + amp_bot * half;
-        if let Some((px, py_top, py_bot)) = prev {
-            push_waveform_column(tris, px, x, py_top, py_bot, w, h, color);
-            let edge = [color[0], color[1], color[2], color[3] * 0.92];
-            out.push(Vertex { pos: px_to_clip(px, py_top, w, h), color: edge });
-            out.push(Vertex { pos: px_to_clip(x, y_top, w, h), color: edge });
-            out.push(Vertex { pos: px_to_clip(px, py_bot, w, h), color: edge });
-            out.push(Vertex { pos: px_to_clip(x, y_bot, w, h), color: edge });
+        let x1 = (x0 + col_w).min(w);
+        if x1 <= x0 {
+            continue;
         }
-        prev = Some((x, y_top, y_bot));
+        let l_top = left_center - (lx * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
+        let l_bot = left_center - (lm * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
+        let r_top = right_center - (rx * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
+        let r_bot = right_center - (rm * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
+        push_rect_tris(tris, x0, l_top.min(l_bot), x1, l_top.max(l_bot), fill, w, h);
+        push_rect_tris(tris, x0, r_top.min(r_bot), x1, r_top.max(r_bot), fill, w, h);
+        let edge_y = l_top.min(r_top);
+        push_hline(out, x0, x1, edge_y, w, h, outline);
     }
+
+    push_hline(
+        out,
+        clip_x0.max(0.0),
+        (clip_x0 + clip_w_px).min(w),
+        mid,
+        w,
+        h,
+        [0.0, 0.0, 0.0, 0.22],
+    );
 }

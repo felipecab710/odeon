@@ -105,6 +105,66 @@ pub fn select_block_size(cache: &WaveformCache, pixels_per_second: f64) -> u32 {
     chosen
 }
 
+/// Stereo column peaks: `(x_px_in_clip, lm, lx, rm, rx)` normalized to [-1, 1].
+pub fn clip_stereo_peak_columns(
+    cache: &WaveformCache,
+    file_start_sec: f64,
+    file_end_sec: f64,
+    pixels_per_second: f64,
+    max_columns: usize,
+) -> Vec<(f32, f32, f32, f32, f32)> {
+    let block = select_block_size(cache, pixels_per_second);
+    let Some(buckets) = cache.levels.get(&block) else {
+        return Vec::new();
+    };
+    if buckets.is_empty() || pixels_per_second <= 0.0 {
+        return Vec::new();
+    }
+
+    let block_sec = block as f64 / cache.sample_rate as f64;
+    let clip_dur = (file_end_sec - file_start_sec).max(0.0);
+    if clip_dur <= 0.0 {
+        return Vec::new();
+    }
+
+    let width_px = clip_dur * pixels_per_second;
+    let columns = (width_px.max(2.0) as usize).clamp(2, max_columns);
+
+    let mut out = Vec::with_capacity(columns);
+    for i in 0..columns {
+        let t0 = file_start_sec + clip_dur * (i as f64 / columns as f64);
+        let t1 = file_start_sec + clip_dur * ((i + 1) as f64 / columns as f64);
+        let b0 = (t0 / block_sec).floor().max(0.0) as usize;
+        let b1 = ((t1 / block_sec).ceil() as usize).min(buckets.len());
+        if b0 >= buckets.len() {
+            continue;
+        }
+        let mut lm = 0.0f32;
+        let mut lx = 0.0f32;
+        let mut rm = 0.0f32;
+        let mut rx = 0.0f32;
+        let mut first = true;
+        for b in b0..b1.max(b0 + 1).min(buckets.len()) {
+            let [blm, blx, brm, brx] = buckets[b];
+            if first {
+                lm = blm;
+                lx = blx;
+                rm = brm;
+                rx = brx;
+                first = false;
+            } else {
+                lm = lm.min(blm);
+                lx = lx.max(blx);
+                rm = rm.min(brm);
+                rx = rx.max(brx);
+            }
+        }
+        let x = (i as f32 / columns as f32) * width_px as f32;
+        out.push((x, lm, lx, rm, rx));
+    }
+    out
+}
+
 /// Column peaks for drawing: `(x_px_in_clip, min_norm, max_norm)`.
 pub fn clip_peak_columns(
     cache: &WaveformCache,
