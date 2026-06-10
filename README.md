@@ -36,7 +36,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 
 ## Running Odeon
 
-### Prerequisites
+### End users (download)
+
+See **[docs/INSTALL.md](docs/INSTALL.md)** — install the `.dmg`, open from Applications, allow unsigned app on first launch.
+
+### Developers (from source)
 
 ```bash
 # Check installed
@@ -99,9 +103,17 @@ pnpm tauri dev
 
 The Tauri window opens. The engine sidecar starts automatically.
 
+### Release build (.dmg for distribution)
+
+```bash
+./scripts/release/build-macos.sh
+```
+
+Produces a macOS `.dmg` with bundled analysis API + audio engine. See [docs/LAUNCH_DISTRIBUTION.md](docs/LAUNCH_DISTRIBUTION.md).
+
 ---
 
-## What Currently Works (Phase 1)
+## What Currently Works
 
 - [x] DAW-style UI: top bar, transport, track lanes, timeline ruler, mixer, inspector, AI moves panel
 - [x] Create project
@@ -123,12 +135,11 @@ The Tauri window opens. The engine sidecar starts automatically.
 
 ## Limitations
 
-- Stem separation requires `demucs` installed separately (`pip install demucs`)
-- Reverb analysis is a placeholder — estimated in Phase 3
-- Section detection is energy-based heuristic, not ground truth
-- Waveform rendering is frequency-profile bars (visual placeholder), not actual waveform
-- Engine binary must be built manually once (`./scripts/build.sh`)
-- macOS only for this release; Windows/Linux cross-compile in Phase 2
+- **macOS Apple Silicon** primary target for v0.1 release builds
+- Stem separation requires `demucs` installed separately (`pip install demucs`) — not bundled in .app
+- Engine + API sidecars built into release `.dmg`; dev mode requires manual steps above
+- Code signing not yet configured — first launch requires "Open Anyway" in macOS Security
+- Windows/Linux builds planned for v0.1.1+
 
 ---
 

@@ -21,7 +21,9 @@ use tauri_plugin_shell::ShellExt;
 
 mod timeline_embed;
 mod timeline_spike;
+mod api_sidecar;
 
+use api_sidecar::{start_api, stop_api_sidecar, ApiSidecarState, SharedApi};
 use timeline_embed::{EmbedFrame, SharedTimelineEmbed, TimelineEmbedState};
 use odeon_timeline::TimelineScene;
 
@@ -998,16 +1000,25 @@ fn timeline_embed_is_active(embed: State<'_, SharedTimelineEmbed>) -> Result<boo
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let engine_state: SharedEngine = Arc::new(Mutex::new(EngineState::new()));
+    let api_state: SharedApi = Arc::new(Mutex::new(ApiSidecarState::new()));
     let timeline_embed_state: SharedTimelineEmbed =
         Arc::new(Mutex::new(TimelineEmbedState::new()));
+    let api_for_exit = api_state.clone();
+    let engine_for_exit = engine_state.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(engine_state.clone())
+        .manage(api_state.clone())
         .manage(timeline_embed_state.clone())
         .setup(move |app| {
+            // Bundled analysis API (release builds with api-bundle resource).
+            if let Err(e) = start_api(app.handle(), api_state.clone()) {
+                log::info!("Bundled API not started (dev mode or missing bundle): {e}");
+            }
+
             // Start the odeon-engine sidecar
             if let Err(e) = start_engine(app.handle(), engine_state.clone()) {
                 log::warn!("Could not start odeon-engine sidecar: {}. Playback unavailable.", e);
@@ -1124,6 +1135,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                stop_api_sidecar(&api_for_exit);
+                stop_engine_child(&engine_for_exit);
+            }
             if matches!(event, tauri::RunEvent::MainEventsCleared { .. }) {
                 timeline_embed::embed_tick(&timeline_embed_state, &handle);
             }

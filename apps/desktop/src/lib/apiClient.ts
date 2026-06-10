@@ -16,7 +16,7 @@ import type {
   TrackBusGroup,
 } from "@odeon/shared";
 
-const BASE = "http://localhost:8000";
+const BASE = "http://127.0.0.1:8000";
 
 async function request<T>(
   method: string,

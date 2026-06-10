@@ -26,6 +26,10 @@ apps/audio-engine/cmake-build-*/
 # Sidecar binaries (built by build.sh, not committed)
 apps/desktop/src-tauri/binaries/
 
+# Bundled Python API for release builds
+apps/desktop/src-tauri/resources/api-bundle/
+apps/desktop/src-tauri/audio/
+
 # Python
 apps/api/.venv/
 __pycache__/

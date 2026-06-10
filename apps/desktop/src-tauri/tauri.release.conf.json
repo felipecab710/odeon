@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Odeon",
+  "version": "0.1.0",
+  "identifier": "com.odeon.desktop",
+  "app": {
+    "windows": [
+      {
+        "devtools": false
+      }
+    ]
+  },
+  "bundle": {
+    "targets": ["app"],
+    "resources": {
+      "resources/api-bundle/": "api-bundle/"
+    }
+  }
+}

@@ -45,15 +45,15 @@ logger = logging.getLogger(__name__)
 #  Storage paths
 # ─────────────────────────────────────────────
 
-_BASE = Path(__file__).parent.parent.parent.parent.parent / "audio"
-UPLOADS_DIR = _BASE / "uploads"
-STEMS_DIR = _BASE / "stems"
-PROJECTS_DIR = _BASE / "projects"
-REPORTS_DIR = _BASE / "reports"
-RENDERS_DIR = _BASE / "renders"
-
-for _d in (UPLOADS_DIR, STEMS_DIR, PROJECTS_DIR, REPORTS_DIR, RENDERS_DIR):
-    _d.mkdir(parents=True, exist_ok=True)
+from .paths import (
+    DATA_ROOT,
+    UPLOADS_DIR,
+    STEMS_DIR,
+    PROJECTS_DIR,
+    REPORTS_DIR,
+    RENDERS_DIR,
+    ensure_data_dirs,
+)
 
 # ─────────────────────────────────────────────
 #  App
@@ -66,8 +66,11 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:1420",
         "http://127.0.0.1:1420",
-        "tauri://localhost",
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "tauri://localhost",
+        "https://tauri.localhost",
+        "http://tauri.localhost",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -83,8 +86,9 @@ app.include_router(select_router)
 def on_startup() -> None:
     import threading
 
+    ensure_data_dirs()
     init_db()
-    logger.info("Odeon API ready. Storage root: %s", _BASE)
+    logger.info("Odeon API ready. Storage root: %s", DATA_ROOT)
     # Warm demucs availability probe off the /health hot path.
     threading.Thread(target=lambda: get_separator().is_available(), daemon=True).start()
 

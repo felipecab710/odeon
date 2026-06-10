@@ -40,6 +40,7 @@ export default function App() {
   const view = useNavigationStore((s) => s.view);
   const engineProject = view === "studio" ? project : null;
   const [apiReady, setApiReady] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   useTransportShortcuts();
   useUndoShortcuts();
@@ -50,17 +51,34 @@ export default function App() {
     void setWindowTitle(view === "studio" ? windowTitleForProject(project) : "Odeon");
   }, [project?.id, project?.name, view]);
 
-  // API health check — poll until up
+  // API health check — poll until up (bundled sidecar starts in release builds).
   useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 120; // ~2 min for cold API bundle start
+
     const check = async () => {
+      if (cancelled) return;
+      attempts += 1;
       try {
         await apiClient.health();
-        setApiReady(true);
+        if (!cancelled) {
+          setApiReady(true);
+          setApiError(null);
+        }
       } catch {
+        if (attempts >= maxAttempts) {
+          setApiError(
+            "Could not reach the Odeon analysis service on port 8000. "
+            + "If you built from source, run: pnpm api — or use a release .dmg with bundled API.",
+          );
+          return;
+        }
         setTimeout(check, 1000);
       }
     };
     check();
+    return () => { cancelled = true; };
   }, []);
 
   // Wire engine lifecycle events
@@ -119,11 +137,20 @@ export default function App() {
   if (!apiReady) {
     return (
       <div className="app-shell flex flex-col h-full w-full overflow-hidden bg-studio-bg">
-        <div className="flex flex-col flex-1 items-center justify-center gap-3 text-studio-text-faint">
+        <div className="flex flex-col flex-1 items-center justify-center gap-3 text-studio-text-faint px-8 max-w-md text-center">
           <div className="w-8 h-8 rounded bg-studio-accent flex items-center justify-center">
             <span className="text-white font-bold text-sm">O</span>
           </div>
-          <div className="text-sm animate-pulse">Connecting to Odeon API…</div>
+          {apiError ? (
+            <>
+              <div className="text-sm text-red-400">{apiError}</div>
+              <div className="text-xs text-studio-text-faint">
+                See docs/INSTALL.md for troubleshooting.
+              </div>
+            </>
+          ) : (
+            <div className="text-sm animate-pulse">Starting Odeon services…</div>
+          )}
         </div>
       </div>
     );
