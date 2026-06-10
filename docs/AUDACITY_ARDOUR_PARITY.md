@@ -76,6 +76,7 @@ Odeon’s strengths (Set Builder, Booth twin-deck, MOSS transitions, catalog int
 ### Session & transport
 - [ ] Session templates (recording / mixing / mastering)
 - [ ] Count-in bars/beats wired to engine
+- [x] Count-in UI → 1-bar Web Audio pre-roll before play (Phase K partial)
 - [ ] External sync (MTC/LTC/MIDI clock)
 - [ ] Varispeed / master pitch
 

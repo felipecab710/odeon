@@ -308,16 +308,14 @@ function CounterField({
 export function TransportBar() {
   const {
     isPlaying, positionSeconds, cursorSeconds, cursorTrackId,
-    mainTimebase, showSubCounter, bpm, isLoopEnabled, clickTrackEnabled,
-    engineTracksReady, play, pause, stop, toggleLoop, toggleClickTrack,
+    mainTimebase, showSubCounter, bpm, isLoopEnabled, clickTrackEnabled, countInEnabled,
+    engineTracksReady, play, pause, stop, toggleLoop, toggleClickTrack, toggleCountIn,
     setMainTimebase, toggleShowSubCounter,
   } = useTransportStore();
   const project = useProjectStore((s) => s.project);
   const selectedTrackId = useSelectionStore((s) => s.selectedTrackId);
   const { startSeconds, endSeconds, syncSessionEnd } = useEditSelectionStore();
   const tracks = project?.tracks ?? [];
-
-  const [countIn, setCountIn] = useState(false);
 
   const sessionSec = sessionDurationSeconds(tracks);
   useEffect(() => {
@@ -460,16 +458,16 @@ export function TransportBar() {
         <div style={{ display: "flex", gap: 10 }}>
           <button
             type="button"
-            title="Count-in"
-            onClick={() => setCountIn((v) => !v)}
+            title="Count-in (1 bar before play)"
+            onClick={() => toggleCountIn()}
             style={{
               width: PILL_OUTER_H,
               height: PILL_OUTER_H,
               boxSizing: "border-box",
               borderRadius: 4,
-              border: `1px solid ${countIn ? "#9a8ac4" : PILL_BORDER}`,
-              background: countIn ? COUNTIN : PILL_BG,
-              color: countIn ? "#fff" : COUNTIN,
+              border: `1px solid ${countInEnabled ? "#9a8ac4" : PILL_BORDER}`,
+              background: countInEnabled ? COUNTIN : PILL_BG,
+              color: countInEnabled ? "#fff" : COUNTIN,
               fontSize: 11,
               fontWeight: 600,
               fontFamily: "system-ui, sans-serif",

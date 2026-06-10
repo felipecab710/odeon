@@ -9,6 +9,8 @@ import { engineClient } from "../lib/engineClient";
 import { useEngineStore } from "./engineStore";
 import { primeSetBuilderPlaybackIfNeeded } from "../lib/setBuilderPlayback";
 import { useEditSelectionStore } from "./editSelectionStore";
+import { useProjectStore } from "./projectStore";
+import { runCountIn } from "../lib/countIn";
 import type { Timebase } from "../lib/timeFormat";
 
 export type ABMode = "reference" | "my-mix" | "matched-preview";
@@ -27,6 +29,7 @@ interface TransportState {
   bpm: number;
   isLoopEnabled: boolean;
   clickTrackEnabled: boolean;
+  countInEnabled: boolean;
   abMode: ABMode;
   engineReady: boolean;
   /** True once engine emits tracksReady (clips loaded into Edit — can play) */
@@ -48,6 +51,7 @@ interface TransportState {
   setEngineTracksReady: (v: boolean) => void;
   toggleLoop: () => void;
   toggleClickTrack: () => void;
+  toggleCountIn: () => void;
   setAbMode: (m: ABMode) => void;
 }
 
@@ -87,6 +91,7 @@ export const useTransportStore = create<TransportState>((set, get) => {
     bpm: 120,
     isLoopEnabled: false,
     clickTrackEnabled: false,
+    countInEnabled: false,
     abMode: "reference",
     engineReady: false,
     engineTracksReady: false,
@@ -120,12 +125,20 @@ export const useTransportStore = create<TransportState>((set, get) => {
       void engineClient.setClickTrack(next);
       set({ clickTrackEnabled: next });
     },
+    toggleCountIn: () => set(s => ({ countInEnabled: !s.countInEnabled })),
     setAbMode: (m) => set({ abMode: m }),
 
     play: async () => {
-      const { isPlaying, positionSeconds } = get();
+      const { isPlaying, positionSeconds, countInEnabled, bpm } = get();
       if (isPlaying) return;
       primeSetBuilderPlaybackIfNeeded();
+
+      if (countInEnabled) {
+        const project = useProjectStore.getState().project;
+        const beatsPerBar = project?.time_signature_numerator ?? 4;
+        await runCountIn(bpm, 1, beatsPerBar);
+      }
+
       const tryPlay = async () => {
         await engineClient.seek(positionSeconds);
         await engineClient.play();
