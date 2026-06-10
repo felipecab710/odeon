@@ -226,6 +226,20 @@ async fn engine_create_track(
 }
 
 #[tauri::command]
+async fn engine_create_bus(
+    bus_id: String,
+    name: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "createBus",
+        json!({ "busId": bus_id, "name": name }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn engine_load_audio_file(
     track_id: String,
     file_path: String,
@@ -996,6 +1010,7 @@ pub fn run() {
             engine_create_project,
             engine_load_project,
             engine_create_track,
+            engine_create_bus,
             engine_load_audio_file,
             engine_add_clip,
             engine_remove_track,

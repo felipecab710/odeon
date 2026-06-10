@@ -54,6 +54,8 @@ public:
     // ── Routes / tracks ──────────────────────────────────────────────────────
     std::string createTrack(const std::string& trackId, const std::string& name,
                             const std::string& role, const std::string& stemType);
+    /** Create a mixer bus route (`RouteRole::bus`). */
+    std::string createBus(const std::string& busId, const std::string& name);
     std::string removeTrack(const std::string& trackId);
     std::string addClip(const std::string& trackId, const std::string& clipId,
                         const std::string& filePath, double startTimeSeconds);
@@ -150,6 +152,7 @@ private:
     OdeonRoute* findRoute(const std::string& trackId);
     OdeonRoute* findDeckRoute(int deckIndex);
     void        ensureDeckEqualiser(OdeonRoute& route);
+    void        ensureAuxBusNames();
     float       crossfaderWeightDb(CfOrientation orient) const;
     void        applyDjRouteMix(OdeonRoute& route);
     void        clearDeckClips(OdeonDjDeck& deck);

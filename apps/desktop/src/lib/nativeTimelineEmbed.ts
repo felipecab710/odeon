@@ -47,10 +47,25 @@ export interface NativeTimelineDeckStrip {
   automation_expanded?: boolean;
 }
 
+export interface NativeTimelineAutomationPoint {
+  time_sec: number;
+  value_norm: number;
+}
+
 export interface NativeTimelineAutomationLane {
   lane_index: number;
   color: [number, number, number, number];
   visible?: boolean;
+  param_label?: string;
+  keyframes?: NativeTimelineAutomationPoint[];
+}
+
+export interface NativeTimelineTransition {
+  start_sec: number;
+  end_sec: number;
+  from_lane_index: number;
+  to_lane_index: number;
+  selected?: boolean;
 }
 
 export interface NativeTimelineScene {
@@ -73,6 +88,7 @@ export interface NativeTimelineScene {
   lane_strip_width?: number;
   deck_strips?: NativeTimelineDeckStrip[];
   automation_lanes?: NativeTimelineAutomationLane[];
+  transitions?: NativeTimelineTransition[];
 }
 
 export async function measureNativeEmbedFrame(

@@ -6,7 +6,10 @@ use wgpu::SurfaceTargetUnsafe;
 use winit::window::Window;
 
 use crate::grid::{collect_grid_for_viewport, GridKind, GridLine};
-use crate::scene::{TimelineAutomationLane, TimelineClip, TimelineDeckStrip, TimelineLaneMetrics, TimelineScene};
+use crate::scene::{
+    TimelineAutomationLane, TimelineClip, TimelineDeckStrip, TimelineLaneMetrics, TimelineScene,
+    TimelineTransition,
+};
 use crate::spike::{grid_line_color, AppKitViewSurface, DemoClip, BEAT_RULER_H, CLIP_HEADER_H, TIME_RULER_H};
 use crate::viewport::TimelineViewport;
 
@@ -482,6 +485,19 @@ impl GpuRenderer {
             push_time_ruler_ticks(&mut lines, vp, w, h);
         }
 
+        push_transition_regions(
+            &mut tris,
+            &mut lines,
+            &scene.transitions,
+            &scene.lane_metrics,
+            &vp,
+            tx,
+            lane_area_top,
+            lane_area_h,
+            w,
+            h,
+        );
+
         for clip in clips {
             let (lane_top, lane_bottom) = lane_bounds(
                 clip.lane_index,
@@ -677,6 +693,7 @@ impl GpuRenderer {
             &mut lines,
             &scene.automation_lanes,
             &scene.lane_metrics,
+            &vp,
             tx,
             w,
             h,
@@ -1017,11 +1034,67 @@ fn push_deck_strips(
     }
 }
 
+fn push_transition_regions(
+    tris: &mut Vec<Vertex>,
+    lines: &mut Vec<Vertex>,
+    transitions: &[TimelineTransition],
+    metrics: &[TimelineLaneMetrics],
+    vp: &TimelineViewport,
+    tx: f32,
+    lane_area_top: f32,
+    lane_area_h: f32,
+    w: f32,
+    h: f32,
+) {
+    for tr in transitions {
+        let x0 = vp.time_to_viewport_x(tr.start_sec) as f32 + tx;
+        let x1 = vp.time_to_viewport_x(tr.end_sec) as f32 + tx;
+        if x1 <= tx || x0 >= w {
+            continue;
+        }
+        let (top_a, _) = lane_bounds(
+            tr.from_lane_index,
+            metrics.len().max(1) as u32,
+            metrics,
+            lane_area_top,
+            lane_area_h,
+        );
+        let (_, bottom_b) = lane_bounds(
+            tr.to_lane_index,
+            metrics.len().max(1) as u32,
+            metrics,
+            lane_area_top,
+            lane_area_h,
+        );
+        let inner_top = top_a + 2.0;
+        let inner_bottom = bottom_b - 2.0;
+        if inner_bottom <= inner_top {
+            continue;
+        }
+        let fill = if tr.selected {
+            [1.0, 0.92, 0.23, 0.08]
+        } else {
+            [0.39, 0.58, 0.93, 0.06]
+        };
+        let border = if tr.selected {
+            [1.0, 0.92, 0.23, 0.85]
+        } else {
+            [0.39, 0.58, 0.93, 0.45]
+        };
+        push_rect_tris(tris, x0.max(tx), inner_top, x1, inner_bottom, fill, w, h);
+        push_hline(lines, x0.max(tx), x1, inner_top, w, h, border);
+        push_hline(lines, x0.max(tx), x1, inner_bottom, w, h, border);
+        push_vline(lines, x0.max(tx), inner_top, inner_bottom, w, h, border);
+        push_vline(lines, x1, inner_top, inner_bottom, w, h, border);
+    }
+}
+
 fn push_automation_lanes(
     tris: &mut Vec<Vertex>,
     lines: &mut Vec<Vertex>,
     lanes: &[TimelineAutomationLane],
     metrics: &[TimelineLaneMetrics],
+    vp: &TimelineViewport,
     tx: f32,
     w: f32,
     h: f32,
@@ -1055,6 +1128,11 @@ fn push_automation_lanes(
             h,
             [lane.color[0], lane.color[1], lane.color[2], 0.35],
         );
+        let label = if lane.param_label.is_empty() {
+            "AUTOMATION".to_string()
+        } else {
+            lane.param_label.clone()
+        };
         crate::bitmap_font::push_text(
             tris,
             tx + 8.0,
@@ -1063,22 +1141,81 @@ fn push_automation_lanes(
             [lane.color[0], lane.color[1], lane.color[2], 0.65],
             w,
             h,
-            "AUTOMATION",
-            80.0,
+            &label,
+            120.0,
             |tris, x0, y0, x1, y1, color, cw, ch| {
                 push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
             },
         );
-        // Placeholder curve — subtle sine envelope hint
-        let mid_y = (auto_top + auto_bottom) * 0.5;
-        let amp = (auto_bottom - auto_top) * 0.25;
-        let mut px = tx + 12.0;
-        while px < w - 12.0 {
-            let t = (px - tx) / (w - tx).max(1.0);
-            let cy = mid_y + (t * std::f32::consts::PI * 4.0).sin() * amp;
-            push_rect_tris(tris, px, cy - 0.5, px + 2.0, cy + 0.5, lane.color, w, h);
-            px += 3.0;
+
+        let band_h = auto_bottom - auto_top;
+        let curve_color = [lane.color[0], lane.color[1], lane.color[2], 0.9];
+        if lane.keyframes.len() >= 2 {
+            for pair in lane.keyframes.windows(2) {
+                let a = &pair[0];
+                let b = &pair[1];
+                let x0 = vp.time_to_viewport_x(a.time_sec) as f32 + tx;
+                let x1 = vp.time_to_viewport_x(b.time_sec) as f32 + tx;
+                if x1 < tx || x0 > w {
+                    continue;
+                }
+                let y0 = auto_bottom - a.value_norm.clamp(0.0, 1.0) * band_h;
+                let y1 = auto_bottom - b.value_norm.clamp(0.0, 1.0) * band_h;
+                push_automation_segment(tris, x0, y0, x1, y1, curve_color, w, h);
+            }
+            for pt in &lane.keyframes {
+                let px = vp.time_to_viewport_x(pt.time_sec) as f32 + tx;
+                if px < tx || px > w {
+                    continue;
+                }
+                let py = auto_bottom - pt.value_norm.clamp(0.0, 1.0) * band_h;
+                push_rect_tris(
+                    tris,
+                    px - 2.5,
+                    py - 2.5,
+                    px + 2.5,
+                    py + 2.5,
+                    curve_color,
+                    w,
+                    h,
+                );
+            }
+        } else if lane.keyframes.len() == 1 {
+            let pt = &lane.keyframes[0];
+            let py = auto_bottom - pt.value_norm.clamp(0.0, 1.0) * band_h;
+            push_hline(
+                lines,
+                tx + 8.0,
+                w - 8.0,
+                py,
+                w,
+                h,
+                [lane.color[0], lane.color[1], lane.color[2], 0.75],
+            );
         }
+    }
+}
+
+fn push_automation_segment(
+    tris: &mut Vec<Vertex>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    color: [f32; 4],
+    w: f32,
+    h: f32,
+) {
+    let dx = x1 - x0;
+    let steps = ((dx.abs() / 2.0).ceil() as i32).clamp(1, 512);
+    for i in 0..steps {
+        let t0 = i as f32 / steps as f32;
+        let t1 = (i + 1) as f32 / steps as f32;
+        let sx = x0 + dx * t0;
+        let ex = x0 + dx * t1;
+        let sy = y0 + (y1 - y0) * t0;
+        let ey = y0 + (y1 - y0) * t1;
+        push_rect_tris(tris, sx, sy - 0.75, ex, ey + 0.75, color, w, h);
     }
 }
 

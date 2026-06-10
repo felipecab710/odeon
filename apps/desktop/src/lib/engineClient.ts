@@ -107,6 +107,9 @@ export const engineClient = {
     stemType: string
   ) => _invoke("engine_create_track", { trackId, name, role, stemType }),
 
+  createBus: (busId: string, name: string) =>
+    _invoke("engine_create_bus", { busId, name }),
+
   loadAudioFile: (trackId: string, filePath: string) =>
     _invoke("engine_load_audio_file", { trackId, filePath }),
 

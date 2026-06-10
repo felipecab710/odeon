@@ -78,6 +78,8 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
     if (method == "createTrack")
         return s.createTrack(extractString(p, "trackId"), extractString(p, "name"),
                              extractString(p, "role"), extractString(p, "stemType"));
+    if (method == "createBus")
+        return s.createBus(extractString(p, "busId"), extractString(p, "name", "Bus"));
     if (method == "removeTrack")
         return s.removeTrack(extractString(p, "trackId"));
     if (method == "addClip" || method == "loadAudioFile")

@@ -46,11 +46,33 @@ pub struct TimelineDeckStrip {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineAutomationPoint {
+    pub time_sec: f64,
+    pub value_norm: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineAutomationLane {
     pub lane_index: u32,
     pub color: [f32; 4],
     #[serde(default)]
     pub visible: bool,
+    /// Active parameter label (e.g. "Track Volume").
+    #[serde(default)]
+    pub param_label: String,
+    /// Breakpoints for the active automation lane.
+    #[serde(default)]
+    pub keyframes: Vec<TimelineAutomationPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineTransition {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub from_lane_index: u32,
+    pub to_lane_index: u32,
+    #[serde(default)]
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +131,8 @@ pub struct TimelineScene {
     pub deck_strips: Vec<TimelineDeckStrip>,
     #[serde(default)]
     pub automation_lanes: Vec<TimelineAutomationLane>,
+    #[serde(default)]
+    pub transitions: Vec<TimelineTransition>,
 }
 
 impl Default for TimelineScene {
@@ -125,6 +149,7 @@ impl Default for TimelineScene {
             lane_strip_width: 0.0,
             deck_strips: Vec::new(),
             automation_lanes: Vec::new(),
+            transitions: Vec::new(),
         }
     }
 }

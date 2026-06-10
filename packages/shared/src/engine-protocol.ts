@@ -15,6 +15,7 @@ export type EngineRpcMethod =
   | "loadProject"
   | "disposeProject"
   | "createTrack"
+  | "createBus"
   | "loadAudioFile"
   | "addClip"
   | "removeTrack"

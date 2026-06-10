@@ -15,6 +15,8 @@ import {
   defaultDeckMix,
 } from "../../lib/deckMixEngine";
 import { useTransportStore } from "../../stores/transportStore";
+import { useBoothStore } from "../../stores/boothStore";
+import { pushSetEngineMixes } from "../../lib/boothSimulation";
 import { useSetBuilderStore } from "../../stores/setBuilderStore";
 import { useNavigationStore } from "../../stores/navigationStore";
 import { useStudioDeckStore } from "../../stores/studioDeckStore";
@@ -68,6 +70,7 @@ import {
   useStudioAutomationStore,
   trackAutomationHeight,
   bindAutomationToSet,
+  AUTOMATION_PARAMS,
 } from "../../stores/studioAutomationStore";
 import {
   useStudioLaneStore,
@@ -707,14 +710,42 @@ export function TransitionArrangementView({
       const mix = mixes[index] ?? defaultDeckMix();
       const automationExpanded = automationTracks[index]?.expanded ?? false;
       const autoH = getAutomationPanelHeight(index);
+      const autoState = automationTracks[index];
+      const activeParam = autoState?.activeLane ?? "trackVolume";
+      const paramDef = AUTOMATION_PARAMS.find(p => p.param === activeParam);
+      const keyframes = autoState?.curves[activeParam] ?? [];
       return {
         laneIndex: index,
         colorHex,
         visible: automationExpanded && autoH > 0 && mix.showAutomation,
+        paramLabel: paramDef?.label ?? activeParam,
+        keyframes: keyframes.map(kf => ({ timeSec: kf.timeSec, valueNorm: kf.valueNorm })),
       };
     }),
     [layout.lanes, laneClipColors, automationTracks, mixes, getAutomationPanelHeight],
   );
+
+  const nativeTransitions = useMemo(
+    () => layout.transitions.map(t => ({
+      startSec: t.startSec,
+      endSec: t.endSec,
+      fromLaneIndex: t.index,
+      toLaneIndex: t.index + 1,
+      selected: t.index === transitionIndex,
+    })),
+    [layout.transitions, transitionIndex],
+  );
+
+  const syncSetPreviewMixes = useCallback(() => {
+    if (!useTransportStore.getState().engineTracksReady) return;
+    pushSetEngineMixes(
+      layout.lanes,
+      layout.transitions,
+      useStudioDeckStore.getState().mixes,
+      useTransportStore.getState().positionSeconds,
+      useBoothStore.getState().mode,
+    );
+  }, [layout.lanes, layout.transitions]);
 
   const embedAreaH = nativeEmbedLive ? timelineH : extendedLaneH;
 
@@ -789,6 +820,7 @@ export function TransitionArrangementView({
             ...useStudioDeckStore.getState().mixes,
             [i]: { ...mix, solo: !mix.solo },
           });
+          syncSetPreviewMixes();
           return;
         case "toggleCue": {
           captureUndoState();
@@ -801,6 +833,7 @@ export function TransitionArrangementView({
           }
           next[i] = { ...mix, cue: !mix.cue };
           useStudioDeckStore.getState().setMixes(next);
+          syncSetPreviewMixes();
           return;
         }
         case "toggleMute":
@@ -809,6 +842,7 @@ export function TransitionArrangementView({
             ...useStudioDeckStore.getState().mixes,
             [i]: { ...mix, mute: !mix.mute },
           });
+          syncSetPreviewMixes();
           return;
         case "toggleAutomation":
           captureUndoState();
@@ -860,6 +894,7 @@ export function TransitionArrangementView({
     selectLaneCard,
     mixes,
     toggleTrackExpanded,
+    syncSetPreviewMixes,
   ]);
 
   const nativeDragPreview = useMemo(() => {
@@ -934,6 +969,7 @@ export function TransitionArrangementView({
     laneStripWidth: LANE_STRIP_W,
     deckStrips: nativeDeckStrips,
     automationLanes: nativeAutomationLanes,
+    transitions: nativeTransitions,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,

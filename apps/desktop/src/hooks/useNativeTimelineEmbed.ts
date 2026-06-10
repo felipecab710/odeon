@@ -61,6 +61,16 @@ interface AutomationLaneInput {
   laneIndex: number;
   colorHex: string;
   visible: boolean;
+  paramLabel?: string;
+  keyframes?: { timeSec: number; valueNorm: number }[];
+}
+
+interface TransitionInput {
+  startSec: number;
+  endSec: number;
+  fromLaneIndex: number;
+  toLaneIndex: number;
+  selected: boolean;
 }
 
 interface Options {
@@ -80,6 +90,7 @@ interface Options {
   laneStripWidth: number;
   deckStrips: DeckStripInput[];
   automationLanes: AutomationLaneInput[];
+  transitions?: TransitionInput[];
   lanes: LaneInput[];
   dragPreview?: DragPreview | null;
   locators?: { timeSec: number }[];
@@ -109,6 +120,7 @@ export function useNativeTimelineEmbed({
   laneStripWidth,
   deckStrips,
   automationLanes,
+  transitions = [],
   lanes,
   dragPreview,
   locators = [],
@@ -186,6 +198,18 @@ export function useNativeTimelineEmbed({
         lane_index: lane.laneIndex,
         color: hexToRgba(lane.colorHex),
         visible: lane.visible,
+        param_label: lane.paramLabel ?? "",
+        keyframes: (lane.keyframes ?? []).map(kf => ({
+          time_sec: kf.timeSec,
+          value_norm: kf.valueNorm,
+        })),
+      })),
+      transitions: transitions.map(tr => ({
+        start_sec: tr.startSec,
+        end_sec: tr.endSec,
+        from_lane_index: tr.fromLaneIndex,
+        to_lane_index: tr.toLaneIndex,
+        selected: tr.selected,
       })),
     };
   }, [
@@ -203,6 +227,7 @@ export function useNativeTimelineEmbed({
     laneStripWidth,
     deckStrips,
     automationLanes,
+    transitions,
     lanes,
     dragPreview,
     locators,

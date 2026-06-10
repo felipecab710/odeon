@@ -100,6 +100,7 @@ std::string OdeonSession::createSession(const std::string& projectId,
 
     transport_ = &edit_->getTransport();
     transport_->ensureContextAllocated();
+    ensureAuxBusNames();
 
     return jsonOk("{\"projectId\":" + jsonQuote(projectId) +
                   ",\"projectDir\":" + jsonQuote(root.getFullPathName().toStdString()) + "}");
@@ -175,6 +176,16 @@ std::string OdeonSession::createTrack(const std::string& trackId, const std::str
         routes_[trackId] = std::move(route);
     }
     return jsonOk(jsonQuote(trackId));
+}
+
+std::string OdeonSession::createBus(const std::string& busId, const std::string& name) {
+    return createTrack(busId, name, "bus", "other");
+}
+
+void OdeonSession::ensureAuxBusNames() {
+    if (!edit_) return;
+    edit_->setAuxBusName(0, "Headphones");
+    edit_->setAuxBusName(1, "Booth");
 }
 
 std::string OdeonSession::removeTrack(const std::string& trackId) {
