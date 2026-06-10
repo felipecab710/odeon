@@ -6,7 +6,7 @@ use wgpu::SurfaceTargetUnsafe;
 use winit::window::Window;
 
 use crate::grid::{collect_grid_for_viewport, GridKind, GridLine};
-use crate::scene::{TimelineClip, TimelineLaneMetrics, TimelineScene};
+use crate::scene::{TimelineClip, TimelineDeckStrip, TimelineLaneMetrics, TimelineScene};
 use crate::spike::{grid_line_color, AppKitViewSurface, DemoClip, BEAT_RULER_H, CLIP_HEADER_H, TIME_RULER_H};
 use crate::viewport::TimelineViewport;
 
@@ -322,6 +322,8 @@ impl GpuRenderer {
             }],
             locators: Vec::new(),
             dom_rulers: false,
+            lane_strip_width: 0.0,
+            deck_strips: Vec::new(),
         };
         self.draw_internal(&scene, grid, p99_ms, None);
     }
@@ -350,21 +352,33 @@ impl GpuRenderer {
         let mut tris: Vec<Vertex> = Vec::new();
         let mut lines: Vec<Vertex> = Vec::new();
 
+        let strip_w = scene.lane_strip_width.max(0.0).min(w * 0.45);
+        let tx = strip_w;
+
         let dom_rulers = scene.dom_rulers;
         let lane_area_top = if dom_rulers { 0.0 } else { BEAT_RULER_H };
         let lane_area_bottom = if dom_rulers { h } else { h - TIME_RULER_H };
         let lane_area_h = (lane_area_bottom - lane_area_top).max(1.0);
 
         if dom_rulers {
+            if strip_w > 0.5 {
+                push_vline(&mut lines, strip_w, 0.0, h, w, h, [0.2, 0.2, 0.2, 1.0]);
+            }
             for (i, m) in scene.lane_metrics.iter().enumerate() {
-                let bg = if i % 2 == 1 {
+                let timeline_bg = if i % 2 == 1 {
                     [0.11, 0.11, 0.11, 1.0]
                 } else {
                     [0.165, 0.165, 0.165, 1.0]
                 };
-                push_rect_tris(&mut tris, 0.0, m.y, w, m.y + m.height, bg, w, h);
+                let strip_bg = [0.094, 0.094, 0.094, 1.0];
+                if strip_w > 0.5 {
+                    push_rect_tris(&mut tris, 0.0, m.y, strip_w, m.y + m.height, strip_bg, w, h);
+                }
+                if tx < w {
+                    push_rect_tris(&mut tris, tx, m.y, w, m.y + m.height, timeline_bg, w, h);
+                }
             }
-            // Lane dividers — same positions as sidebar deck strip borders.
+            // Lane dividers — full width across strip + timeline.
             for m in &scene.lane_metrics {
                 let y = m.y + m.height;
                 if y < h - 0.5 {
@@ -379,6 +393,15 @@ impl GpuRenderer {
                     );
                 }
             }
+            push_deck_strips(
+                &mut tris,
+                &mut lines,
+                &scene.deck_strips,
+                &scene.lane_metrics,
+                strip_w,
+                w,
+                h,
+            );
         } else {
             push_rect_tris(&mut tris, 0.0, 0.0, w, h, [0.06, 0.06, 0.06, 1.0], w, h);
             push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
@@ -422,8 +445,8 @@ impl GpuRenderer {
         }
 
         for line in grid {
-            let x = vp.time_to_viewport_x(line.time_sec) as f32;
-            if x < -2.0 || x > w + 2.0 {
+            let x = vp.time_to_viewport_x(line.time_sec) as f32 + tx;
+            if x < tx - 2.0 || x > w + 2.0 {
                 continue;
             }
             let color = grid_line_color(line.kind);
@@ -439,8 +462,8 @@ impl GpuRenderer {
         }
 
         for loc in &scene.locators {
-            let x = vp.time_to_viewport_x(loc.time_sec) as f32;
-            if x < -2.0 || x > w + 2.0 {
+            let x = vp.time_to_viewport_x(loc.time_sec) as f32 + tx;
+            if x < tx - 2.0 || x > w + 2.0 {
                 continue;
             }
             push_vline(
@@ -467,9 +490,9 @@ impl GpuRenderer {
                 lane_area_h,
             );
 
-            let x0 = vp.time_to_viewport_x(clip.start_sec) as f32;
-            let x1 = vp.time_to_viewport_x(clip.start_sec + clip.duration_sec) as f32;
-            if x1 > 0.0 && x0 < w {
+            let x0 = vp.time_to_viewport_x(clip.start_sec) as f32 + tx;
+            let x1 = vp.time_to_viewport_x(clip.start_sec + clip.duration_sec) as f32 + tx;
+            if x1 > tx && x0 < w {
                 let pad = 4.0;
                 let inner_top = lane_top + pad;
                 let inner_bottom = lane_bottom - pad;
@@ -636,8 +659,8 @@ impl GpuRenderer {
         }
 
         if let Some(cursor_sec) = scene.cursor_sec {
-            let cx = vp.time_to_viewport_x(cursor_sec) as f32;
-            if cx >= 0.0 && cx <= w {
+            let cx = vp.time_to_viewport_x(cursor_sec) as f32 + tx;
+            if cx >= tx && cx <= w {
                 push_vline(
                     &mut lines,
                     cx,
@@ -650,8 +673,8 @@ impl GpuRenderer {
             }
         }
 
-        let phx = vp.time_to_viewport_x(playhead_sec) as f32;
-        if phx >= 0.0 && phx <= w {
+        let phx = vp.time_to_viewport_x(playhead_sec) as f32 + tx;
+        if phx >= tx && phx <= w {
             push_vline(
                 &mut lines,
                 phx,
@@ -810,6 +833,71 @@ fn push_rect_tris(
     out.push(Vertex { pos: tr, color });
     out.push(Vertex { pos: br, color });
     out.push(Vertex { pos: bl, color });
+}
+
+fn push_deck_strips(
+    tris: &mut Vec<Vertex>,
+    lines: &mut Vec<Vertex>,
+    strips: &[TimelineDeckStrip],
+    metrics: &[TimelineLaneMetrics],
+    strip_w: f32,
+    w: f32,
+    h: f32,
+) {
+    if strip_w < 1.0 || strips.is_empty() {
+        return;
+    }
+    for strip in strips {
+        let Some(m) = metrics.get(strip.lane_index as usize) else {
+            continue;
+        };
+        let top = m.y + 1.0;
+        let bottom = m.y + m.height - 1.0;
+        if bottom <= top {
+            continue;
+        }
+        let accent_alpha = if strip.muted { 0.45 } else { 1.0 };
+        let accent = [
+            strip.color[0],
+            strip.color[1],
+            strip.color[2],
+            strip.color[3] * accent_alpha,
+        ];
+        push_rect_tris(tris, 0.0, top, 3.0, bottom, accent, w, h);
+        if strip.selected {
+            let sel = [accent[0], accent[1], accent[2], 0.55];
+            push_hline(lines, 1.0, strip_w - 1.0, top, w, h, sel);
+            push_hline(lines, 1.0, strip_w - 1.0, bottom, w, h, sel);
+            push_vline(lines, 1.0, top, bottom, w, h, sel);
+            push_vline(lines, strip_w - 1.0, top, bottom, w, h, sel);
+        }
+        let label = if strip.deck_label.is_empty() {
+            format!("{}", strip.lane_index + 1)
+        } else {
+            strip.deck_label.clone()
+        };
+        let label_color = if strip.muted {
+            [0.45, 0.45, 0.45, 1.0]
+        } else {
+            [0.82, 0.82, 0.82, 1.0]
+        };
+        let text_x = 10.0;
+        let text_y = top + 6.0;
+        crate::bitmap_font::push_text(
+            tris,
+            text_x,
+            text_y,
+            1.1,
+            label_color,
+            w,
+            h,
+            &label,
+            strip_w - 14.0,
+            |tris, x0, y0, x1, y1, color, cw, ch| {
+                push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
+            },
+        );
+    }
 }
 
 fn lane_bounds(

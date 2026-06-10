@@ -34,6 +34,14 @@ export interface NativeTimelineViewport {
   scroll_left: number;
 }
 
+export interface NativeTimelineDeckStrip {
+  lane_index: number;
+  color: [number, number, number, number];
+  deck_label?: string;
+  selected?: boolean;
+  muted?: boolean;
+}
+
 export interface NativeTimelineScene {
   viewport: {
     pixels_per_second: number;
@@ -51,6 +59,8 @@ export interface NativeTimelineScene {
   lane_metrics?: NativeTimelineLaneMetrics[];
   locators?: { time_sec: number }[];
   dom_rulers?: boolean;
+  lane_strip_width?: number;
+  deck_strips?: NativeTimelineDeckStrip[];
 }
 
 export async function measureNativeEmbedFrame(

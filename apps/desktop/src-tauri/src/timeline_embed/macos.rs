@@ -129,7 +129,8 @@ impl MacTimelinePanel {
 
     pub fn set_scene(&mut self, scene: TimelineScene) {
         let mut scene = scene;
-        scene.viewport.viewport_width = self.applied_frame.width;
+        let strip = scene.lane_strip_width.max(0.0) as f64;
+        scene.viewport.viewport_width = (self.applied_frame.width - strip).max(1.0);
         let stack_h: f32 = scene
             .lane_metrics
             .iter()
@@ -298,7 +299,8 @@ impl MacTimelinePanel {
         self.renderer.resize(pw, ph);
         self.renderer.set_logical_size(w as f32, logical_h);
         sync_metal_layer(self.metal_view, &frame);
-        self.scene.viewport.viewport_width = frame.width;
+        let strip = self.scene.lane_strip_width.max(0.0) as f64;
+        self.scene.viewport.viewport_width = (frame.width - strip).max(1.0);
         self.scene.viewport.viewport_height = logical_h as f64;
         self.applied_frame = frame;
     }

@@ -23,6 +23,19 @@ pub struct TimelineLaneMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineDeckStrip {
+    pub lane_index: u32,
+    pub color: [f32; 4],
+    /// Deck number or short label.
+    #[serde(default)]
+    pub deck_label: String,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub muted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineClip {
     pub start_sec: f64,
     pub duration_sec: f64,
@@ -70,6 +83,12 @@ pub struct TimelineScene {
     /// When true, beat/time rulers are drawn by DOM — GPU paints lane area only.
     #[serde(default)]
     pub dom_rulers: bool,
+    /// Left deck-strip column width (pixels). Timeline content starts after this.
+    #[serde(default)]
+    pub lane_strip_width: f32,
+    /// Per-deck strip chrome drawn in the left column (same lane_metrics Y positions).
+    #[serde(default)]
+    pub deck_strips: Vec<TimelineDeckStrip>,
 }
 
 impl Default for TimelineScene {
@@ -83,6 +102,8 @@ impl Default for TimelineScene {
             lane_metrics: Vec::new(),
             locators: Vec::new(),
             dom_rulers: false,
+            lane_strip_width: 0.0,
+            deck_strips: Vec::new(),
         }
     }
 }

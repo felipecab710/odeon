@@ -11,7 +11,38 @@ export interface NativeClipHit {
 
 const EDGE_HIT_PX = 8;
 
-export function nativeViewportXFromClientX(clientX: number, hostEl: HTMLElement): number {
+export function nativeLocalX(clientX: number, hostEl: HTMLElement): number {
+  return clientX - hostEl.getBoundingClientRect().left;
+}
+
+export function nativeLocalY(clientY: number, hostEl: HTMLElement): number {
+  return clientY - hostEl.getBoundingClientRect().top;
+}
+
+export function nativeIsDeckStripColumn(
+  clientX: number,
+  hostEl: HTMLElement,
+  laneStripWidth: number,
+): boolean {
+  return laneStripWidth > 0 && nativeLocalX(clientX, hostEl) < laneStripWidth;
+}
+
+export function nativeTimelineViewportX(
+  clientX: number,
+  hostEl: HTMLElement,
+  laneStripWidth: number,
+): number {
+  return nativeLocalX(clientX, hostEl) - laneStripWidth;
+}
+
+export function nativeViewportXFromClientX(
+  clientX: number,
+  hostEl: HTMLElement,
+  laneStripWidth = 0,
+): number {
+  if (laneStripWidth > 0) {
+    return nativeTimelineViewportX(clientX, hostEl, laneStripWidth);
+  }
   return SetTimelineContext.viewportXFromClientX(clientX, hostEl);
 }
 
@@ -21,8 +52,9 @@ export function nativeTimeSecFromClientX(
   scrollLeft: number,
   pixelsPerSecond: number,
   totalSec: number,
+  laneStripWidth = 0,
 ): number {
-  const viewportX = nativeViewportXFromClientX(clientX, hostEl);
+  const viewportX = nativeViewportXFromClientX(clientX, hostEl, laneStripWidth);
   const contentX = scrollLeft + viewportX;
   return Math.max(0, Math.min(totalSec, contentX / Math.max(pixelsPerSecond, 1e-9)));
 }
@@ -33,7 +65,7 @@ export function nativeLaneIndexFromClientY(
   laneYs: number[],
   laneHeights: number[],
 ): number | null {
-  const y = clientY - hostEl.getBoundingClientRect().top;
+  const y = nativeLocalY(clientY, hostEl);
   for (let i = 0; i < laneYs.length; i++) {
     if (y >= laneYs[i] && y < laneYs[i] + laneHeights[i]) return i;
   }
@@ -49,13 +81,16 @@ export function nativeClipHitTest(
   laneHeights: number[],
   scrollLeft: number,
   pixelsPerSecond: number,
+  laneStripWidth = 0,
 ): NativeClipHit | null {
+  if (nativeIsDeckStripColumn(clientX, hostEl, laneStripWidth)) return null;
+
   const laneIndex = nativeLaneIndexFromClientY(clientY, hostEl, laneYs, laneHeights);
   if (laneIndex == null) return null;
   const lane = lanes[laneIndex];
   if (!lane) return null;
 
-  const viewportX = nativeViewportXFromClientX(clientX, hostEl);
+  const viewportX = nativeTimelineViewportX(clientX, hostEl, laneStripWidth);
   const clipLeft = lane.startSec * pixelsPerSecond - scrollLeft;
   const clipRight = lane.endSec * pixelsPerSecond - scrollLeft;
 
@@ -68,7 +103,6 @@ export function nativeClipHitTest(
   return { laneIndex, lane, edge };
 }
 
-/** Cursor for hover over native clips — null when not over a clip edge. */
 export function nativeClipCursor(
   clientX: number,
   clientY: number,
@@ -78,7 +112,9 @@ export function nativeClipCursor(
   laneHeights: number[],
   scrollLeft: number,
   pixelsPerSecond: number,
+  laneStripWidth = 0,
 ): string | null {
+  if (nativeIsDeckStripColumn(clientX, hostEl, laneStripWidth)) return "pointer";
   const hit = nativeClipHitTest(
     clientX,
     clientY,
@@ -88,6 +124,7 @@ export function nativeClipCursor(
     laneHeights,
     scrollLeft,
     pixelsPerSecond,
+    laneStripWidth,
   );
   if (!hit) return null;
   if (hit.edge === "left" || hit.edge === "right") return "ew-resize";

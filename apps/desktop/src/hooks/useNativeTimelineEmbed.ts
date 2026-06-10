@@ -44,6 +44,14 @@ interface DragPreview {
   deltaPx: number;
 }
 
+interface DeckStripInput {
+  laneIndex: number;
+  colorHex: string;
+  deckLabel: string;
+  selected: boolean;
+  muted: boolean;
+}
+
 interface Options {
   active: boolean;
   targetRef: React.RefObject<HTMLElement | null>;
@@ -58,6 +66,8 @@ interface Options {
   laneHeights: number[];
   waveBandHeights?: number[];
   laneStackHeight: number;
+  laneStripWidth: number;
+  deckStrips: DeckStripInput[];
   lanes: LaneInput[];
   dragPreview?: DragPreview | null;
   locators?: { timeSec: number }[];
@@ -84,6 +94,8 @@ export function useNativeTimelineEmbed({
   laneHeights,
   waveBandHeights,
   laneStackHeight,
+  laneStripWidth,
+  deckStrips,
   lanes,
   dragPreview,
   locators = [],
@@ -101,7 +113,8 @@ export function useNativeTimelineEmbed({
   const buildScene = useCallback((): NativeTimelineScene => {
     const frame = frameRef.current;
     const el = targetRef.current;
-    const w = frame?.width ?? el?.clientWidth ?? 800;
+    const totalW = frame?.width ?? el?.clientWidth ?? 800;
+    const timelineW = Math.max(1, totalW - laneStripWidth);
     const h = laneStackHeight;
     const laneCount = lanes.length;
     const metrics = laneYs.map((y, i) => ({
@@ -113,7 +126,7 @@ export function useNativeTimelineEmbed({
       viewport: {
         pixels_per_second: pixelsPerSecond,
         scroll_left: scrollLeft,
-        viewport_width: w,
+        viewport_width: timelineW,
         viewport_height: h,
         total_sec: totalSec,
         bpm,
@@ -143,6 +156,14 @@ export function useNativeTimelineEmbed({
       lane_metrics: metrics,
       locators: locators.map(l => ({ time_sec: l.timeSec })),
       dom_rulers: true,
+      lane_strip_width: laneStripWidth,
+      deck_strips: deckStrips.map(strip => ({
+        lane_index: strip.laneIndex,
+        color: hexToRgba(strip.colorHex),
+        deck_label: strip.deckLabel,
+        selected: strip.selected,
+        muted: strip.muted,
+      })),
     };
   }, [
     targetRef,
@@ -156,6 +177,8 @@ export function useNativeTimelineEmbed({
     laneHeights,
     waveBandHeights,
     laneStackHeight,
+    laneStripWidth,
+    deckStrips,
     lanes,
     dragPreview,
     locators,
@@ -179,7 +202,7 @@ export function useNativeTimelineEmbed({
   const syncFrameRef = useRef(syncFrame);
   syncFrameRef.current = syncFrame;
 
-  const laneLayoutKey = `${laneYs.length}:${laneHeights.join(",")}:${(waveBandHeights ?? []).join(",")}:${laneStackHeight}`;
+  const laneLayoutKey = `${laneYs.length}:${laneHeights.join(",")}:${(waveBandHeights ?? []).join(",")}:${laneStackHeight}:${laneStripWidth}`;
 
   useEffect(() => {
     if (!active) {

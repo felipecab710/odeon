@@ -38,6 +38,7 @@ import { listenNativeTimelineViewport } from "../../lib/nativeTimelineEmbed";
 import {
   nativeClipHitTest,
   nativeClipCursor,
+  nativeIsDeckStripColumn,
   nativeLaneIndexFromClientY,
   nativeTimeSecFromClientX,
 } from "../../lib/nativeTimelineHitTest";
@@ -404,6 +405,8 @@ export function TransitionArrangementView({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const nativeEmbedHostRef = useRef<HTMLDivElement>(null);
+  const nativeLanePanelRef = useRef<HTMLDivElement>(null);
+  const timelineBodyRef = useRef<HTMLDivElement>(null);
   const zoomCameraRef = useRef<HTMLDivElement>(null);
   const timelineZoneRef = useRef<HTMLDivElement>(null);
   const sidebarScrollRef = useRef<HTMLDivElement>(null);
@@ -424,7 +427,7 @@ export function TransitionArrangementView({
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
   const [nativeGpuActive, setNativeGpuActive] = useState(NATIVE_GPU_DEFAULT);
-  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(0);
+  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(1);
   const navView = useNavigationStore(s => s.view);
   const setViewMode = useSetBuilderStore(s => s.viewMode);
 
@@ -532,6 +535,21 @@ export function TransitionArrangementView({
       };
     }),
     [layout.lanes, laneClipColors],
+  );
+
+  const nativeDeckStrips = useMemo(
+    () => layout.lanes.map((lane, index) => {
+      const colorHex = laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index);
+      const mix = mixes[index] ?? defaultDeckMix();
+      return {
+        laneIndex: index,
+        colorHex,
+        deckLabel: `${index + 1}`,
+        selected: lane.card.id === timelineSelectedCardId,
+        muted: mix.mute,
+      };
+    }),
+    [layout.lanes, laneClipColors, timelineSelectedCardId, mixes],
   );
 
   const timelineContext = useMemo(
@@ -690,34 +708,46 @@ export function TransitionArrangementView({
   }, [timelineSelectedCardId, layout.lanes]);
 
   const nativeSeekFromClientX = useCallback((clientX: number) => {
-    const el = nativeEmbedHostRef.current;
+    const el = nativeLanePanelRef.current;
     if (!el) return;
+    if (nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)) return;
     const timeSec = nativeTimeSecFromClientX(
       clientX,
       el,
       timelineScrollLeft,
       pixelsPerSecond,
       layout.totalSec,
+      LANE_STRIP_W,
     );
     void seekTimeline(timeSec);
   }, [seekTimeline, timelineScrollLeft, pixelsPerSecond, layout.totalSec]);
 
   const nativeCursorFromClientX = useCallback((clientX: number) => {
-    const el = nativeEmbedHostRef.current;
+    const el = nativeLanePanelRef.current;
     if (!el) return;
+    if (nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)) {
+      setCursor(null);
+      return;
+    }
     const timeSec = nativeTimeSecFromClientX(
       clientX,
       el,
       timelineScrollLeft,
       pixelsPerSecond,
       layout.totalSec,
+      LANE_STRIP_W,
     );
     setCursor(timeSec);
   }, [setCursor, timelineScrollLeft, pixelsPerSecond, layout.totalSec]);
 
   const nativePointerDown = useCallback((clientX: number, clientY: number) => {
-    const el = nativeEmbedHostRef.current;
+    const el = nativeLanePanelRef.current;
     if (!el) return;
+    if (nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)) {
+      const laneIndex = nativeLaneIndexFromClientY(clientY, el, embedLaneYs, embedLaneHeights);
+      if (laneIndex != null) selectLaneCard(laneIndex);
+      return;
+    }
     const hit = nativeClipHitTest(
       clientX,
       clientY,
@@ -727,6 +757,7 @@ export function TransitionArrangementView({
       embedLaneHeights,
       timelineScrollLeft,
       pixelsPerSecond,
+      LANE_STRIP_W,
     );
     if (hit) {
       if (timelineSelectedCardId !== hit.lane.card.id) {
@@ -766,7 +797,7 @@ export function TransitionArrangementView({
     nativeEmbedLive && isPlaying ? nativePlayheadSec : playheadSec;
 
   const nativeContextMenu = useCallback((clientX: number, clientY: number) => {
-    const el = nativeEmbedHostRef.current;
+    const el = nativeLanePanelRef.current;
     if (!el) return;
     const hit = nativeClipHitTest(
       clientX,
@@ -777,6 +808,7 @@ export function TransitionArrangementView({
       embedLaneHeights,
       timelineScrollLeft,
       pixelsPerSecond,
+      LANE_STRIP_W,
     );
     if (!hit) return;
     selectTimelineCard(hit.lane.card.id);
@@ -791,7 +823,7 @@ export function TransitionArrangementView({
   ]);
 
   const nativePointerMove = useCallback((clientX: number, clientY: number) => {
-    const el = nativeEmbedHostRef.current;
+    const el = nativeLanePanelRef.current;
     if (!el || drag) return;
     const cursor = nativeClipCursor(
       clientX,
@@ -802,13 +834,14 @@ export function TransitionArrangementView({
       embedLaneHeights,
       timelineScrollLeft,
       pixelsPerSecond,
+      LANE_STRIP_W,
     );
     el.style.cursor = cursor ?? "default";
   }, [layout.lanes, embedLaneYs, embedLaneHeights, timelineScrollLeft, pixelsPerSecond, drag]);
 
   useNativeTimelineEmbed({
     active: nativeEmbedLive,
-    targetRef: nativeEmbedHostRef,
+    targetRef: nativeLanePanelRef,
     totalSec: layout.totalSec,
     bpm: gridBpm,
     pixelsPerSecond,
@@ -820,6 +853,8 @@ export function TransitionArrangementView({
     laneHeights,
     waveBandHeights,
     laneStackHeight: timelineH,
+    laneStripWidth: LANE_STRIP_W,
+    deckStrips: nativeDeckStrips,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,
@@ -1271,14 +1306,17 @@ export function TransitionArrangementView({
         />
       </div>
 
-      {/* Timeline body — same sidebar + lane stack for DOM and native GPU */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
-        {/* Deck strips — compact, positioned to match timeline lane tops */}
+      {/* Timeline body — unified native panel spans deck strips + timeline when GPU active */}
+      <div
+        ref={timelineBodyRef}
+        style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0, position: "relative" }}
+      >
+        {/* Deck strips — DOM when native off; GPU draws strips when native on */}
         <div style={{
           width: LANE_STRIP_W,
           flexShrink: 0,
-          background: STUDIO_SIDEBAR,
-          borderRight: `1px solid ${STUDIO_GRID}`,
+          background: nativeEmbedLive ? "transparent" : STUDIO_SIDEBAR,
+          borderRight: nativeEmbedLive ? "none" : `1px solid ${STUDIO_GRID}`,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -1309,7 +1347,7 @@ export function TransitionArrangementView({
                 height: nativeEmbedLive ? timelineH : extendedLaneH,
               }}
             >
-              {layout.lanes.map((lane, i) => {
+              {!nativeEmbedLive && layout.lanes.map((lane, i) => {
                 const waveH = getWaveHeight(i);
                 const autoH = getAutomationPanelHeight(i);
                 const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
@@ -1486,8 +1524,8 @@ export function TransitionArrangementView({
                 : { flex: 1, minHeight: 0 }),
               minWidth: 0,
               position: "relative",
-              pointerEvents: nativeEmbedLive ? "auto" : "none",
-              zIndex: nativeEmbedLive ? 2 : undefined,
+              pointerEvents: nativeEmbedLive ? "none" : "auto",
+              zIndex: nativeEmbedLive ? 1 : 2,
               overflow: "hidden",
             }}
           >
@@ -1785,6 +1823,20 @@ export function TransitionArrangementView({
             />
           </div>
         </div>
+
+        <div
+          ref={nativeLanePanelRef}
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: BEAT_RULER_H,
+            height: timelineH,
+            zIndex: nativeEmbedLive ? 30 : -1,
+            pointerEvents: nativeEmbedLive ? "auto" : "none",
+            visibility: nativeEmbedLive ? "visible" : "hidden",
+          }}
+        />
       </div>
 
       </div>
