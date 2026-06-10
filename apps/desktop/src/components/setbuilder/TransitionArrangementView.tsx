@@ -35,6 +35,7 @@ import { getZoomAnchorViewportX, subscribeTimelineCursor, getCursorTimeSec } fro
 import { SetTimelineContext } from "../../lib/setTimelineContext";
 import { useNativeTimelineEmbed } from "../../hooks/useNativeTimelineEmbed";
 import { listenNativeTimelineViewport } from "../../lib/nativeTimelineEmbed";
+import { nativeStripHitTest, nativeStripCursor } from "../../lib/nativeStripHitTest";
 import {
   nativeClipHitTest,
   nativeClipCursor,
@@ -427,7 +428,7 @@ export function TransitionArrangementView({
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
   const [nativeGpuActive, setNativeGpuActive] = useState(NATIVE_GPU_DEFAULT);
-  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(1);
+  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(2);
   const navView = useNavigationStore(s => s.view);
   const setViewMode = useSetBuilderStore(s => s.viewMode);
 
@@ -535,21 +536,6 @@ export function TransitionArrangementView({
       };
     }),
     [layout.lanes, laneClipColors],
-  );
-
-  const nativeDeckStrips = useMemo(
-    () => layout.lanes.map((lane, index) => {
-      const colorHex = laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index);
-      const mix = mixes[index] ?? defaultDeckMix();
-      return {
-        laneIndex: index,
-        colorHex,
-        deckLabel: `${index + 1}`,
-        selected: lane.card.id === timelineSelectedCardId,
-        muted: mix.mute,
-      };
-    }),
-    [layout.lanes, laneClipColors, timelineSelectedCardId, mixes],
   );
 
   const timelineContext = useMemo(
@@ -668,6 +654,7 @@ export function TransitionArrangementView({
   });
 
   const automationTracks = useStudioAutomationStore(s => s.tracks);
+  const toggleTrackExpanded = useStudioAutomationStore(s => s.toggleTrackExpanded);
   const expandedFlags = useStudioAutomationStore(s =>
     layout.lanes.map((_, i) => (s.tracks[i]?.expanded ? "1" : "0")).join(""),
   );
@@ -691,6 +678,43 @@ export function TransitionArrangementView({
     () => layout.lanes.map((_, i) => HEADER_H + getWaveHeight(i)),
     [layout.lanes.length, automationTracks, expandedFlags, laneSplits, getWaveHeight],
   );
+
+  const nativeDeckStrips = useMemo(
+    () => layout.lanes.map((lane, index) => {
+      const colorHex = laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index);
+      const mix = mixes[index] ?? defaultDeckMix();
+      const automationExpanded = automationTracks[index]?.expanded ?? false;
+      return {
+        laneIndex: index,
+        colorHex,
+        deckLabel: `${index + 1}`,
+        title: trackTitle(lane.entry).slice(0, 22),
+        selected: lane.card.id === timelineSelectedCardId,
+        muted: mix.mute,
+        solo: mix.solo,
+        cue: mix.cue,
+        showAutomation: mix.showAutomation,
+        automationExpanded,
+      };
+    }),
+    [layout.lanes, laneClipColors, timelineSelectedCardId, mixes, automationTracks],
+  );
+
+  const nativeAutomationLanes = useMemo(
+    () => layout.lanes.map((lane, index) => {
+      const colorHex = laneClipColors[index] ?? resolveCardClipColor(lane.card.clipColor, index);
+      const mix = mixes[index] ?? defaultDeckMix();
+      const automationExpanded = automationTracks[index]?.expanded ?? false;
+      const autoH = getAutomationPanelHeight(index);
+      return {
+        laneIndex: index,
+        colorHex,
+        visible: automationExpanded && autoH > 0 && mix.showAutomation,
+      };
+    }),
+    [layout.lanes, laneClipColors, automationTracks, mixes, getAutomationPanelHeight],
+  );
+
   const embedAreaH = nativeEmbedLive ? timelineH : extendedLaneH;
 
   const selectLaneCard = useCallback((laneIndex: number) => {
@@ -743,10 +767,59 @@ export function TransitionArrangementView({
   const nativePointerDown = useCallback((clientX: number, clientY: number) => {
     const el = nativeLanePanelRef.current;
     if (!el) return;
-    if (nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)) {
-      const laneIndex = nativeLaneIndexFromClientY(clientY, el, embedLaneYs, embedLaneHeights);
-      if (laneIndex != null) selectLaneCard(laneIndex);
-      return;
+    const stripAction = nativeStripHitTest(
+      clientX,
+      clientY,
+      el,
+      LANE_STRIP_W,
+      embedLaneYs,
+      embedLaneHeights,
+    );
+    if (stripAction) {
+      const i = stripAction.laneIndex;
+      const mix = mixes[i] ?? defaultDeckMix();
+      switch (stripAction.kind) {
+        case "toggleExpand":
+          toggleTrackExpanded(i);
+          return;
+        case "toggleSolo":
+          captureUndoState();
+          useStudioDeckStore.getState().setMixes({
+            ...useStudioDeckStore.getState().mixes,
+            [i]: { ...mix, solo: !mix.solo },
+          });
+          return;
+        case "toggleCue": {
+          captureUndoState();
+          const next = { ...useStudioDeckStore.getState().mixes };
+          if (!mix.cue) {
+            for (const key of Object.keys(next)) {
+              const idx = Number(key);
+              if (idx !== i && next[idx]?.cue) next[idx] = { ...next[idx], cue: false };
+            }
+          }
+          next[i] = { ...mix, cue: !mix.cue };
+          useStudioDeckStore.getState().setMixes(next);
+          return;
+        }
+        case "toggleMute":
+          captureUndoState();
+          useStudioDeckStore.getState().setMixes({
+            ...useStudioDeckStore.getState().mixes,
+            [i]: { ...mix, mute: !mix.mute },
+          });
+          return;
+        case "toggleAutomation":
+          captureUndoState();
+          useStudioDeckStore.getState().setMixes({
+            ...useStudioDeckStore.getState().mixes,
+            [i]: { ...mix, showAutomation: !mix.showAutomation },
+          });
+          return;
+        case "select":
+          selectLaneCard(i);
+          return;
+      }
     }
     const hit = nativeClipHitTest(
       clientX,
@@ -784,6 +857,8 @@ export function TransitionArrangementView({
     pixelsPerSecond,
     timelineSelectedCardId,
     selectLaneCard,
+    mixes,
+    toggleTrackExpanded,
   ]);
 
   const nativeDragPreview = useMemo(() => {
@@ -825,17 +900,19 @@ export function TransitionArrangementView({
   const nativePointerMove = useCallback((clientX: number, clientY: number) => {
     const el = nativeLanePanelRef.current;
     if (!el || drag) return;
-    const cursor = nativeClipCursor(
-      clientX,
-      clientY,
-      el,
-      layout.lanes,
-      embedLaneYs,
-      embedLaneHeights,
-      timelineScrollLeft,
-      pixelsPerSecond,
-      LANE_STRIP_W,
-    );
+    const cursor = nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)
+      ? nativeStripCursor(clientX, clientY, el, LANE_STRIP_W, embedLaneYs, embedLaneHeights)
+      : nativeClipCursor(
+        clientX,
+        clientY,
+        el,
+        layout.lanes,
+        embedLaneYs,
+        embedLaneHeights,
+        timelineScrollLeft,
+        pixelsPerSecond,
+        LANE_STRIP_W,
+      );
     el.style.cursor = cursor ?? "default";
   }, [layout.lanes, embedLaneYs, embedLaneHeights, timelineScrollLeft, pixelsPerSecond, drag]);
 
@@ -855,6 +932,7 @@ export function TransitionArrangementView({
     laneStackHeight: timelineH,
     laneStripWidth: LANE_STRIP_W,
     deckStrips: nativeDeckStrips,
+    automationLanes: nativeAutomationLanes,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,
@@ -1745,69 +1823,6 @@ export function TransitionArrangementView({
                 borderTop: "7px solid #5ec8e8",
               }} />
             </div>
-            )}
-            {nativeEmbedLive && (
-              <div style={{
-                position: "absolute",
-                inset: 0,
-                zIndex: 10,
-                pointerEvents: "none",
-                overflow: "hidden",
-              }}>
-                {layout.lanes.map((lane, i) => {
-                  const waveH = getWaveHeight(i);
-                  const autoH = getAutomationPanelHeight(i);
-                  const automationExpanded = automationTracks[i]?.expanded ?? false;
-                  if (!automationExpanded || autoH <= 0) return null;
-                  const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
-                  const mix = getMix(i);
-                  return (
-                    <div
-                      key={`native-auto-${lane.card.id}`}
-                      style={{
-                        position: "absolute",
-                        top: laneYs[i] + HEADER_H + waveH + 6,
-                        left: 0,
-                        right: 0,
-                        height: autoH,
-                        pointerEvents: "auto",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div style={{
-                        transform: `translateX(-${timelineScrollLeft}px)`,
-                        width: layout.totalWidthPx + 200,
-                        height: autoH,
-                        position: "relative",
-                      }}>
-                        <div
-                          data-auto-lane
-                          style={{
-                            position: "absolute",
-                            left: lane.leftPx,
-                            top: 0,
-                            width: Math.max(lane.widthPx, 24),
-                            height: autoH,
-                          }}
-                        >
-                          <TrackAutomationLane
-                            laneIndex={i}
-                            color={color}
-                            width={Math.max(lane.widthPx, 24)}
-                            panelHeight={autoH}
-                            startSec={lane.startSec}
-                            durationSec={lane.durationSec}
-                            playheadSec={playheadSec}
-                            showAutomation={mix.showAutomation}
-                            mix={mix}
-                            onMixChange={m => handleMixChange(i, m)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             )}
           </div>
 

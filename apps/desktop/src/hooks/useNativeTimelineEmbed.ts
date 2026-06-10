@@ -48,8 +48,19 @@ interface DeckStripInput {
   laneIndex: number;
   colorHex: string;
   deckLabel: string;
+  title: string;
   selected: boolean;
   muted: boolean;
+  solo: boolean;
+  cue: boolean;
+  showAutomation: boolean;
+  automationExpanded: boolean;
+}
+
+interface AutomationLaneInput {
+  laneIndex: number;
+  colorHex: string;
+  visible: boolean;
 }
 
 interface Options {
@@ -68,6 +79,7 @@ interface Options {
   laneStackHeight: number;
   laneStripWidth: number;
   deckStrips: DeckStripInput[];
+  automationLanes: AutomationLaneInput[];
   lanes: LaneInput[];
   dragPreview?: DragPreview | null;
   locators?: { timeSec: number }[];
@@ -96,6 +108,7 @@ export function useNativeTimelineEmbed({
   laneStackHeight,
   laneStripWidth,
   deckStrips,
+  automationLanes,
   lanes,
   dragPreview,
   locators = [],
@@ -161,8 +174,18 @@ export function useNativeTimelineEmbed({
         lane_index: strip.laneIndex,
         color: hexToRgba(strip.colorHex),
         deck_label: strip.deckLabel,
+        title: strip.title,
         selected: strip.selected,
         muted: strip.muted,
+        solo: strip.solo,
+        cue: strip.cue,
+        show_automation: strip.showAutomation,
+        automation_expanded: strip.automationExpanded,
+      })),
+      automation_lanes: automationLanes.map(lane => ({
+        lane_index: lane.laneIndex,
+        color: hexToRgba(lane.colorHex),
+        visible: lane.visible,
       })),
     };
   }, [
@@ -179,6 +202,7 @@ export function useNativeTimelineEmbed({
     laneStackHeight,
     laneStripWidth,
     deckStrips,
+    automationLanes,
     lanes,
     dragPreview,
     locators,

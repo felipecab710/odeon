@@ -6,7 +6,7 @@ use wgpu::SurfaceTargetUnsafe;
 use winit::window::Window;
 
 use crate::grid::{collect_grid_for_viewport, GridKind, GridLine};
-use crate::scene::{TimelineClip, TimelineDeckStrip, TimelineLaneMetrics, TimelineScene};
+use crate::scene::{TimelineAutomationLane, TimelineClip, TimelineDeckStrip, TimelineLaneMetrics, TimelineScene};
 use crate::spike::{grid_line_color, AppKitViewSurface, DemoClip, BEAT_RULER_H, CLIP_HEADER_H, TIME_RULER_H};
 use crate::viewport::TimelineViewport;
 
@@ -324,6 +324,7 @@ impl GpuRenderer {
             dom_rulers: false,
             lane_strip_width: 0.0,
             deck_strips: Vec::new(),
+            automation_lanes: Vec::new(),
         };
         self.draw_internal(&scene, grid, p99_ms, None);
     }
@@ -650,6 +651,16 @@ impl GpuRenderer {
             }
         }
 
+        push_automation_lanes(
+            &mut tris,
+            &mut lines,
+            &scene.automation_lanes,
+            &scene.lane_metrics,
+            tx,
+            w,
+            h,
+        );
+
         if let Some(idx) = scene.selected_lane_index {
             if let Some(m) = scene.lane_metrics.get(idx as usize) {
                 let sel_color = [1.0, 1.0, 1.0, 0.22];
@@ -871,32 +882,182 @@ fn push_deck_strips(
             push_vline(lines, 1.0, top, bottom, w, h, sel);
             push_vline(lines, strip_w - 1.0, top, bottom, w, h, sel);
         }
-        let label = if strip.deck_label.is_empty() {
-            format!("{}", strip.lane_index + 1)
+        // Expand chevron
+        let chev_x = 5.0;
+        let chev_y = top + 7.0;
+        let chev_color = if strip.automation_expanded {
+            accent
         } else {
-            strip.deck_label.clone()
+            [0.45, 0.45, 0.45, 1.0]
+        };
+        if strip.automation_expanded {
+            push_rect_tris(tris, chev_x, chev_y, chev_x + 8.0, chev_y + 2.0, chev_color, w, h);
+            push_rect_tris(tris, chev_x + 2.0, chev_y + 2.0, chev_x + 6.0, chev_y + 4.0, chev_color, w, h);
+        } else {
+            push_rect_tris(tris, chev_x + 2.0, chev_y, chev_x + 4.0, chev_y + 6.0, chev_color, w, h);
+            push_rect_tris(tris, chev_x + 4.0, chev_y + 2.0, chev_x + 8.0, chev_y + 4.0, chev_color, w, h);
+        }
+        let deck_label = if strip.deck_label.is_empty() {
+            format!("DECK {}", strip.lane_index + 1)
+        } else {
+            format!("DECK {}", strip.deck_label)
         };
         let label_color = if strip.muted {
             [0.45, 0.45, 0.45, 1.0]
         } else {
-            [0.82, 0.82, 0.82, 1.0]
+            accent
         };
-        let text_x = 10.0;
-        let text_y = top + 6.0;
         crate::bitmap_font::push_text(
             tris,
-            text_x,
-            text_y,
-            1.1,
+            16.0,
+            top + 4.0,
+            0.95,
             label_color,
             w,
             h,
-            &label,
-            strip_w - 14.0,
+            &deck_label,
+            strip_w - 20.0,
             |tris, x0, y0, x1, y1, color, cw, ch| {
                 push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
             },
         );
+        if !strip.title.is_empty() {
+            crate::bitmap_font::push_text(
+                tris,
+                16.0,
+                top + 14.0,
+                0.85,
+                [0.55, 0.55, 0.55, 1.0],
+                w,
+                h,
+                &strip.title,
+                strip_w - 20.0,
+                |tris, x0, y0, x1, y1, color, cw, ch| {
+                    push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
+                },
+            );
+        }
+        // S / C / M / A transport pills
+        let btn_y = top + 28.0;
+        let pills = [
+            ("S", strip.solo, [0.35, 0.35, 0.35, 1.0]),
+            ("C", strip.cue, [1.0, 0.6, 0.0, 1.0]),
+            ("M", strip.muted, [0.35, 0.35, 0.35, 1.0]),
+            ("A", strip.show_automation, accent),
+        ];
+        for (i, (label, active, on_color)) in pills.iter().enumerate() {
+            let bx = 8.0 + i as f32 * 18.0;
+            let bg = if *active {
+                *on_color
+            } else {
+                [0.13, 0.13, 0.13, 1.0]
+            };
+            push_rect_tris(tris, bx, btn_y, bx + 14.0, btn_y + 12.0, bg, w, h);
+            let tc = if *active { [0.08, 0.08, 0.08, 1.0] } else { [0.45, 0.45, 0.45, 1.0] };
+            crate::bitmap_font::push_text(
+                tris,
+                bx + 4.0,
+                btn_y + 2.0,
+                0.9,
+                tc,
+                w,
+                h,
+                label,
+                10.0,
+                |tris, x0, y0, x1, y1, color, cw, ch| {
+                    push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
+                },
+            );
+        }
+        // Fader track hint
+        let fader_x = strip_w - 22.0;
+        push_rect_tris(
+            tris,
+            fader_x,
+            top + 24.0,
+            fader_x + 4.0,
+            bottom - 6.0,
+            [0.08, 0.08, 0.08, 1.0],
+            w,
+            h,
+        );
+        let fader_h = (bottom - top - 30.0).max(8.0);
+        let fader_fill = bottom - 6.0 - fader_h * 0.65;
+        push_rect_tris(
+            tris,
+            fader_x,
+            fader_fill,
+            fader_x + 4.0,
+            bottom - 6.0,
+            [0.55, 0.55, 0.55, 0.85],
+            w,
+            h,
+        );
+    }
+}
+
+fn push_automation_lanes(
+    tris: &mut Vec<Vertex>,
+    lines: &mut Vec<Vertex>,
+    lanes: &[TimelineAutomationLane],
+    metrics: &[TimelineLaneMetrics],
+    tx: f32,
+    w: f32,
+    h: f32,
+) {
+    for lane in lanes {
+        if !lane.visible {
+            continue;
+        }
+        let Some(m) = metrics.get(lane.lane_index as usize) else {
+            continue;
+        };
+        let wave_h = m.wave_height.unwrap_or(m.height);
+        let auto_top = m.y + wave_h + 2.0;
+        let auto_bottom = m.y + m.height - 2.0;
+        if auto_bottom <= auto_top + 4.0 {
+            continue;
+        }
+        let bg = [
+            lane.color[0] * 0.12,
+            lane.color[1] * 0.12,
+            lane.color[2] * 0.12,
+            0.92,
+        ];
+        push_rect_tris(tris, tx + 2.0, auto_top, w - 2.0, auto_bottom, bg, w, h);
+        push_hline(
+            lines,
+            tx + 2.0,
+            w - 2.0,
+            auto_top,
+            w,
+            h,
+            [lane.color[0], lane.color[1], lane.color[2], 0.35],
+        );
+        crate::bitmap_font::push_text(
+            tris,
+            tx + 8.0,
+            auto_top + 4.0,
+            0.85,
+            [lane.color[0], lane.color[1], lane.color[2], 0.65],
+            w,
+            h,
+            "AUTOMATION",
+            80.0,
+            |tris, x0, y0, x1, y1, color, cw, ch| {
+                push_rect_tris(tris, x0, y0, x1, y1, color, cw, ch);
+            },
+        );
+        // Placeholder curve — subtle sine envelope hint
+        let mid_y = (auto_top + auto_bottom) * 0.5;
+        let amp = (auto_bottom - auto_top) * 0.25;
+        let mut px = tx + 12.0;
+        while px < w - 12.0 {
+            let t = (px - tx) / (w - tx).max(1.0);
+            let cy = mid_y + (t * std::f32::consts::PI * 4.0).sin() * amp;
+            push_rect_tris(tris, px, cy - 0.5, px + 2.0, cy + 0.5, lane.color, w, h);
+            px += 3.0;
+        }
     }
 }
 

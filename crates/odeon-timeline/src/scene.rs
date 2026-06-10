@@ -26,13 +26,31 @@ pub struct TimelineLaneMetrics {
 pub struct TimelineDeckStrip {
     pub lane_index: u32,
     pub color: [f32; 4],
-    /// Deck number or short label.
     #[serde(default)]
     pub deck_label: String,
+    /// Track title (truncated in strip).
+    #[serde(default)]
+    pub title: String,
     #[serde(default)]
     pub selected: bool,
     #[serde(default)]
     pub muted: bool,
+    #[serde(default)]
+    pub solo: bool,
+    #[serde(default)]
+    pub cue: bool,
+    #[serde(default)]
+    pub show_automation: bool,
+    #[serde(default)]
+    pub automation_expanded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineAutomationLane {
+    pub lane_index: u32,
+    pub color: [f32; 4],
+    #[serde(default)]
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +107,8 @@ pub struct TimelineScene {
     /// Per-deck strip chrome drawn in the left column (same lane_metrics Y positions).
     #[serde(default)]
     pub deck_strips: Vec<TimelineDeckStrip>,
+    #[serde(default)]
+    pub automation_lanes: Vec<TimelineAutomationLane>,
 }
 
 impl Default for TimelineScene {
@@ -104,6 +124,7 @@ impl Default for TimelineScene {
             dom_rulers: false,
             lane_strip_width: 0.0,
             deck_strips: Vec::new(),
+            automation_lanes: Vec::new(),
         }
     }
 }

@@ -168,8 +168,13 @@ impl MacTimelinePanel {
 
     pub fn apply_wheel(&mut self, delta_y: f64, ctrl: bool, cursor_x: f64) {
         let vp = &mut self.scene.viewport;
+        let strip = self.scene.lane_strip_width.max(0.0) as f64;
+        let anchor_x = if cursor_x > strip { cursor_x - strip } else { cursor_x };
         if ctrl {
-            vp.apply_wheel_steps(odeon_timeline::viewport::wheel_steps_from_delta_y(delta_y), cursor_x);
+            vp.apply_wheel_steps(
+                odeon_timeline::viewport::wheel_steps_from_delta_y(delta_y),
+                anchor_x,
+            );
         } else {
             vp.pan_pixels(-delta_y);
         }
