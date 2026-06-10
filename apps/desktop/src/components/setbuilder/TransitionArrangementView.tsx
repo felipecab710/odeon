@@ -428,7 +428,7 @@ export function TransitionArrangementView({
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
   const [nativeGpuActive, setNativeGpuActive] = useState(NATIVE_GPU_DEFAULT);
-  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(3);
+  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(2);
   const navView = useNavigationStore(s => s.view);
   const setViewMode = useSetBuilderStore(s => s.viewMode);
 

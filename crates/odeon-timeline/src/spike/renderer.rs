@@ -355,8 +355,6 @@ impl GpuRenderer {
 
         let strip_w = scene.lane_strip_width.max(0.0).min(w * 0.45);
         let tx = strip_w;
-        /// #111111 — darker than timeline zebra so deck column reads as sidebar.
-        let strip_bg = [0.067, 0.067, 0.067, 1.0];
 
         let dom_rulers = scene.dom_rulers;
         let lane_area_top = if dom_rulers { 0.0 } else { BEAT_RULER_H };
@@ -373,6 +371,7 @@ impl GpuRenderer {
                 } else {
                     [0.165, 0.165, 0.165, 1.0]
                 };
+                let strip_bg = [0.094, 0.094, 0.094, 1.0];
                 if strip_w > 0.5 {
                     push_rect_tris(&mut tris, 0.0, m.y, strip_w, m.y + m.height, strip_bg, w, h);
                 }
@@ -395,6 +394,15 @@ impl GpuRenderer {
                     );
                 }
             }
+            push_deck_strips(
+                &mut tris,
+                &mut lines,
+                &scene.deck_strips,
+                &scene.lane_metrics,
+                strip_w,
+                w,
+                h,
+            );
         } else {
             push_rect_tris(&mut tris, 0.0, 0.0, w, h, [0.06, 0.06, 0.06, 1.0], w, h);
             push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
@@ -485,16 +493,7 @@ impl GpuRenderer {
 
             let x0 = vp.time_to_viewport_x(clip.start_sec) as f32 + tx;
             let x1 = vp.time_to_viewport_x(clip.start_sec + clip.duration_sec) as f32 + tx;
-            if x1 <= tx || x0 >= w {
-                continue;
-            }
-            // Hard clip at timeline origin — never bleed into deck strip column.
-            let clip_x0 = x0.max(tx);
-            let clip_x1 = x1.min(w);
-            if clip_x1 <= clip_x0 {
-                continue;
-            }
-            {
+            if x1 > tx && x0 < w {
                 let pad = 4.0;
                 let inner_top = lane_top + pad;
                 let inner_bottom = lane_bottom - pad;
@@ -513,9 +512,9 @@ impl GpuRenderer {
                 // Clip chrome only covers wave band — automation stays transparent for DOM overlay.
                 push_arrangement_clip_gradient(
                     &mut tris,
-                    clip_x0,
+                    x0,
                     inner_top,
-                    clip_x1,
+                    x1,
                     clip_bottom,
                     base,
                     w,
@@ -524,9 +523,9 @@ impl GpuRenderer {
                 if header_bottom > inner_top + 0.5 {
                     push_header_shimmer(
                         &mut tris,
-                        clip_x0,
+                        x0,
                         inner_top,
-                        clip_x1,
+                        x1,
                         header_bottom,
                         base,
                         w,
@@ -535,16 +534,16 @@ impl GpuRenderer {
                 }
 
                 let border = [0.0, 0.0, 0.0, 0.45];
-                push_hline(&mut lines, clip_x0, clip_x1, inner_top, w, h, border);
-                push_hline(&mut lines, clip_x0, clip_x1, clip_bottom, w, h, border);
-                push_vline(&mut lines, clip_x0, inner_top, clip_bottom, w, h, border);
-                push_vline(&mut lines, clip_x1, inner_top, clip_bottom, w, h, border);
-                push_hline(&mut lines, clip_x0, clip_x1, header_bottom, w, h, [0.0, 0.0, 0.0, 0.25]);
+                push_hline(&mut lines, x0, x1, inner_top, w, h, border);
+                push_hline(&mut lines, x0, x1, clip_bottom, w, h, border);
+                push_vline(&mut lines, x0, inner_top, clip_bottom, w, h, border);
+                push_vline(&mut lines, x1, inner_top, clip_bottom, w, h, border);
+                push_hline(&mut lines, x0, x1, header_bottom, w, h, [0.0, 0.0, 0.0, 0.25]);
                 if wave_band_bottom < inner_bottom - 0.5 {
                     push_hline(
                         &mut lines,
-                        clip_x0,
-                        clip_x1,
+                        x0,
+                        x1,
                         wave_band_bottom,
                         w,
                         h,
@@ -555,7 +554,7 @@ impl GpuRenderer {
                 let text_scale = 1.0;
                 let text_y = inner_top + 4.0;
                 let label_color = clip.label_color;
-                let mut text_x = clip_x0 + 7.0;
+                let mut text_x = x0 + 7.0;
                 if !clip.badge.is_empty() {
                     let badge_w = clip.badge.len() as f32 * 6.0 * text_scale + 6.0;
                     push_rect_tris(
@@ -585,7 +584,7 @@ impl GpuRenderer {
                     text_x += badge_w + 4.0;
                 }
                 if !clip.label.is_empty() {
-                    let title_w = (clip_x1 - text_x - 8.0).max(0.0);
+                    let title_w = (x1 - text_x - 8.0).max(0.0);
                     if title_w > 6.0 {
                         crate::bitmap_font::push_text(
                             &mut tris,
@@ -606,9 +605,9 @@ impl GpuRenderer {
 
                 let grip = [1.0, 1.0, 1.0, 0.28];
                 for i in 0..3i32 {
-                    let gx = clip_x0 + 3.0 + i as f32 * 2.0;
+                    let gx = x0 + 3.0 + i as f32 * 2.0;
                     push_vline(&mut lines, gx, inner_top + 5.0, clip_bottom - 5.0, w, h, grip);
-                    let gx_r = clip_x1 - 8.0 + i as f32 * 2.0;
+                    let gx_r = x1 - 8.0 + i as f32 * 2.0;
                     push_vline(&mut lines, gx_r, inner_top + 5.0, clip_bottom - 5.0, w, h, grip);
                 }
 
@@ -621,8 +620,7 @@ impl GpuRenderer {
                         push_waveform_cached(
                             &mut tris,
                             &mut lines,
-                            clip_x0,
-                            tx,
+                            x0,
                             clip.start_sec,
                             clip.duration_sec,
                             vp.pixels_per_second,
@@ -641,7 +639,6 @@ impl GpuRenderer {
                         &mut tris,
                         &mut lines,
                         vp,
-                        tx,
                         clip.start_sec,
                         clip.duration_sec,
                         wave_top,
@@ -652,23 +649,6 @@ impl GpuRenderer {
                     );
                 }
             }
-        }
-
-        // Repaint deck column on top of clips so waveforms never bleed into strips.
-        if dom_rulers && strip_w > 0.5 {
-            for m in &scene.lane_metrics {
-                push_rect_tris(&mut tris, 0.0, m.y, strip_w, m.y + m.height, strip_bg, w, h);
-            }
-            push_vline(&mut lines, strip_w, 0.0, h, w, h, [0.2, 0.2, 0.2, 1.0]);
-            push_deck_strips(
-                &mut tris,
-                &mut lines,
-                &scene.deck_strips,
-                &scene.lane_metrics,
-                strip_w,
-                w,
-                h,
-            );
         }
 
         push_automation_lanes(
@@ -1259,7 +1239,6 @@ fn push_waveform(
     tris: &mut Vec<Vertex>,
     out: &mut Vec<Vertex>,
     vp: &TimelineViewport,
-    tx: f32,
     start_sec: f64,
     duration_sec: f64,
     top: f32,
@@ -1270,9 +1249,9 @@ fn push_waveform(
 ) {
     let mid = (top + bottom) * 0.5;
     let half = (bottom - top) * 0.45;
-    let x0 = vp.time_to_viewport_x(start_sec) as f32 + tx;
-    let x1 = vp.time_to_viewport_x(start_sec + duration_sec) as f32 + tx;
-    if x1 <= tx || x0 >= w {
+    let x0 = vp.time_to_viewport_x(start_sec) as f32;
+    let x1 = vp.time_to_viewport_x(start_sec + duration_sec) as f32;
+    if x1 <= x0 {
         return;
     }
 
@@ -1282,8 +1261,8 @@ fn push_waveform(
     for i in 0..samples {
         let t = i as f64 / (samples - 1).max(1) as f64;
         let time = start_sec + duration_sec * t;
-        let x = vp.time_to_viewport_x(time) as f32 + tx;
-        if x < tx || x > w + 4.0 {
+        let x = vp.time_to_viewport_x(time) as f32;
+        if x < -4.0 || x > w + 4.0 {
             prev = None;
             continue;
         }
@@ -1305,7 +1284,6 @@ fn push_waveform_cached(
     tris: &mut Vec<Vertex>,
     out: &mut Vec<Vertex>,
     clip_x0: f32,
-    tx: f32,
     _clip_start_sec: f64,
     clip_duration_sec: f64,
     pixels_per_second: f64,
@@ -1342,25 +1320,24 @@ fn push_waveform_cached(
             continue;
         }
         let x1 = (x0 + col_w).min(w);
-        let draw_x0 = x0.max(tx);
-        if x1 <= draw_x0 || x1 <= tx {
+        if x1 <= x0 {
             continue;
         }
         let l_top = left_center - (lx * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
         let l_bot = left_center - (lm * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
         let r_top = right_center - (rx * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
         let r_bot = right_center - (rm * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
-        push_rect_tris(tris, draw_x0, l_top.min(l_bot), x1, l_top.max(l_bot), fill, w, h);
-        push_rect_tris(tris, draw_x0, r_top.min(r_bot), x1, r_top.max(r_bot), fill, w, h);
+        push_rect_tris(tris, x0, l_top.min(l_bot), x1, l_top.max(l_bot), fill, w, h);
+        push_rect_tris(tris, x0, r_top.min(r_bot), x1, r_top.max(r_bot), fill, w, h);
         let edge_top = l_top.min(r_top);
         let edge_bot = l_bot.max(r_bot);
-        push_hline(out, draw_x0, x1, edge_top, w, h, outline);
-        push_hline(out, draw_x0, x1, edge_bot, w, h, outline);
+        push_hline(out, x0, x1, edge_top, w, h, outline);
+        push_hline(out, x0, x1, edge_bot, w, h, outline);
     }
 
     push_hline(
         out,
-        clip_x0.max(tx),
+        clip_x0.max(0.0),
         (clip_x0 + clip_w_px).min(w),
         mid,
         w,
