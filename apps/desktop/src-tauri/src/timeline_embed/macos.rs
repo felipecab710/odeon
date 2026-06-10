@@ -140,6 +140,18 @@ impl MacTimelinePanel {
         } else {
             scene.viewport.viewport_height = self.applied_frame.height;
         }
+        let lane_count = scene
+            .clips
+            .first()
+            .map(|c| c.lane_count as usize)
+            .unwrap_or(scene.lane_metrics.len());
+        if !scene.lane_metrics.is_empty() && scene.lane_metrics.len() != lane_count {
+            log::warn!(
+                "[timeline embed] lane_metrics len {} != lane_count {}",
+                scene.lane_metrics.len(),
+                lane_count,
+            );
+        }
         self.last_emitted_viewport = (
             scene.viewport.pixels_per_second,
             scene.viewport.scroll_left,
@@ -260,6 +272,20 @@ impl MacTimelinePanel {
     }
 
     fn apply_frame(&mut self, frame: EmbedFrame) {
+        let stack_h: f32 = self
+            .scene
+            .lane_metrics
+            .iter()
+            .map(|m| m.y + m.height)
+            .fold(0.0_f32, f32::max);
+        let logical_h = if stack_h > 1.0 {
+            stack_h
+        } else {
+            frame.height.max(1.0) as f32
+        };
+        let mut frame = frame;
+        frame.height = logical_h as f64;
+
         unsafe {
             let ns_rect = frame_to_host_rect(self.webview, self.host_view, &frame);
             let _: () = msg_send![self.metal_view, setFrame: ns_rect];
@@ -267,14 +293,13 @@ impl MacTimelinePanel {
 
         let scale = frame.scale.max(1.0);
         let w = frame.width.max(1.0);
-        let h = frame.height.max(1.0);
         let pw = (w * scale).round().max(1.0) as u32;
-        let ph = (h * scale).round().max(1.0) as u32;
+        let ph = (f64::from(logical_h) * scale).round().max(1.0) as u32;
         self.renderer.resize(pw, ph);
-        self.renderer.set_logical_size(w as f32, h as f32);
+        self.renderer.set_logical_size(w as f32, logical_h);
         sync_metal_layer(self.metal_view, &frame);
         self.scene.viewport.viewport_width = frame.width;
-        self.scene.viewport.viewport_height = frame.height;
+        self.scene.viewport.viewport_height = logical_h as f64;
         self.applied_frame = frame;
     }
 

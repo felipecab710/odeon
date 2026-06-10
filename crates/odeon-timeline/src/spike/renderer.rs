@@ -481,16 +481,17 @@ impl GpuRenderer {
                 let wave_band_bottom = (lane_top + wave_band_h - pad).min(inner_bottom);
                 let header_bottom = (inner_top + CLIP_HEADER_H).min(wave_band_bottom);
                 let body_top = header_bottom;
+                let clip_bottom = wave_band_bottom;
                 let base = [clip.color[0], clip.color[1], clip.color[2], 1.0];
                 let wave_color = clip.wave_color;
 
-                // Full-lane clip gradient — matches DOM TrackBlock arrangementClipBackground.
+                // Clip chrome only covers wave band — automation stays transparent for DOM overlay.
                 push_arrangement_clip_gradient(
                     &mut tris,
                     x0,
                     inner_top,
                     x1,
-                    inner_bottom,
+                    clip_bottom,
                     base,
                     w,
                     h,
@@ -510,9 +511,9 @@ impl GpuRenderer {
 
                 let border = [0.0, 0.0, 0.0, 0.45];
                 push_hline(&mut lines, x0, x1, inner_top, w, h, border);
-                push_hline(&mut lines, x0, x1, inner_bottom, w, h, border);
-                push_vline(&mut lines, x0, inner_top, inner_bottom, w, h, border);
-                push_vline(&mut lines, x1, inner_top, inner_bottom, w, h, border);
+                push_hline(&mut lines, x0, x1, clip_bottom, w, h, border);
+                push_vline(&mut lines, x0, inner_top, clip_bottom, w, h, border);
+                push_vline(&mut lines, x1, inner_top, clip_bottom, w, h, border);
                 push_hline(&mut lines, x0, x1, header_bottom, w, h, [0.0, 0.0, 0.0, 0.25]);
                 if wave_band_bottom < inner_bottom - 0.5 {
                     push_hline(
@@ -581,9 +582,9 @@ impl GpuRenderer {
                 let grip = [1.0, 1.0, 1.0, 0.28];
                 for i in 0..3i32 {
                     let gx = x0 + 3.0 + i as f32 * 2.0;
-                    push_vline(&mut lines, gx, inner_top + 5.0, inner_bottom - 5.0, w, h, grip);
+                    push_vline(&mut lines, gx, inner_top + 5.0, clip_bottom - 5.0, w, h, grip);
                     let gx_r = x1 - 8.0 + i as f32 * 2.0;
-                    push_vline(&mut lines, gx_r, inner_top + 5.0, inner_bottom - 5.0, w, h, grip);
+                    push_vline(&mut lines, gx_r, inner_top + 5.0, clip_bottom - 5.0, w, h, grip);
                 }
 
                 let wave_top = body_top + 2.0;
@@ -819,7 +820,20 @@ fn lane_bounds(
     area_h: f32,
 ) -> (f32, f32) {
     if let Some(m) = metrics.get(lane_index as usize) {
-        return (m.y, m.y + m.height);
+        if m.height > 0.0 {
+            return (m.y, m.y + m.height);
+        }
+    }
+    if !metrics.is_empty() {
+        // Metrics present but index missing — never stretch to full viewport.
+        let avg_h = metrics.iter().map(|m| m.height).sum::<f32>() / metrics.len() as f32;
+        let h = avg_h.max(1.0);
+        let y = metrics
+            .last()
+            .map(|m| m.y + m.height)
+            .unwrap_or(0.0)
+            + h * ((lane_index as usize).saturating_sub(metrics.len())) as f32;
+        return (y, y + h);
     }
     let lanes = lane_count.max(1) as f32;
     let lane_h = area_h / lanes;

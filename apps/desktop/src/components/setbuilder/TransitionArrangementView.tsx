@@ -820,7 +820,6 @@ export function TransitionArrangementView({
     laneHeights,
     waveBandHeights,
     laneStackHeight: timelineH,
-    alignRef: sidebarScrollRef,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,
@@ -1291,16 +1290,24 @@ export function TransitionArrangementView({
             background: STUDIO_RULER,
           }} />
           <div style={{
-            flex: 1,
             minHeight: 0,
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
             position: "relative",
+            ...(nativeEmbedLive
+              ? { flex: "0 0 auto", height: timelineH, maxHeight: timelineH }
+              : { flex: 1 }),
           }}>
             <div
               ref={sidebarScrollRef}
-              style={{ position: "absolute", left: 0, right: 0, top: 0, height: extendedLaneH }}
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: 0,
+                height: nativeEmbedLive ? timelineH : extendedLaneH,
+              }}
             >
               {layout.lanes.map((lane, i) => {
                 const waveH = getWaveHeight(i);
@@ -1356,7 +1363,7 @@ export function TransitionArrangementView({
                   </div>
                 );
               })}
-              {laneCount > 0 && extendedLaneH > laneYs[laneCount - 1] + laneHeights[laneCount - 1] && (
+              {!nativeEmbedLive && laneCount > 0 && extendedLaneH > laneYs[laneCount - 1] + laneHeights[laneCount - 1] && (
                 <div
                   data-lane-select
                   onClick={e => {
@@ -1458,7 +1465,14 @@ export function TransitionArrangementView({
           </div>
 
           {/* Lane workspace — wave bands in Metal; automation stays in DOM below */}
-          <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            ...(nativeEmbedLive ? { height: timelineH, maxHeight: timelineH, flex: "0 0 auto" } : {}),
+          }}>
           <div
             ref={nativeEmbedHostRef}
             style={{
