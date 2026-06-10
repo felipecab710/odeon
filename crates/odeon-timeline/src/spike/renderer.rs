@@ -318,6 +318,7 @@ impl GpuRenderer {
             lane_metrics: vec![TimelineLaneMetrics {
                 y: lane_top,
                 height: (lane_bottom - lane_top).max(1.0),
+                wave_height: None,
             }],
             locators: Vec::new(),
             dom_rulers: false,
