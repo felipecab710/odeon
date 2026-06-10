@@ -151,6 +151,7 @@ function applyDeckMixByTrackId(
       filter: mix.filter,
       orientation: mix.cfAssign,
       muted: mix.mute,
+      pfl: soloed,
     });
     return;
   }

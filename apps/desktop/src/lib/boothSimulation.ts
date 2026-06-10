@@ -31,6 +31,7 @@ import { assignDeckLanes } from "./boothDeckAssign";
 import { mossFxFromPlan } from "./boothMossFx";
 import type { TransitionPlanData } from "./apiClient";
 import type { BoothMode } from "../stores/boothStore";
+import { useBoothStore } from "../stores/boothStore";
 import { djSyncCoordinator } from "./djSyncCoordinator";
 import { simulateChannelMeters } from "./boothMeterSim";
 import type { WaveformCache } from "./waveformEngine/types";
@@ -518,12 +519,27 @@ function lanePushFingerprint(mix: DeckMix): string {
     mix.trimDb.toFixed(1),
     mix.faderDb.toFixed(1),
     mix.mute ? 1 : 0,
+    mix.cue ? 1 : 0,
+    mix.solo ? 1 : 0,
     mix.cfAssign,
     mix.high.toFixed(0),
     mix.mid.toFixed(0),
     mix.low.toFixed(0),
     mix.filter.toFixed(2),
   ].join("|");
+}
+
+/** Crossfader position for set-preview engine pushes (transition curve or booth mixer). */
+export function resolveSetPreviewCrossfaderPos(
+  transitions: TransitionRegion[],
+  playheadSec: number,
+  mode: BoothMode = "simulation",
+): number {
+  const activeTrans = findActiveTransition(transitions, playheadSec);
+  if (activeTrans && mode === "simulation") {
+    return transitionCrossfaderPos(activeTrans.t);
+  }
+  return useBoothStore.getState().mixer.crossfaderPos;
 }
 
 function pushSetLaneMixes(
@@ -589,6 +605,7 @@ export function pushSetEngineMixes(
   playheadSec: number,
   mode: BoothMode = "simulation",
 ): void {
+  const crossfaderPos = resolveSetPreviewCrossfaderPos(transitions, playheadSec, mode);
   pushSetLaneMixes(
     {
       lanes,
@@ -598,7 +615,7 @@ export function pushSetEngineMixes(
       mode,
       activeTrans: findActiveTransition(transitions, playheadSec),
     },
-    0.5,
+    crossfaderPos,
   );
 }
 

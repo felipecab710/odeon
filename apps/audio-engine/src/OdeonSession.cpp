@@ -338,7 +338,7 @@ std::string OdeonSession::soloTrack(const std::string& trackId, bool soloed) {
 
 std::string OdeonSession::setTrackChannelMix(const std::string& trackId, float trimDb, float faderDb,
                                              float lowDb, float midDb, float highDb, float filter,
-                                             const std::string& orientation, bool muted) {
+                                             const std::string& orientation, bool muted, bool pfl) {
     std::lock_guard<std::mutex> lk(routesMutex_);
     auto* route = findRoute(trackId);
     if (!route) return jsonErr("Track not found: " + trackId);
@@ -351,6 +351,8 @@ std::string OdeonSession::setTrackChannelMix(const std::string& trackId, float t
     route->mix.filter   = std::clamp(filter, -12.f, 12.f);
     route->mix.cfOrient = cfFromString(orientation);
     route->mix.muted    = muted;
+    route->mix.pfl      = pfl;
+    route->mix.soloed   = pfl;
     applyDjRouteMix(*route);
     return jsonOk();
 }
@@ -1471,6 +1473,7 @@ std::string OdeonSession::serializeProjectJson() const {
            << ",\"highDb\":" << route->mix.highDb
            << ",\"filter\":" << route->mix.filter
            << ",\"cfOrient\":" << jsonQuote(toString(route->mix.cfOrient))
+           << ",\"pfl\":" << (route->mix.pfl ? "true" : "false")
            << ",\"clips\":[";
         bool firstClip = true;
         for (auto& c : route->clips) {
@@ -1606,7 +1609,8 @@ std::string OdeonSession::openSession(const std::string& projectId, const std::s
                     (float) (double) rv.getProperty("highDb", 0.0),
                     (float) (double) rv.getProperty("filter", 0.0),
                     rv.getProperty("cfOrient", "THRU").toString().toStdString(),
-                    (bool) rv.getProperty("muted", false));
+                    (bool) rv.getProperty("muted", false),
+                    (bool) rv.getProperty("pfl", false));
             } else {
                 setTrackVolume(id, (float) (double) rv.getProperty("volumeDb", 0.0));
             }

@@ -104,7 +104,7 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
                                     extractFloat(p, "trimDb"), extractFloat(p, "faderDb"),
                                     extractFloat(p, "lowDb"), extractFloat(p, "midDb"), extractFloat(p, "highDb"),
                                     extractFloat(p, "filter"), extractString(p, "orientation", "THRU"),
-                                    extractBool(p, "muted"));
+                                    extractBool(p, "muted"), extractBool(p, "pfl"));
     if (method == "exclusiveSolo")
         return s.exclusiveSolo(p.getProperty("trackIds", juce::var()), extractString(p, "soloTrackId"));
     if (method == "createStemStack")

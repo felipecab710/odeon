@@ -387,6 +387,7 @@ async fn engine_set_track_channel_mix(
     filter: f32,
     orientation: String,
     muted: bool,
+    pfl: bool,
     engine: State<'_, SharedEngine>,
 ) -> Result<Value, String> {
     rpc_call(
@@ -402,6 +403,7 @@ async fn engine_set_track_channel_mix(
             "filter": filter,
             "orientation": orientation,
             "muted": muted,
+            "pfl": pfl,
         }),
     )
     .await

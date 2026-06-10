@@ -74,7 +74,7 @@ public:
     /** Full DJM channel strip on any route (set lanes, studio tracks, decks). */
     std::string setTrackChannelMix(const std::string& trackId, float trimDb, float faderDb,
                                    float lowDb, float midDb, float highDb, float filter,
-                                   const std::string& orientation, bool muted);
+                                   const std::string& orientation, bool muted, bool pfl = false);
     /** Pro Tools / Ableton-style exclusive solo within a route group (one RPC, no graph rebuild). */
     std::string exclusiveSolo(const juce::var& trackIds, const std::string& soloTrackId);
     /** DAW stem stack: parallel routes at t=0, registered for exclusive solo. */

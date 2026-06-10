@@ -155,8 +155,9 @@ export const engineClient = {
       filter: number;
       orientation: string;
       muted: boolean;
+      pfl?: boolean;
     },
-  ) => _invoke("engine_set_track_channel_mix", { trackId, ...mix }),
+  ) => _invoke("engine_set_track_channel_mix", { trackId, pfl: false, ...mix }),
 
   exclusiveSolo: (trackIds: string[], soloTrackId: string) =>
     _invoke("engine_exclusive_solo", { trackIds, soloTrackId }),
