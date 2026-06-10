@@ -63,7 +63,7 @@ impl MacTimelinePanel {
 
         unsafe {
             setup_metal_layer(metal_view, &frame)?;
-            let _: () = msg_send![metal_view, setOpaque: YES];
+            let _: () = msg_send![metal_view, setOpaque: cocoa::base::NO];
             let ns_rect = frame_to_host_rect(webview, host_view, &frame);
             let _: () = msg_send![metal_view, setFrame: ns_rect];
             let _: () = msg_send![metal_view, setAutoresizingMask: 0];

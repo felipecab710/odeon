@@ -56,6 +56,8 @@ interface Options {
   selectedLaneIndex?: number | null;
   laneYs: number[];
   laneHeights: number[];
+  /** Wave-band heights for GPU clip drawing (defaults to laneHeights). */
+  gpuLaneHeights?: number[];
   lanes: LaneInput[];
   dragPreview?: DragPreview | null;
   locators?: { timeSec: number }[];
@@ -79,6 +81,7 @@ export function useNativeTimelineEmbed({
   selectedLaneIndex,
   laneYs,
   laneHeights,
+  gpuLaneHeights,
   lanes,
   dragPreview,
   locators = [],
@@ -131,7 +134,7 @@ export function useNativeTimelineEmbed({
       selected_lane_index: selectedLaneIndex ?? null,
       lane_metrics: laneYs.map((y, i) => ({
         y,
-        height: laneHeights[i] ?? 0,
+        height: (gpuLaneHeights ?? laneHeights)[i] ?? 0,
       })),
       locators: locators.map(l => ({ time_sec: l.timeSec })),
       dom_rulers: true,
@@ -146,6 +149,7 @@ export function useNativeTimelineEmbed({
     selectedLaneIndex,
     laneYs,
     laneHeights,
+    gpuLaneHeights,
     lanes,
     dragPreview,
     locators,
@@ -168,6 +172,8 @@ export function useNativeTimelineEmbed({
 
   const syncFrameRef = useRef(syncFrame);
   syncFrameRef.current = syncFrame;
+
+  const laneLayoutKey = `${laneYs.length}:${laneHeights.join(",")}:${(gpuLaneHeights ?? laneHeights).join(",")}`;
 
   // Start/stop embed once when `active` flips — never restart on zoom/playhead changes.
   useEffect(() => {
@@ -228,7 +234,7 @@ export function useNativeTimelineEmbed({
       unlistenResize?.();
       void stopNativeTimelineEmbed();
     };
-  }, [active, targetRef]);
+  }, [active, targetRef, laneLayoutKey]);
 
   useEffect(() => {
     if (!active || !embedReady) return;

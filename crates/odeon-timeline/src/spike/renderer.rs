@@ -112,6 +112,14 @@ impl GpuRenderer {
             .copied()
             .find(|m| *m == wgpu::CompositeAlphaMode::Opaque)
             .unwrap_or(caps.alpha_modes[0]);
+        if matches!(&owner, SurfaceOwner::AppKit(_)) {
+            alpha_mode = caps
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|m| *m == wgpu::CompositeAlphaMode::PreMultiplied)
+                .unwrap_or(alpha_mode);
+        }
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -346,34 +354,43 @@ impl GpuRenderer {
         let lane_area_bottom = if dom_rulers { h } else { h - TIME_RULER_H };
         let lane_area_h = (lane_area_bottom - lane_area_top).max(1.0);
 
-        push_rect_tris(&mut tris, 0.0, 0.0, w, h, [0.06, 0.06, 0.06, 1.0], w, h);
-        if !dom_rulers {
-            push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
-        }
-        push_rect_tris(
-            &mut tris,
-            0.0,
-            lane_area_top,
-            w,
-            lane_area_bottom,
-            [0.165, 0.165, 0.165, 1.0],
-            w,
-            h,
-        );
-        for (i, m) in scene.lane_metrics.iter().enumerate() {
-            if i % 2 != 1 {
-                continue;
+        if dom_rulers {
+            for (i, m) in scene.lane_metrics.iter().enumerate() {
+                let bg = if i % 2 == 1 {
+                    [0.11, 0.11, 0.11, 1.0]
+                } else {
+                    [0.165, 0.165, 0.165, 1.0]
+                };
+                push_rect_tris(&mut tris, 0.0, m.y, w, m.y + m.height, bg, w, h);
             }
+        } else {
+            push_rect_tris(&mut tris, 0.0, 0.0, w, h, [0.06, 0.06, 0.06, 1.0], w, h);
+            push_rect_tris(&mut tris, 0.0, 0.0, w, BEAT_RULER_H, [0.04, 0.04, 0.04, 1.0], w, h);
             push_rect_tris(
                 &mut tris,
                 0.0,
-                m.y,
+                lane_area_top,
                 w,
-                m.y + m.height,
-                [0.11, 0.11, 0.11, 1.0],
+                lane_area_bottom,
+                [0.165, 0.165, 0.165, 1.0],
                 w,
                 h,
             );
+            for (i, m) in scene.lane_metrics.iter().enumerate() {
+                if i % 2 != 1 {
+                    continue;
+                }
+                push_rect_tris(
+                    &mut tris,
+                    0.0,
+                    m.y,
+                    w,
+                    m.y + m.height,
+                    [0.11, 0.11, 0.11, 1.0],
+                    w,
+                    h,
+                );
+            }
         }
         if !dom_rulers {
             push_rect_tris(
@@ -645,6 +662,12 @@ impl GpuRenderer {
                 label: Some("frame"),
             });
 
+        let clear = if dom_rulers {
+            wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
+        } else {
+            wgpu::Color { r: 0.06, g: 0.06, b: 0.06, a: 1.0 }
+        };
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -652,12 +675,7 @@ impl GpuRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.06,
-                            g: 0.06,
-                            b: 0.06,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
