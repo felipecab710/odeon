@@ -1519,7 +1519,10 @@ std::string OdeonSession::getTrackMeters() {
 //  Render
 // ─────────────────────────────────────────────────────────────────────────
 
-std::string OdeonSession::renderMix(const std::string& outputFilePath) {
+std::string OdeonSession::renderMix(const std::string& outputFilePath,
+                                    double startSeconds,
+                                    double endSeconds,
+                                    bool normalizePeak) {
     if (!edit_) return jsonErr("No active session.");
 
     if (transport_)
@@ -1536,11 +1539,33 @@ std::string OdeonSession::renderMix(const std::string& outputFilePath) {
     }
     outFile.getParentDirectory().createDirectory();
 
-    const bool ok = te::Renderer::renderToFile(*edit_, outFile, false /*useThread*/);
-    if (!ok || !outFile.existsAsFile())
+    te::Renderer::Parameters params(*edit_);
+    params.destFile = outFile;
+    params.bitDepth = 24;
+    params.sampleRateForAudio = edit_->engine.getDeviceManager().getSampleRate();
+    params.blockSizeForAudio = edit_->engine.getDeviceManager().getBlockSize();
+    params.useMasterPlugins = true;
+    params.shouldNormalise = normalizePeak;
+
+    const auto editLength = edit_->getLength();
+    const double editEndSec = editLength.inSeconds();
+    const double startSec = startSeconds >= 0.0 ? std::max(0.0, startSeconds) : 0.0;
+    const double endSec = endSeconds > startSec ? std::min(endSeconds, editEndSec) : editEndSec;
+    if (startSeconds >= 0.0 || endSeconds > 0.0) {
+        params.time = tracktion::TimeRange(
+            tracktion::TimePosition::fromSeconds(startSec),
+            tracktion::TimePosition::fromSeconds(endSec));
+    } else {
+        params.time = tracktion::TimeRange(tracktion::TimePosition(), editLength);
+    }
+
+    const auto rendered = te::Renderer::renderToFile("Odeon export", params);
+    if (! rendered.existsAsFile())
         return jsonErr("Render failed for: " + outFile.getFullPathName().toStdString());
 
-    return jsonOk("{\"outputFilePath\":" + jsonQuote(outFile.getFullPathName().toStdString()) + "}");
+    return jsonOk("{\"outputFilePath\":" + jsonQuote(rendered.getFullPathName().toStdString()) +
+                  ",\"startSeconds\":" + std::to_string(startSec) +
+                  ",\"endSeconds\":" + std::to_string(endSec) + "}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

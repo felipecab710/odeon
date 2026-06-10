@@ -130,7 +130,10 @@ public:
     std::string deckSetStemLayer(int deckIndex, const std::string& layerId);
 
     // ── Render ──────────────────────────────────────────────────────────────────
-    std::string renderMix(const std::string& outputFilePath);
+    std::string renderMix(const std::string& outputFilePath,
+                          double startSeconds = -1.0,
+                          double endSeconds = -1.0,
+                          bool normalizePeak = false);
 
     // ── AI native seam ────────────────────────────────────────────────────────
     std::string analyze(const std::string& trackId);

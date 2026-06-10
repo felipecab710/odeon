@@ -47,6 +47,8 @@ import {
 } from "../../lib/nativeTimelineHitTest";
 import { SetTimelineEditCursor } from "./SetTimelineEditCursor";
 import { useSetLocatorStore } from "../../stores/setLocatorStore";
+import { useEditSelectionStore } from "../../stores/editSelectionStore";
+import { exportLocatorsToFile, importLocatorsFromFile } from "../../lib/locatorLabelsIO";
 import { WaveformCanvas } from "../tracks/WaveformCanvas";
 import { DJMLaneStrip } from "./DJMLaneStrip";
 import {
@@ -458,6 +460,12 @@ export function TransitionArrangementView({
   const setKeyMapMode = useSetLocatorStore(s => s.setKeyMapMode);
   const setRenamingId = useSetLocatorStore(s => s.setRenamingId);
   const requestKeyBinding = useSetLocatorStore(s => s.requestKeyBinding);
+  const adjacentLocator = useSetLocatorStore(s => s.adjacentLocator);
+  const setEditRange = useEditSelectionStore(s => s.setRange);
+  const setEditStart = useEditSelectionStore(s => s.setStart);
+  const setEditEnd = useEditSelectionStore(s => s.setEnd);
+
+  const [labelIoMessage, setLabelIoMessage] = useState<string | null>(null);
 
   const [clipColorMenu, setClipColorMenu] = useState<{
     x: number;
@@ -1406,6 +1414,42 @@ export function TransitionArrangementView({
             padding: "2px 10px", cursor: "pointer",
           }}
         >KEY</button>
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            void importLocatorsFromFile().then(count => {
+              if (count > 0) setLabelIoMessage(`Imported ${count} label${count === 1 ? "" : "s"}`);
+            });
+          }}
+          title="Import Audacity label file (.txt)"
+          style={{
+            background: "#222", border: "1px solid #444", borderRadius: 3,
+            color: "#aaa", fontSize: 9, fontWeight: 700,
+            padding: "2px 8px", cursor: "pointer",
+          }}
+        >Import</button>
+        <button
+          type="button"
+          disabled={!locators.length}
+          onClick={e => {
+            e.stopPropagation();
+            void exportLocatorsToFile(locators).then(path => {
+              if (path) setLabelIoMessage(`Exported labels → ${path}`);
+            });
+          }}
+          title="Export locators as Audacity labels (.txt)"
+          style={{
+            background: "#222", border: "1px solid #444", borderRadius: 3,
+            color: locators.length ? "#aaa" : "#555", fontSize: 9, fontWeight: 700,
+            padding: "2px 8px", cursor: locators.length ? "pointer" : "default",
+          }}
+        >Export</button>
+        {labelIoMessage && (
+          <span style={{ color: "#888", fontSize: 9, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            title={labelIoMessage}
+          >{labelIoMessage}</span>
+        )}
         {keyMapMode && (
           <span style={{ color: "#c8c850", fontSize: 9 }}>
             {pendingKeyMapLocatorId ? "Press a key to bind…" : "Key Map — select locator + key · [ ] prev/next"}
@@ -1994,6 +2038,30 @@ export function TransitionArrangementView({
                 }}
               />
               <LocatorMenuItem
+                label="Set selection start"
+                onClick={() => {
+                  setEditStart(locatorMenu.timeSec);
+                  setLocatorMenu(null);
+                }}
+              />
+              <LocatorMenuItem
+                label="Set selection end"
+                onClick={() => {
+                  setEditEnd(locatorMenu.timeSec);
+                  setLocatorMenu(null);
+                }}
+              />
+              {adjacentLocator(locatorMenu.locatorId, 1) && (
+                <LocatorMenuItem
+                  label="Set range → next locator"
+                  onClick={() => {
+                    const next = adjacentLocator(locatorMenu.locatorId, 1);
+                    if (next) setEditRange(locatorMenu.timeSec, next.timeSec);
+                    setLocatorMenu(null);
+                  }}
+                />
+              )}
+              <LocatorMenuItem
                 label="Delete"
                 onClick={() => {
                   removeLocator(locatorMenu.locatorId!);
@@ -2002,13 +2070,35 @@ export function TransitionArrangementView({
               />
             </>
           ) : (
-            <LocatorMenuItem
-              label="Add Locator"
-              onClick={() => {
-                addLocator(locatorMenu.timeSec);
-                setLocatorMenu(null);
-              }}
-            />
+            <>
+              <LocatorMenuItem
+                label="Add Locator"
+                onClick={() => {
+                  addLocator(locatorMenu.timeSec);
+                  setLocatorMenu(null);
+                }}
+              />
+              <LocatorMenuItem
+                label="Import Labels…"
+                onClick={() => {
+                  setLocatorMenu(null);
+                  void importLocatorsFromFile().then(count => {
+                    if (count > 0) setLabelIoMessage(`Imported ${count} label${count === 1 ? "" : "s"}`);
+                  });
+                }}
+              />
+              {locators.length > 0 && (
+                <LocatorMenuItem
+                  label="Export Labels…"
+                  onClick={() => {
+                    setLocatorMenu(null);
+                    void exportLocatorsToFile(locators).then(path => {
+                      if (path) setLabelIoMessage(`Exported labels → ${path}`);
+                    });
+                  }}
+                />
+              )}
+            </>
           )}
         </div>
       )}

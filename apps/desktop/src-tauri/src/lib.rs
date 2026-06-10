@@ -851,12 +851,20 @@ async fn engine_get_track_meters(
 #[tauri::command]
 async fn engine_render_mix(
     output_file_path: String,
+    start_seconds: Option<f64>,
+    end_seconds: Option<f64>,
+    normalize_peak: Option<bool>,
     engine: State<'_, SharedEngine>,
 ) -> Result<Value, String> {
     rpc_call(
         &engine,
         "renderMix",
-        json!({ "outputFilePath": output_file_path }),
+        json!({
+            "outputFilePath": output_file_path,
+            "startSeconds": start_seconds.unwrap_or(-1.0),
+            "endSeconds": end_seconds.unwrap_or(-1.0),
+            "normalizePeak": normalize_peak.unwrap_or(false),
+        }),
     )
     .await
 }

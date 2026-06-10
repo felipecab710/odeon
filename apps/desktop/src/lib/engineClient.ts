@@ -201,8 +201,16 @@ export const engineClient = {
 
   getTrackMeters: () => _invoke("engine_get_track_meters"),
 
-  renderMix: (outputFilePath: string) =>
-    _invoke("engine_render_mix", { outputFilePath }),
+  renderMix: (
+    outputFilePath: string,
+    options?: { startSeconds?: number; endSeconds?: number; normalizePeak?: boolean },
+  ) =>
+    _invoke("engine_render_mix", {
+      outputFilePath,
+      startSeconds: options?.startSeconds ?? -1,
+      endSeconds: options?.endSeconds ?? -1,
+      normalizePeak: options?.normalizePeak ?? false,
+    }),
 
   disposeProject: () => _invoke("engine_dispose_project"),
 

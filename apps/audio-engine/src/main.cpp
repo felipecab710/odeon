@@ -129,7 +129,11 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
         return s.moveClip(extractString(p, "trackId"), extractString(p, "clipId"),
                           extractDouble(p, "newStartTimeSeconds"));
     if (method == "getTrackMeters")  return s.getTrackMeters();
-    if (method == "renderMix")       return s.renderMix(extractString(p, "outputFilePath"));
+    if (method == "renderMix")
+        return s.renderMix(extractString(p, "outputFilePath"),
+                             extractDouble(p, "startSeconds", -1.0),
+                             extractDouble(p, "endSeconds", -1.0),
+                             extractBool(p, "normalizePeak", false));
     if (method == "analyze")         return s.analyze(extractString(p, "trackId"));
     if (method == "listAudioDevices")        return s.listAudioDevices();
     if (method == "getPlaybackEngineSettings") return s.getPlaybackEngineSettings();

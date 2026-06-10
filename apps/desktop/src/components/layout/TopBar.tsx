@@ -2,8 +2,9 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { usePlaybackEngineStore } from "../../stores/playbackEngineStore";
 import { useTransportStore } from "../../stores/transportStore";
-import { exportSessionMix } from "../../lib/renderExport";
+import { exportSessionMix, exportEditSelection } from "../../lib/renderExport";
 import { useEffect, useState } from "react";
+import { useEditSelectionStore } from "../../stores/editSelectionStore";
 
 // Stages shown in sequence while any upload/analysis is running.
 // Timings are tuned to match the actual backend pipeline:
@@ -43,6 +44,8 @@ export function TopBar() {
   const { compareUserTrackId, compareRefTrackId } = useSelectionStore();
   const openPlaybackEngine = usePlaybackEngineStore((s) => s.open);
   const engineTracksReady = useTransportStore((s) => s.engineTracksReady);
+  const editStart = useEditSelectionStore((s) => s.startSeconds);
+  const editEnd = useEditSelectionStore((s) => s.endSeconds);
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const displayLabel = useLoadingStage(isLoading, loadingLabel ?? null);
@@ -90,6 +93,27 @@ export function TopBar() {
       if (result) setExportMessage(`Exported: ${result.outputFilePath}`);
     } catch (e) {
       console.error("[TopBar] export failed", e);
+      setExportMessage(e instanceof Error ? e.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const hasEditSelection = editEnd > editStart + 0.01;
+
+  const handleExportSelection = async () => {
+    if (!project || exporting || !hasEditSelection) return;
+    setExporting(true);
+    setExportMessage(null);
+    try {
+      const result = await exportEditSelection(
+        `${project.name.replace(/\s+/g, "_")}_selection`,
+        editStart,
+        editEnd,
+      );
+      if (result) setExportMessage(`Exported selection: ${result.outputFilePath}`);
+    } catch (e) {
+      console.error("[TopBar] selection export failed", e);
       setExportMessage(e instanceof Error ? e.message : "Export failed");
     } finally {
       setExporting(false);
@@ -165,6 +189,14 @@ export function TopBar() {
           title="Offline bounce of current session mix to WAV"
         >
           {exporting ? "Exporting…" : "Export Audio"}
+        </button>
+        <button
+          onClick={() => void handleExportSelection()}
+          disabled={!project || !engineTracksReady || exporting || isLoading || !hasEditSelection}
+          className="btn-top"
+          title="Bounce edit selection range to WAV (Audacity / Ardour style)"
+        >
+          Export Selection
         </button>
         <button
           onClick={() => exportBlueprint()}
