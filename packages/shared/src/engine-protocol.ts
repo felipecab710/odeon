@@ -26,6 +26,8 @@ export type EngineRpcMethod =
   | "stop"
   | "seek"
   | "setLoop"
+  | "setClickTrack"
+  | "setSessionTempo"
   | "getTransportState"
   | "notifyTracksReady"
   | "setTrackVolume"

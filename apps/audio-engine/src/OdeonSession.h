@@ -69,6 +69,8 @@ public:
     std::string seek(double timeSeconds);
     std::string setLoop(bool enabled, double startSeconds, double endSeconds);
     std::string getTransportState();
+    std::string setClickTrack(bool enabled);
+    std::string setSessionTempo(double bpm);
 
     // ── Mixer ──────────────────────────────────────────────────────────────────
     std::string setTrackVolume(const std::string& trackId, float volumeDb);

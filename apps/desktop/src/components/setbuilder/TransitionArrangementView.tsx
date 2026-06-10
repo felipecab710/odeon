@@ -54,7 +54,7 @@ import {
   DEFAULT_PX_PER_SEC, MIN_PX_PER_SEC, MAX_PX_PER_SEC,
   HEADER_H,
   STUDIO_BG, STUDIO_BG_DEEP, STUDIO_SIDEBAR, STUDIO_RULER, STUDIO_GRID,
-  computeSetLayout, formatTimeline, snapToBeat,
+  computeSetLayout, formatTimeline, snapToBeat, barDurationSec,
   type LaneLayout,
 } from "./setTimelineLayout";
 import { SetBeatRuler } from "./SetBeatRuler";
@@ -428,7 +428,9 @@ export function TransitionArrangementView({
     cardId: string;
     startClientX: number;
     startSec: number;
+    startDurationSec: number;
     bpm: number;
+    mode: "move" | "resize";
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
   const faderDragLaneRef = useRef<number | null>(null);
@@ -441,6 +443,7 @@ export function TransitionArrangementView({
   const timelineSelectedCardId = useSetBuilderStore(s => s.timelineSelectedCardId);
   const selectTimelineCard = useSetBuilderStore(s => s.selectTimelineCard);
   const setTimelineStart = useSetBuilderStore(s => s.setTimelineStart);
+  const setTimelineDuration = useSetBuilderStore(s => s.setTimelineDuration);
   const setCardClipColor = useSetBuilderStore(s => s.setCardClipColor);
 
   const locators = useSetLocatorStore(s => s.locators);
@@ -888,14 +891,28 @@ export function TransitionArrangementView({
       if (timelineSelectedCardId !== hit.lane.card.id) {
         selectLaneCard(hit.laneIndex);
       }
-      if (hit.edge === "right") return;
+      if (hit.edge === "right") {
+        beginUndoGesture();
+        setDragDeltaPx(0);
+        setDrag({
+          cardId: hit.lane.card.id,
+          startClientX: clientX,
+          startSec: hit.lane.startSec,
+          startDurationSec: hit.lane.durationSec,
+          bpm: hit.lane.entry.bpm ?? 128,
+          mode: "resize",
+        });
+        return;
+      }
       beginUndoGesture();
       setDragDeltaPx(0);
       setDrag({
         cardId: hit.lane.card.id,
         startClientX: clientX,
         startSec: hit.lane.startSec,
+        startDurationSec: hit.lane.durationSec,
         bpm: hit.lane.entry.bpm ?? 128,
+        mode: "move",
       });
       return;
     }
@@ -1238,9 +1255,15 @@ export function TransitionArrangementView({
 
     const onUp = (e: MouseEvent) => {
       const deltaSec = pixelsToTimeSec(e.clientX - drag.startClientX, pxPerSecRef.current);
-      const raw = Math.max(0, drag.startSec + deltaSec);
-      const snapped = snapToBeat(raw, drag.bpm, pxPerSecRef.current);
-      setTimelineStart(drag.cardId, snapped);
+      if (drag.mode === "resize") {
+        const rawDur = Math.max(barDurationSec(drag.bpm) * 4, drag.startDurationSec + deltaSec);
+        const snappedDur = snapToBeat(rawDur, drag.bpm, pxPerSecRef.current);
+        setTimelineDuration(drag.cardId, snappedDur);
+      } else {
+        const raw = Math.max(0, drag.startSec + deltaSec);
+        const snapped = snapToBeat(raw, drag.bpm, pxPerSecRef.current);
+        setTimelineStart(drag.cardId, snapped);
+      }
       endUndoGesture();
       setDrag(null);
       setDragDeltaPx(0);
@@ -1252,7 +1275,7 @@ export function TransitionArrangementView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [drag, setTimelineStart, setScrollLeft, nativeEmbedLive]);
+  }, [drag, setTimelineStart, setTimelineDuration, setScrollLeft, nativeEmbedLive]);
 
   const handleTrackPointerDown = useCallback((lane: LaneLayout, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1272,7 +1295,9 @@ export function TransitionArrangementView({
           cardId: lane.card.id,
           startClientX: startX,
           startSec: lane.startSec,
+          startDurationSec: lane.durationSec,
           bpm: lane.entry.bpm ?? 128,
+          mode: "move",
         });
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);

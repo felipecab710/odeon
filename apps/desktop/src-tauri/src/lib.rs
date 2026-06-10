@@ -336,6 +336,22 @@ async fn engine_set_loop(
 }
 
 #[tauri::command]
+async fn engine_set_click_track(
+    enabled: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "setClickTrack", json!({ "enabled": enabled })).await
+}
+
+#[tauri::command]
+async fn engine_set_session_tempo(
+    bpm: f64,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(&engine, "setSessionTempo", json!({ "bpm": bpm })).await
+}
+
+#[tauri::command]
 async fn engine_save_session(engine: State<'_, SharedEngine>) -> Result<Value, String> {
     rpc_call(&engine, "saveSession", json!({})).await
 }
@@ -1041,6 +1057,8 @@ pub fn run() {
             engine_stop,
             engine_seek,
             engine_set_loop,
+            engine_set_click_track,
+            engine_set_session_tempo,
             engine_save_session,
             engine_analyze,
             engine_get_transport_state,

@@ -308,8 +308,8 @@ function CounterField({
 export function TransportBar() {
   const {
     isPlaying, positionSeconds, cursorSeconds, cursorTrackId,
-    mainTimebase, showSubCounter, bpm, isLoopEnabled,
-    engineTracksReady, play, pause, stop, toggleLoop,
+    mainTimebase, showSubCounter, bpm, isLoopEnabled, clickTrackEnabled,
+    engineTracksReady, play, pause, stop, toggleLoop, toggleClickTrack,
     setMainTimebase, toggleShowSubCounter,
   } = useTransportStore();
   const project = useProjectStore((s) => s.project);
@@ -318,7 +318,6 @@ export function TransportBar() {
   const tracks = project?.tracks ?? [];
 
   const [countIn, setCountIn] = useState(false);
-  const [metro, setMetro]     = useState(false);
 
   const sessionSec = sessionDurationSeconds(tracks);
   useEffect(() => {
@@ -486,14 +485,14 @@ export function TransportBar() {
           <button
             type="button"
             title="Metronome"
-            onClick={() => setMetro((v) => !v)}
+            onClick={() => toggleClickTrack()}
             style={{
               width: PILL_OUTER_H,
               height: PILL_OUTER_H,
               boxSizing: "border-box",
               borderRadius: 4,
-              border: `1px solid ${metro ? "#555" : PILL_BORDER}`,
-              background: metro ? "#2a2a2a" : PILL_BG,
+              border: `1px solid ${clickTrackEnabled ? "#555" : PILL_BORDER}`,
+              background: clickTrackEnabled ? "#2a2a2a" : PILL_BG,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -502,9 +501,9 @@ export function TransportBar() {
             }}
           >
             <svg width="18" height="22" viewBox="0 0 22 26" fill="none">
-              <path d="M11 2 L20 22 H2 Z" stroke={metro ? TEXT : ICON} strokeWidth="1.5" fill="none" />
-              <line x1="11" y1="8" x2="16" y2="18" stroke={metro ? TEXT : ICON} strokeWidth="1.5" />
-              <rect x="9" y="22" width="4" height="3" rx="1" fill={metro ? TEXT : ICON} />
+              <path d="M11 2 L20 22 H2 Z" stroke={clickTrackEnabled ? TEXT : ICON} strokeWidth="1.5" fill="none" />
+              <line x1="11" y1="8" x2="16" y2="18" stroke={clickTrackEnabled ? TEXT : ICON} strokeWidth="1.5" />
+              <rect x="9" y="22" width="4" height="3" rx="1" fill={clickTrackEnabled ? TEXT : ICON} />
             </svg>
           </button>
         </div>

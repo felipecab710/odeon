@@ -95,6 +95,10 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
     if (method == "seek")   return s.seek(extractDouble(p, "timeSeconds"));
     if (method == "setLoop")
         return s.setLoop(extractBool(p, "enabled"), extractDouble(p, "startSeconds"), extractDouble(p, "endSeconds"));
+    if (method == "setClickTrack")
+        return s.setClickTrack(extractBool(p, "enabled"));
+    if (method == "setSessionTempo")
+        return s.setSessionTempo(extractDouble(p, "bpm"));
     if (method == "getTransportState")  return s.getTransportState();
     if (method == "notifyTracksReady")  return s.notifyTracksReady();
     if (method == "setTrackVolume")

@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { engineClient } from "../lib/engineClient";
 import { useEngineStore } from "./engineStore";
 import { primeSetBuilderPlaybackIfNeeded } from "../lib/setBuilderPlayback";
+import { useEditSelectionStore } from "./editSelectionStore";
 import type { Timebase } from "../lib/timeFormat";
 
 export type ABMode = "reference" | "my-mix" | "matched-preview";
@@ -25,6 +26,7 @@ interface TransportState {
   showSubCounter: boolean;
   bpm: number;
   isLoopEnabled: boolean;
+  clickTrackEnabled: boolean;
   abMode: ABMode;
   engineReady: boolean;
   /** True once engine emits tracksReady (clips loaded into Edit — can play) */
@@ -45,6 +47,7 @@ interface TransportState {
   setEngineReady: (v: boolean) => void;
   setEngineTracksReady: (v: boolean) => void;
   toggleLoop: () => void;
+  toggleClickTrack: () => void;
   setAbMode: (m: ABMode) => void;
 }
 
@@ -76,6 +79,7 @@ export const useTransportStore = create<TransportState>((set, get) => {
     showSubCounter: false,
     bpm: 120,
     isLoopEnabled: false,
+    clickTrackEnabled: false,
     abMode: "reference",
     engineReady: false,
     engineTracksReady: false,
@@ -88,15 +92,26 @@ export const useTransportStore = create<TransportState>((set, get) => {
     }),
     setMainTimebase: (tb) => set({ mainTimebase: tb }),
     toggleShowSubCounter: () => set((s) => ({ showSubCounter: !s.showSubCounter })),
-    setBpm: (bpm) => set({ bpm }),
+    setBpm: (bpm) => {
+      set({ bpm });
+      void engineClient.setSessionTempo(bpm);
+    },
     setEngineReady: (v) => set({ engineReady: v }),
     setEngineTracksReady: (v) => set({ engineTracksReady: v }),
     toggleLoop: () => {
       const { isLoopEnabled, positionSeconds } = get();
       const next = !isLoopEnabled;
-      // Loop range: from current position + 8 bars (approx) when enabling
-      void engineClient.setLoop(next, positionSeconds, positionSeconds + 16);
+      const sel = useEditSelectionStore.getState();
+      const hasSelection = sel.endSeconds > sel.startSeconds + 0.01;
+      const start = hasSelection ? sel.startSeconds : positionSeconds;
+      const end = hasSelection ? sel.endSeconds : positionSeconds + 16;
+      void engineClient.setLoop(next, start, end);
       set({ isLoopEnabled: next });
+    },
+    toggleClickTrack: () => {
+      const next = !get().clickTrackEnabled;
+      void engineClient.setClickTrack(next);
+      set({ clickTrackEnabled: next });
     },
     setAbMode: (m) => set({ abMode: m }),
 

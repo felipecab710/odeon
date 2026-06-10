@@ -390,6 +390,20 @@ std::string OdeonSession::setLoop(bool enabled, double startSeconds, double endS
     return jsonOk();
 }
 
+std::string OdeonSession::setClickTrack(bool enabled) {
+    if (!edit_) return jsonErr("No active session.");
+    edit_->clickTrackEnabled = enabled;
+    return jsonOk("{\"clickTrackEnabled\":" + std::string(enabled ? "true" : "false") + "}");
+}
+
+std::string OdeonSession::setSessionTempo(double bpm) {
+    if (!edit_) return jsonErr("No active session.");
+    const double clamped = std::clamp(bpm, 20.0, 300.0);
+    if (auto* ts = edit_->tempoSequence.getTempo(0))
+        ts->setBpm(clamped);
+    return jsonOk("{\"bpm\":" + std::to_string(clamped) + "}");
+}
+
 std::string OdeonSession::getTransportState() {
     if (!transport_)
         return jsonOk("{\"isPlaying\":false,\"positionSeconds\":0.0,\"bpm\":120.0,\"looping\":false}");

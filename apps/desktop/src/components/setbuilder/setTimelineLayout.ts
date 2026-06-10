@@ -97,7 +97,11 @@ export function computeSetLayout(
     const entry = entryMap.get(card.entryId);
     if (!entry) continue;
 
-    const dur = entry.duration_seconds ?? 240;
+    const fullDur = entry.duration_seconds ?? 240;
+    const minDur = barDurationSec(bpm) * 4;
+    const dur = card.timelineDurationSec != null
+      ? Math.min(fullDur, Math.max(minDur, card.timelineDurationSec))
+      : fullDur;
     const bpm = entry.bpm ?? 128;
     const overlapSec = i === 0 ? 0 : barDurationSec(bpm) * overlapBars;
 

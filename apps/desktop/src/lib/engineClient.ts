@@ -132,6 +132,12 @@ export const engineClient = {
   setLoop: (enabled: boolean, startSeconds: number, endSeconds: number) =>
     _invoke("engine_set_loop", { enabled, startSeconds, endSeconds }),
 
+  setClickTrack: (enabled: boolean) =>
+    _invoke("engine_set_click_track", { enabled }),
+
+  setSessionTempo: (bpm: number) =>
+    _invoke("engine_set_session_tempo", { bpm }),
+
   saveSession: () => _invoke("engine_save_session"),
 
   analyze: (trackId: string) => _invoke("engine_analyze", { trackId }),

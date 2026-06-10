@@ -9,6 +9,8 @@ export interface SetCard {
   order: number;
   /** Manual start time on arrangement timeline (seconds). null = auto-overlap layout. */
   timelineStartSec: number | null;
+  /** Trimmed clip length on arrangement timeline (seconds). null = full catalog duration. */
+  timelineDurationSec: number | null;
   /** User-chosen clip colour (Ableton palette hex). */
   clipColor?: string;
 }
@@ -52,6 +54,7 @@ interface SetBuilderState {
   reorder: (id: string, newOrder: number) => void;
   connectAfter: (fromCardId: string, toCardId: string) => void;
   setTimelineStart: (id: string, startSec: number | null) => void;
+  setTimelineDuration: (id: string, durationSec: number | null) => void;
   setCardClipColor: (id: string, color: string) => void;
   clearTimelinePositions: () => void;
   clearSet: () => void;
@@ -202,6 +205,7 @@ export const useSetBuilderStore = create<SetBuilderState>((set, get) => ({
       y: 80 + row * 360,
       order,
       timelineStartSec: null,
+      timelineDurationSec: null,
     };
 
     set(s => {
@@ -305,6 +309,17 @@ export const useSetBuilderStore = create<SetBuilderState>((set, get) => ({
     }));
   },
 
+  setTimelineDuration: (id, durationSec) => {
+    captureUndoState();
+    set(s => ({
+      ...mapActiveSet(s, userSet => ({
+        ...userSet,
+        cards: userSet.cards.map(c => (c.id === id ? { ...c, timelineDurationSec: durationSec } : c)),
+        updatedAt: Date.now(),
+      })),
+    }));
+  },
+
   setCardClipColor: (id, color) => {
     captureUndoState();
     set(s => ({
@@ -319,7 +334,7 @@ export const useSetBuilderStore = create<SetBuilderState>((set, get) => ({
   clearTimelinePositions: () => set(s => ({
     ...mapActiveSet(s, userSet => ({
       ...userSet,
-      cards: userSet.cards.map(c => ({ ...c, timelineStartSec: null })),
+      cards: userSet.cards.map(c => ({ ...c, timelineStartSec: null, timelineDurationSec: null })),
       updatedAt: Date.now(),
     })),
   })),

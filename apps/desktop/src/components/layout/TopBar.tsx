@@ -1,6 +1,8 @@
 import { useProjectStore } from "../../stores/projectStore";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { usePlaybackEngineStore } from "../../stores/playbackEngineStore";
+import { useTransportStore } from "../../stores/transportStore";
+import { exportSessionMix } from "../../lib/renderExport";
 import { useEffect, useState } from "react";
 
 // Stages shown in sequence while any upload/analysis is running.
@@ -40,6 +42,9 @@ export function TopBar() {
     useProjectStore();
   const { compareUserTrackId, compareRefTrackId } = useSelectionStore();
   const openPlaybackEngine = usePlaybackEngineStore((s) => s.open);
+  const engineTracksReady = useTransportStore((s) => s.engineTracksReady);
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   const displayLabel = useLoadingStage(isLoading, loadingLabel ?? null);
 
   const handleUploadRef = () => {
@@ -49,7 +54,7 @@ export function TopBar() {
     input.style.display = "none";
     document.body.appendChild(input);
     input.onchange = () => {
-      document.body.removeChild(input);
+      input.remove();
       if (input.files?.[0]) uploadReference(input.files[0]);
     };
     input.click();
@@ -63,7 +68,7 @@ export function TopBar() {
     input.style.display = "none";
     document.body.appendChild(input);
     input.onchange = () => {
-      document.body.removeChild(input);
+      input.remove();
       if (input.files && input.files.length > 0) {
         uploadUserStems(Array.from(input.files));
       }
@@ -75,6 +80,21 @@ export function TopBar() {
     project &&
     project.tracks.some((t) => t.role === "user_stem") &&
     project.tracks.some((t) => t.role === "reference_full_mix" || t.role === "reference_stem");
+
+  const handleExportAudio = async () => {
+    if (!project || exporting) return;
+    setExporting(true);
+    setExportMessage(null);
+    try {
+      const result = await exportSessionMix(`${project.name.replace(/\s+/g, "_")}_mix`);
+      if (result) setExportMessage(`Exported: ${result.outputFilePath}`);
+    } catch (e) {
+      console.error("[TopBar] export failed", e);
+      setExportMessage(e instanceof Error ? e.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="relative flex flex-col flex-shrink-0">
@@ -131,6 +151,20 @@ export function TopBar() {
           className="btn-top"
         >
           Compare
+        </button>
+        {exportMessage && (
+          <span className="text-xxs text-studio-text-faint max-w-[240px] truncate" title={exportMessage}>
+            {exportMessage}
+          </span>
+        )}
+
+        <button
+          onClick={() => void handleExportAudio()}
+          disabled={!project || !engineTracksReady || exporting || isLoading}
+          className="btn-top"
+          title="Offline bounce of current session mix to WAV"
+        >
+          {exporting ? "Exporting…" : "Export Audio"}
         </button>
         <button
           onClick={() => exportBlueprint()}

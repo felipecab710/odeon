@@ -1,8 +1,10 @@
 # Set Builder + DAW Parity Plan
 
-Last updated: Phase C complete, Phase D started (native fader drag).
+Last updated: Phase H (metronome, export, loop-from-selection, clip trim).
 
-## Current parity (~52% combined goal)
+See **`docs/DAW_COMPARISON.md`** for full Ableton / Audacity / Pro Tools matrix and Phases I–N.
+
+## Current parity (~54% combined goal)
 
 | Layer | % | Notes |
 |-------|---|-------|
@@ -12,7 +14,8 @@ Last updated: Phase C complete, Phase D started (native fader drag).
 | DJ Booth / decks | 55 | True deck players; PFL/solo separated |
 | Automation persistence | 55 | localStorage per set; not engine curves |
 | Routing / busses | 35 | Headphones/Booth buses + AuxSend/AuxReturn; `setRouteAuxSend` RPC |
-| Full DAW | 15 | Studio reference/stem workflow only |
+| Export / bounce | 40 | Export Audio UI → TE Renderer |
+| Full DAW | 18 | Metronome + loop selection + clip trim |
 
 ## Shipped recently
 
