@@ -41,6 +41,7 @@ import {
   getCachedWaveformBitmap,
   waveformBitmapKey,
 } from "../../lib/waveformEngine/waveformBitmapCache";
+import { detachBitmapCanvas } from "../../lib/waveformEngine/detachBitmapCanvas";
 
 export type { WaveformMode };
 
@@ -186,7 +187,7 @@ function ensureBitmapHost(): HTMLElement {
 }
 
 function disposeBitmapCanvas(canvas: HTMLCanvasElement | null) {
-  canvas?.parentElement?.removeChild(canvas);
+  detachBitmapCanvas(canvas);
 }
 
 // ─── Canvas2D column renderer (WKWebView-safe — no putImageData) ─────────────

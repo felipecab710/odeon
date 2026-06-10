@@ -328,6 +328,7 @@ impl GpuRenderer {
             lane_strip_width: 0.0,
             deck_strips: Vec::new(),
             automation_lanes: Vec::new(),
+            transitions: Vec::new(),
         };
         self.draw_internal(&scene, grid, p99_ms, None);
     }
@@ -507,7 +508,7 @@ impl GpuRenderer {
                 lane_area_h,
             );
 
-            let x0 = vp.time_to_viewport_x(clip.start_sec) as f32 + tx;
+            let mut x0 = vp.time_to_viewport_x(clip.start_sec) as f32 + tx;
             let x1 = vp.time_to_viewport_x(clip.start_sec + clip.duration_sec) as f32 + tx;
             if x1 <= tx {
                 continue;
