@@ -84,9 +84,9 @@ interface Props {
 export const SetTimelineNavigator = memo(function SetTimelineNavigator({
   lanes,
   totalSec,
-  scrollLeft,
+  scrollLeft: _scrollLeft,
   viewportWidth,
-  pixelsPerSecond,
+  pixelsPerSecond: _pixelsPerSecond,
   playheadSec,
   transitionIndex,
   laneColors,

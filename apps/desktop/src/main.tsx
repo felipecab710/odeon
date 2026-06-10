@@ -10,9 +10,10 @@ const rootEl = document.getElementById("root");
 if (!rootEl) {
   throw new Error("Missing #root element");
 }
+const root = rootEl;
 
 function showBootError(err: unknown) {
-  rootEl.innerHTML = `<pre style="padding:24px;color:#f87171;font:12px monospace;white-space:pre-wrap">${
+  root.innerHTML = `<pre style="padding:24px;color:#f87171;font:12px monospace;white-space:pre-wrap">${
     err instanceof Error ? err.stack ?? err.message : String(err)
   }</pre>`;
 }
@@ -24,7 +25,7 @@ function hideBootFallback() {
 async function boot() {
   try {
     const { default: App } = await import("./App");
-    ReactDOM.createRoot(rootEl).render(
+    ReactDOM.createRoot(root).render(
       <React.StrictMode>
         <ErrorBoundary>
           <App />

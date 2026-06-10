@@ -1,6 +1,7 @@
 import type { CatalogEntry, OdeonProject } from "@odeon/shared";
 import { waveformCacheFromAnalysis } from "./analysisCache";
 import { getCachedWaveform, isFullWaveformCache, loadWaveformCache, seedWaveformCache } from "./cacheLoader";
+import type { WaveformCache } from "./types";
 
 /** Synchronous — seed in-memory caches from project analysis (instant paint). */
 export function seedProjectWaveformCaches(project: OdeonProject) {
@@ -63,7 +64,7 @@ export function prefetchSelectCatalogWaveforms(entries: CatalogEntry[]) {
   void throttledSelectFetch(jobs, 4);
 }
 
-const EMPTY_CACHE = {
+const EMPTY_CACHE: WaveformCache = {
   levels: {},
   block_sizes: [],
   version: 0,
@@ -71,7 +72,7 @@ const EMPTY_CACHE = {
   channels: 0,
   duration_seconds: 0,
   global_peak: 0,
-} as const;
+};
 
 async function throttledSelectFetch(jobs: SelectWaveformJob[], concurrency: number) {
   let index = 0;

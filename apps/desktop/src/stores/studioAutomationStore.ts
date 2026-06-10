@@ -84,14 +84,6 @@ function saveAutomationForSet(setId: string, state: PersistedAutomationSet): voi
   }
 }
 
-function defaultTrackState(): TrackAutomationState {
-  return {
-    ...DEFAULT_TRACK_STATE,
-    lanes: [...DEFAULT_TRACK_STATE.lanes],
-    curves: {},
-  };
-}
-
 interface StudioAutomationStore {
   globalEnabled: boolean;
   editMode: AutomationEditMode;

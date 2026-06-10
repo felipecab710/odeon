@@ -69,8 +69,8 @@ export function BoothTwin({
     if (!interactive || !deck.isLoaded || !deck.entryId) {
       return {};
     }
-    const timelineStart = getTimelineStart?.(deck.entryId) ?? 0;
     const barSec = deck.bpm > 0 ? (60 / deck.bpm) * 4 : 2;
+    void barSec;
 
     return {
       onHotcue: (slot: number, shift: boolean) => {

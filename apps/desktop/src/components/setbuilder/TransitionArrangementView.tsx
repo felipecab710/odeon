@@ -776,7 +776,7 @@ export function TransitionArrangementView({
     const el = nativeLanePanelRef.current;
     if (!el) return;
     if (nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)) {
-      setCursor(null);
+      setCursor(useTransportStore.getState().cursorSeconds, null);
       return;
     }
     const timeSec = nativeTimeSecFromClientX(

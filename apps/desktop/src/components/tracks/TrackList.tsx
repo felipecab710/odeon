@@ -258,7 +258,7 @@ export function TrackList() {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       wheelAnchorRef.current = anchorViewportX;
-      wheelStepsAccum.current += wheelStepsFromEvent(e);
+      wheelStepsAccum.current += wheelStepsFromEvent(e.nativeEvent);
       if (zoomRaf.current === null) {
         zoomRaf.current = requestAnimationFrame(flushZoom);
       }

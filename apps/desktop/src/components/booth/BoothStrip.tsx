@@ -24,7 +24,7 @@ interface Props {
 export function BoothStrip({
   sorted,
   entryMap,
-  transitionIndex,
+  transitionIndex: _transitionIndex,
   fillParent = false,
   collapsed = false,
   onToggleCollapse,
