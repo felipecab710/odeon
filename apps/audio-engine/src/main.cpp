@@ -80,6 +80,10 @@ static std::string dispatch(odeon::OdeonSession& s, const std::string& method, c
                              extractString(p, "role"), extractString(p, "stemType"));
     if (method == "createBus")
         return s.createBus(extractString(p, "busId"), extractString(p, "name", "Bus"));
+    if (method == "setRouteAuxSend")
+        return s.setRouteAuxSend(extractString(p, "trackId"),
+                                 static_cast<int>(extractDouble(p, "busNumber")),
+                                 extractFloat(p, "gainDb"), extractBool(p, "muted"));
     if (method == "removeTrack")
         return s.removeTrack(extractString(p, "trackId"));
     if (method == "addClip" || method == "loadAudioFile")

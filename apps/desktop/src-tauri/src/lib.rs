@@ -240,6 +240,27 @@ async fn engine_create_bus(
 }
 
 #[tauri::command]
+async fn engine_set_route_aux_send(
+    track_id: String,
+    bus_number: i32,
+    gain_db: f32,
+    muted: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<Value, String> {
+    rpc_call(
+        &engine,
+        "setRouteAuxSend",
+        json!({
+            "trackId": track_id,
+            "busNumber": bus_number,
+            "gainDb": gain_db,
+            "muted": muted,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn engine_load_audio_file(
     track_id: String,
     file_path: String,
@@ -1011,6 +1032,7 @@ pub fn run() {
             engine_load_project,
             engine_create_track,
             engine_create_bus,
+            engine_set_route_aux_send,
             engine_load_audio_file,
             engine_add_clip,
             engine_remove_track,

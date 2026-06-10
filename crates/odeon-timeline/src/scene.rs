@@ -43,6 +43,13 @@ pub struct TimelineDeckStrip {
     pub show_automation: bool,
     #[serde(default)]
     pub automation_expanded: bool,
+    /// Fader travel 0 = bottom (∞), 1 = top (+12 dB).
+    #[serde(default = "default_fader_pos")]
+    pub fader_pos: f32,
+}
+
+fn default_fader_pos() -> f32 {
+    0.34
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -56,6 +56,8 @@ public:
                             const std::string& role, const std::string& stemType);
     /** Create a mixer bus route (`RouteRole::bus`). */
     std::string createBus(const std::string& busId, const std::string& name);
+    /** Set aux send level on a route (bus 0 = Headphones, 1 = Booth). */
+    std::string setRouteAuxSend(const std::string& trackId, int busNumber, float gainDb, bool muted);
     std::string removeTrack(const std::string& trackId);
     std::string addClip(const std::string& trackId, const std::string& clipId,
                         const std::string& filePath, double startTimeSeconds);
@@ -153,6 +155,10 @@ private:
     OdeonRoute* findDeckRoute(int deckIndex);
     void        ensureDeckEqualiser(OdeonRoute& route);
     void        ensureAuxBusNames();
+    void        ensureMixerInfrastructure();
+    void        ensureAuxReturnOnRoute(OdeonRoute& route, int busNumber);
+    te::AuxSendPlugin* findOrCreateAuxSend(OdeonRoute& route, int busNumber);
+    void        syncHeadphonesSend(OdeonRoute& route, bool enabled);
     float       crossfaderWeightDb(CfOrientation orient) const;
     void        applyDjRouteMix(OdeonRoute& route);
     void        clearDeckClips(OdeonDjDeck& deck);
@@ -209,6 +215,7 @@ private:
     int  numDjDecks_ = 0;
     std::array<OdeonDjDeck, 4> djDecks_{};
     float crossfaderPos_ = 0.5f;
+    bool  mixerInfraReady_ = false;
     int   syncLeaderDeck_ = 0;
     std::map<std::string, std::vector<std::string>> soloGroups_;
 

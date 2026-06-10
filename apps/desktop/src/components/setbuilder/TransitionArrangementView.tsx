@@ -20,7 +20,7 @@ import { pushSetEngineMixes } from "../../lib/boothSimulation";
 import { useSetBuilderStore } from "../../stores/setBuilderStore";
 import { useNavigationStore } from "../../stores/navigationStore";
 import { useStudioDeckStore } from "../../stores/studioDeckStore";
-import { captureUndoState } from "../../stores/undoStore";
+import { captureUndoState, beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
 import { ZOOM_BUTTON_FACTOR } from "../../lib/timelineViewportZoom";
 import { useSetTimelineStore } from "../../stores/setTimelineStore";
 import { useTimelineWheel } from "../../hooks/useTimelineWheel";
@@ -32,12 +32,12 @@ import {
   timeSecFromClientX,
   pixelsToTimeSec,
 } from "../../lib/setTimelineEngine";
-import { beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
+import { faderDbToPos } from "../../lib/proToolsFaderScale";
 import { getZoomAnchorViewportX, subscribeTimelineCursor, getCursorTimeSec } from "../../lib/setTimelineViewport";
 import { SetTimelineContext } from "../../lib/setTimelineContext";
 import { useNativeTimelineEmbed } from "../../hooks/useNativeTimelineEmbed";
 import { listenNativeTimelineViewport } from "../../lib/nativeTimelineEmbed";
-import { nativeStripHitTest, nativeStripCursor } from "../../lib/nativeStripHitTest";
+import { nativeStripHitTest, nativeStripCursor, nativeStripFaderDbFromY } from "../../lib/nativeStripHitTest";
 import {
   nativeClipHitTest,
   nativeClipCursor,
@@ -431,6 +431,7 @@ export function TransitionArrangementView({
     bpm: number;
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
+  const faderDragLaneRef = useRef<number | null>(null);
   const [nativeGpuActive, setNativeGpuActive] = useState(NATIVE_GPU_DEFAULT);
   const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(2);
   const navView = useNavigationStore(s => s.view);
@@ -699,6 +700,7 @@ export function TransitionArrangementView({
         cue: mix.cue,
         showAutomation: mix.showAutomation,
         automationExpanded,
+        faderPos: faderDbToPos(Math.max(-60, Math.min(12, mix.faderDb))),
       };
     }),
     [layout.lanes, laneClipColors, timelineSelectedCardId, mixes, automationTracks],
@@ -851,6 +853,21 @@ export function TransitionArrangementView({
             [i]: { ...mix, showAutomation: !mix.showAutomation },
           });
           return;
+        case "faderDrag": {
+          faderDragLaneRef.current = i;
+          beginUndoGesture();
+          const el = nativeLanePanelRef.current;
+          if (!el) return;
+          const faderDb = nativeStripFaderDbFromY(
+            clientY, el, i, embedLaneYs, embedLaneHeights, LANE_STRIP_W,
+          );
+          useStudioDeckStore.getState().setMixes({
+            ...useStudioDeckStore.getState().mixes,
+            [i]: { ...mix, faderDb },
+          });
+          syncSetPreviewMixes();
+          return;
+        }
         case "select":
           selectLaneCard(i);
           return;
@@ -935,7 +952,7 @@ export function TransitionArrangementView({
 
   const nativePointerMove = useCallback((clientX: number, clientY: number) => {
     const el = nativeLanePanelRef.current;
-    if (!el || drag) return;
+    if (!el || drag || faderDragLaneRef.current != null) return;
     const cursor = nativeIsDeckStripColumn(clientX, el, LANE_STRIP_W)
       ? nativeStripCursor(clientX, clientY, el, LANE_STRIP_W, embedLaneYs, embedLaneHeights)
       : nativeClipCursor(
@@ -951,6 +968,41 @@ export function TransitionArrangementView({
       );
     el.style.cursor = cursor ?? "default";
   }, [layout.lanes, embedLaneYs, embedLaneHeights, timelineScrollLeft, pixelsPerSecond, drag]);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const lane = faderDragLaneRef.current;
+      if (lane == null) return;
+      const el = nativeLanePanelRef.current;
+      if (!el) return;
+      const mix = useStudioDeckStore.getState().mixes[lane] ?? defaultDeckMix();
+      const faderDb = nativeStripFaderDbFromY(
+        e.clientY, el, lane, embedLaneYs, embedLaneHeights, LANE_STRIP_W,
+      );
+      useStudioDeckStore.getState().setMixes({
+        ...useStudioDeckStore.getState().mixes,
+        [lane]: { ...mix, faderDb },
+      });
+      pushSetEngineMixes(
+        layout.lanes,
+        layout.transitions,
+        useStudioDeckStore.getState().mixes,
+        useTransportStore.getState().positionSeconds,
+        useBoothStore.getState().mode,
+      );
+    };
+    const onUp = () => {
+      if (faderDragLaneRef.current == null) return;
+      faderDragLaneRef.current = null;
+      endUndoGesture();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [layout.lanes, layout.transitions, embedLaneYs, embedLaneHeights]);
 
   useNativeTimelineEmbed({
     active: nativeEmbedLive,

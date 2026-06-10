@@ -15,6 +15,7 @@ import { BoothPanel } from "../components/booth/BoothPanel";
 import { SetBuilderTransportControls } from "../components/setbuilder/SetBuilderTransportControls";
 import { computeSetLayout } from "../components/setbuilder/setTimelineLayout";
 import { resetSetEngineSession, useSetEngineSync } from "../lib/useSetEngineSync";
+import { useSetMixEnginePush } from "../lib/useSetMixEnginePush";
 import { ResizableRightSidebar } from "../components/layout/ResizableRightSidebar";
 import { FieldTooltip } from "../components/select/FieldTooltip";
 import type { CatalogEntry } from "@odeon/shared";
@@ -2412,6 +2413,11 @@ export function ResearchView() {
 
   const { syncing: engineSyncing, syncError } = useSetEngineSync(
     sorted.length >= 2 && viewMode !== "booth" ? layout.lanes : [],
+  );
+  useSetMixEnginePush(
+    layout.lanes,
+    layout.transitions,
+    sorted.length >= 2 && viewMode !== "booth",
   );
   const selectedCard = cards.find(c => c.id === selectedCardId) ?? null;
   const timelineSelectedCard = cards.find(c => c.id === timelineSelectedCardId) ?? null;

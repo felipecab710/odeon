@@ -55,6 +55,7 @@ interface DeckStripInput {
   cue: boolean;
   showAutomation: boolean;
   automationExpanded: boolean;
+  faderPos?: number;
 }
 
 interface AutomationLaneInput {
@@ -193,6 +194,7 @@ export function useNativeTimelineEmbed({
         cue: strip.cue,
         show_automation: strip.showAutomation,
         automation_expanded: strip.automationExpanded,
+        fader_pos: strip.faderPos ?? 0.34,
       })),
       automation_lanes: automationLanes.map(lane => ({
         lane_index: lane.laneIndex,

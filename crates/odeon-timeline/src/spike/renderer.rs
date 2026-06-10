@@ -1020,17 +1020,32 @@ fn push_deck_strips(
             h,
         );
         let fader_h = (bottom - top - 30.0).max(8.0);
-        let fader_fill = bottom - 6.0 - fader_h * 0.65;
+        let fader_travel = bottom - 6.0 - (top + 24.0);
+        let fader_pos = strip.fader_pos.clamp(0.0, 1.0);
+        let cap_h = 6.0;
+        let cap_top = bottom - 6.0 - fader_pos * (fader_travel - cap_h);
+        let fader_fill = cap_top + cap_h;
         push_rect_tris(
             tris,
             fader_x,
-            fader_fill,
+            cap_top,
             fader_x + 4.0,
-            bottom - 6.0,
-            [0.55, 0.55, 0.55, 0.85],
+            fader_fill,
+            [0.75, 0.75, 0.75, 0.95],
             w,
             h,
         );
+        push_rect_tris(
+            tris,
+            fader_x - 1.0,
+            cap_top,
+            fader_x + 5.0,
+            cap_top + cap_h,
+            [0.35, 0.35, 0.35, 1.0],
+            w,
+            h,
+        );
+        let _ = fader_h;
     }
 }
 

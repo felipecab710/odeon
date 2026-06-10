@@ -110,6 +110,9 @@ export const engineClient = {
   createBus: (busId: string, name: string) =>
     _invoke("engine_create_bus", { busId, name }),
 
+  setRouteAuxSend: (trackId: string, busNumber: number, gainDb: number, muted: boolean) =>
+    _invoke("engine_set_route_aux_send", { trackId, busNumber, gainDb, muted }),
+
   loadAudioFile: (trackId: string, filePath: string) =>
     _invoke("engine_load_audio_file", { trackId, filePath }),
 

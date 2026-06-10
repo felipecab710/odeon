@@ -117,13 +117,12 @@ function applyDeckMixByTrackId(
 ): void {
   const route = trackId.startsWith("set:") ? "set" : "dj";
   const volumeDb = effectiveVolumeDb(mix, crossfaderPos);
-  const soloed = mix.solo || mix.cue;
   const deckIndex = parseDeckIndex(trackId);
 
   useEngineStore.getState().setTrackState(trackId, {
     volumeDb,
     muted: mix.mute,
-    soloed,
+    soloed: mix.solo,
   });
 
   if (deckIndex !== null) {
@@ -136,8 +135,9 @@ function applyDeckMixByTrackId(
       filter: mix.filter,
       orientation: mix.cfAssign,
       muted: mix.mute,
-      pfl: soloed,
+      pfl: mix.cue,
     });
+    void engineClient.soloTrack(trackId, mix.solo);
     return;
   }
 
@@ -151,14 +151,15 @@ function applyDeckMixByTrackId(
       filter: mix.filter,
       orientation: mix.cfAssign,
       muted: mix.mute,
-      pfl: soloed,
+      pfl: mix.cue,
     });
+    void engineClient.soloTrack(trackId, mix.solo);
     return;
   }
 
   engineClient.setTrackVolume(trackId, volumeDb);
   engineClient.muteTrack(trackId, mix.mute);
-  engineClient.soloTrack(trackId, soloed);
+  engineClient.soloTrack(trackId, mix.solo);
 }
 
 export function applyAllDeckMixes(

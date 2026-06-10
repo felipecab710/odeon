@@ -45,6 +45,7 @@ export interface NativeTimelineDeckStrip {
   cue?: boolean;
   show_automation?: boolean;
   automation_expanded?: boolean;
+  fader_pos?: number;
 }
 
 export interface NativeTimelineAutomationPoint {

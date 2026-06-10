@@ -111,7 +111,7 @@ export function DJMLaneStrip({
           )}
           <button style={btn(mix.solo)} title="Solo"
             onClick={() => patch({ solo: !mix.solo })}>S</button>
-          <button style={btn(mix.cue, "#ff9800")} title="Cue (headphone preview via solo)"
+          <button style={btn(mix.cue, "#ff9800")} title="Cue (PFL to headphones)"
             onClick={() => patch({ cue: !mix.cue })}>C</button>
           <button style={btn(mix.mute)} title="Mute"
             onClick={() => patch({ mute: !mix.mute })}>M</button>

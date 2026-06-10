@@ -100,7 +100,7 @@ std::string OdeonSession::createSession(const std::string& projectId,
 
     transport_ = &edit_->getTransport();
     transport_->ensureContextAllocated();
-    ensureAuxBusNames();
+    ensureMixerInfrastructure();
 
     return jsonOk("{\"projectId\":" + jsonQuote(projectId) +
                   ",\"projectDir\":" + jsonQuote(root.getFullPathName().toStdString()) + "}");
@@ -125,6 +125,7 @@ std::string OdeonSession::disposeSession() {
     projectDir_ = juce::File();
     djMode_ = false;
     numDjDecks_ = 0;
+    mixerInfraReady_ = false;
     for (auto& d : djDecks_)
         d = OdeonDjDeck{};
     return jsonOk();
@@ -179,13 +180,110 @@ std::string OdeonSession::createTrack(const std::string& trackId, const std::str
 }
 
 std::string OdeonSession::createBus(const std::string& busId, const std::string& name) {
-    return createTrack(busId, name, "bus", "other");
+    const std::string created = createTrack(busId, name, "bus", "other");
+    if (created.find("\"ok\":false") != std::string::npos)
+        return created;
+
+    int busNum = -1;
+    if (busId == "bus:headphones") busNum = 0;
+    else if (busId == "bus:booth") busNum = 1;
+
+    if (busNum >= 0) {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        if (auto* route = findRoute(busId))
+            ensureAuxReturnOnRoute(*route, busNum);
+    }
+    return created;
 }
 
 void OdeonSession::ensureAuxBusNames() {
     if (!edit_) return;
     edit_->setAuxBusName(0, "Headphones");
     edit_->setAuxBusName(1, "Booth");
+}
+
+void OdeonSession::ensureMixerInfrastructure() {
+    if (mixerInfraReady_ || !edit_) return;
+    ensureAuxBusNames();
+
+    bool needHeadphones = false;
+    bool needBooth = false;
+    {
+        std::lock_guard<std::mutex> lk(routesMutex_);
+        needHeadphones = findRoute("bus:headphones") == nullptr;
+        needBooth = findRoute("bus:booth") == nullptr;
+    }
+    if (needHeadphones)
+        createBus("bus:headphones", "Headphones");
+    if (needBooth)
+        createBus("bus:booth", "Booth");
+
+    mixerInfraReady_ = true;
+}
+
+void OdeonSession::ensureAuxReturnOnRoute(OdeonRoute& route, int busNumber) {
+    if (!route.track || !edit_) return;
+
+    for (auto* p : route.track->pluginList.getPlugins()) {
+        if (auto* ret = dynamic_cast<te::AuxReturnPlugin*>(p)) {
+            if (ret->busNumber.get() == busNumber)
+                return;
+        }
+    }
+
+    if (auto plugin = edit_->getPluginCache().createNewPlugin(
+            te::AuxReturnPlugin::xmlTypeName, {})) {
+        if (auto* ret = dynamic_cast<te::AuxReturnPlugin*>(plugin.get())) {
+            ret->busNumber = busNumber;
+            route.track->pluginList.insertPlugin(plugin, 0, nullptr);
+        }
+    }
+}
+
+te::AuxSendPlugin* OdeonSession::findOrCreateAuxSend(OdeonRoute& route, int busNumber) {
+    if (!route.track || !edit_) return nullptr;
+
+    for (auto* p : route.track->pluginList.getPlugins()) {
+        if (auto* send = dynamic_cast<te::AuxSendPlugin*>(p)) {
+            if (send->getBusNumber() == busNumber)
+                return send;
+        }
+    }
+
+    if (auto plugin = edit_->getPluginCache().createNewPlugin(
+            te::AuxSendPlugin::xmlTypeName, {})) {
+        if (auto* send = dynamic_cast<te::AuxSendPlugin*>(plugin.get())) {
+            send->busNumber = busNumber;
+            route.track->pluginList.insertPlugin(plugin, -1, nullptr);
+            return send;
+        }
+    }
+    return nullptr;
+}
+
+void OdeonSession::syncHeadphonesSend(OdeonRoute& route, bool enabled) {
+    if (route.role == RouteRole::bus) return;
+    if (auto* send = findOrCreateAuxSend(route, 0)) {
+        send->setGainDb(enabled ? 0.f : -100.f);
+        send->setMute(!enabled);
+    }
+}
+
+std::string OdeonSession::setRouteAuxSend(const std::string& trackId, int busNumber,
+                                          float gainDb, bool muted) {
+    if (busNumber < 0 || busNumber > 7)
+        return jsonErr("Invalid bus number");
+
+    std::lock_guard<std::mutex> lk(routesMutex_);
+    auto* route = findRoute(trackId);
+    if (!route) return jsonErr("Track not found: " + trackId);
+
+    if (auto* send = findOrCreateAuxSend(*route, busNumber)) {
+        send->setGainDb(std::clamp(gainDb, -100.f, 12.f));
+        send->setMute(muted);
+        return jsonOk();
+    }
+    return jsonErr("Failed to create aux send on route");
 }
 
 std::string OdeonSession::removeTrack(const std::string& trackId) {
@@ -363,7 +461,6 @@ std::string OdeonSession::setTrackChannelMix(const std::string& trackId, float t
     route->mix.cfOrient = cfFromString(orientation);
     route->mix.muted    = muted;
     route->mix.pfl      = pfl;
-    route->mix.soloed   = pfl;
     applyDjRouteMix(*route);
     return jsonOk();
 }
@@ -1001,7 +1098,8 @@ void OdeonSession::applyDjRouteMix(OdeonRoute& route) {
     route.mix.volumeDb = volDb;
 
     route.track->setMute(m.muted);
-    route.track->setSolo(m.pfl || m.soloed);
+    syncHeadphonesSend(route, m.pfl);
+    route.track->setSolo(m.soloed);
 
     if (auto* eq = route.track->getEqualiserPlugin()) {
         float lowG  = m.lowDb;
@@ -1064,7 +1162,6 @@ std::string OdeonSession::setDeckChannelMix(int deckIndex, float trimDb, float f
     route->mix.cfOrient = cfFromString(orientation);
     route->mix.muted    = muted;
     route->mix.pfl      = pfl;
-    route->mix.soloed   = pfl;
     applyDjRouteMix(*route);
     return jsonOk();
 }
@@ -1103,7 +1200,6 @@ std::string OdeonSession::setPflDeck(int deckIndex, bool enabled) {
     if (!route) return jsonErr("Deck route not found.");
 
     route->mix.pfl = enabled;
-    route->mix.soloed = enabled;
     applyDjRouteMix(*route);
     return jsonOk();
 }
