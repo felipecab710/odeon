@@ -457,18 +457,24 @@ impl GpuRenderer {
                 let pad = 4.0;
                 let inner_top = lane_top + pad;
                 let inner_bottom = lane_bottom - pad;
-                let header_bottom = (inner_top + CLIP_HEADER_H).min(inner_bottom);
+                let wave_band_h = scene
+                    .lane_metrics
+                    .get(clip.lane_index as usize)
+                    .and_then(|m| m.wave_height)
+                    .unwrap_or(inner_bottom - inner_top);
+                let wave_band_bottom = (lane_top + wave_band_h - pad).min(inner_bottom);
+                let header_bottom = (inner_top + CLIP_HEADER_H).min(wave_band_bottom);
                 let body_top = header_bottom;
                 let base = [clip.color[0], clip.color[1], clip.color[2], 1.0];
                 let wave_color = clip.wave_color;
 
-                // Ableton-style vertical clip gradient (matches DOM arrangementClipBackground).
+                // Clip body gradient — header + wave band only (automation stays transparent for DOM).
                 push_arrangement_clip_gradient(
                     &mut tris,
                     x0,
                     inner_top,
                     x1,
-                    inner_bottom,
+                    wave_band_bottom,
                     base,
                     w,
                     h,
@@ -492,6 +498,17 @@ impl GpuRenderer {
                 push_vline(&mut lines, x0, inner_top, inner_bottom, w, h, border);
                 push_vline(&mut lines, x1, inner_top, inner_bottom, w, h, border);
                 push_hline(&mut lines, x0, x1, header_bottom, w, h, [0.0, 0.0, 0.0, 0.25]);
+                if wave_band_bottom < inner_bottom - 0.5 {
+                    push_hline(
+                        &mut lines,
+                        x0,
+                        x1,
+                        wave_band_bottom,
+                        w,
+                        h,
+                        [0.0, 0.0, 0.0, 0.25],
+                    );
+                }
 
                 let text_scale = 1.0;
                 let text_y = inner_top + 4.0;
@@ -554,7 +571,7 @@ impl GpuRenderer {
                 }
 
                 let wave_top = body_top + 2.0;
-                let wave_bottom = inner_bottom - 2.0;
+                let wave_bottom = (wave_band_bottom - 2.0).max(wave_top + 1.0);
                 let mut drew = false;
                 #[cfg(feature = "wavecache")]
                 if let (Some(caches), Some(ref path)) = (wavecaches, &clip.wavecache_path) {

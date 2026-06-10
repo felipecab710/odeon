@@ -69,7 +69,6 @@ import {
 import {
   useStudioLaneStore,
   computeLaneLayout,
-  computeWaveAutoStacks,
   MIN_LANE_TOTAL_H,
   MAX_LANE_TOTAL_H,
   MIN_WAVE_H,
@@ -668,14 +667,9 @@ export function TransitionArrangementView({
   const laneCount = layout.lanes.length;
   const extendedLaneH = Math.max(timelineH, laneViewportH);
 
-  const waveAutoLayout = useMemo(
-    () => computeWaveAutoStacks(laneCount),
-    [laneCount, automationTracks, expandedFlags, laneSplits],
-  );
-
   const embedLaneYs = laneYs;
   const embedLaneHeights = laneHeights;
-  const gpuLaneHeights = useMemo(
+  const waveBandHeights = useMemo(
     () => layout.lanes.map((_, i) => HEADER_H + getWaveHeight(i)),
     [layout.lanes.length, automationTracks, expandedFlags, laneSplits, getWaveHeight],
   );
@@ -824,7 +818,7 @@ export function TransitionArrangementView({
     selectedLaneIndex,
     laneYs,
     laneHeights,
-    gpuLaneHeights,
+    waveBandHeights,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,
@@ -1276,249 +1270,7 @@ export function TransitionArrangementView({
         />
       </div>
 
-      {/* Timeline body — native: one flex row per deck; DOM: sidebar + scroll column */}
-      {nativeEmbedLive ? (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
-        <div style={{ display: "flex", height: BEAT_RULER_H, flexShrink: 0 }}>
-          <div style={{
-            width: LANE_STRIP_W,
-            flexShrink: 0,
-            borderBottom: `1px solid ${STUDIO_GRID}`,
-            background: STUDIO_RULER,
-          }} />
-          <div style={{ flex: 1, position: "relative", zIndex: 15, overflow: "hidden" }}>
-            <SetBeatRuler
-              context={timelineContext}
-              height={BEAT_RULER_H}
-              onPointerDown={rulerMagnify.onRulerPointerDown}
-              onPointerMove={rulerMagnify.onRulerPointerMove}
-              onPointerUp={rulerMagnify.onRulerPointerUp}
-              onPointerCancel={rulerMagnify.onRulerPointerCancel}
-              onContextMenu={e => {
-                e.preventDefault();
-                const el = nativeEmbedHostRef.current;
-                if (!el) return;
-                setLocatorMenu({
-                  x: e.clientX,
-                  y: e.clientY,
-                  locatorId: null,
-                  timeSec: timelineContext.timeSecFromClientX(e.clientX, el),
-                });
-              }}
-            />
-            <div style={{
-              position: "absolute", top: 0, left: 0, right: 0, height: BEAT_RULER_H,
-              pointerEvents: "none", overflow: "visible",
-            }}>
-              <SetLocatorsLane
-                locators={locators}
-                pixelsPerSecond={pixelsPerSecond}
-                totalSec={totalDur}
-                rulerHeight={BEAT_RULER_H}
-                selectedId={locatorSelectedId}
-                renamingId={locatorRenamingId}
-                keyMapMode={keyMapMode}
-                onSelect={selectLocator}
-                onSeek={t => { void seekTimeline(t); }}
-                onMove={(id, t) => updateLocator(id, { timeSec: t })}
-                onRename={(id, name) => {
-                  updateLocator(id, { name });
-                  setRenamingId(null);
-                }}
-                onAssignKey={requestKeyBinding}
-                onCancelRenaming={() => setRenamingId(null)}
-                onContextMenu={(id, x, y, timeSec) => {
-                  setLocatorMenu({ x, y, locatorId: id, timeSec });
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {layout.lanes.map((lane, i) => {
-            const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
-            const mix = getMix(i);
-            const isSelected = lane.card.id === timelineSelectedCardId;
-            const rowH = laneHeights[i];
-            const waveH = getWaveHeight(i);
-            const autoH = getAutomationPanelHeight(i);
-            const showAuto = (automationTracks[i]?.expanded ?? false) && autoH > 0;
-            return (
-              <div
-                key={`native-deck-row-${lane.card.id}`}
-                style={{
-                  display: "flex",
-                  height: rowH,
-                  flexShrink: 0,
-                  overflow: "hidden",
-                  borderBottom: i < laneCount - 1 ? `1px solid ${STUDIO_GRID}` : undefined,
-                }}
-              >
-                <div style={{
-                  width: LANE_STRIP_W,
-                  flexShrink: 0,
-                  height: rowH,
-                  position: "relative",
-                  background: STUDIO_SIDEBAR,
-                  borderRight: `1px solid ${STUDIO_GRID}`,
-                  boxShadow: isSelected ? `inset 0 0 0 1px ${color}88` : undefined,
-                }}>
-                  <DJMLaneStrip
-                    index={i}
-                    entryId={lane.card.entryId}
-                    mix={mix}
-                    height={rowH}
-                    selected={isSelected}
-                    onSelect={() => selectLaneCard(i)}
-                    onChange={m => handleMixChange(i, m)}
-                    color={color}
-                  />
-                  {showAuto && (
-                    <div style={{
-                      position: "absolute",
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      height: autoH,
-                      borderTop: `1px solid ${STUDIO_GRID}`,
-                      background: STUDIO_SIDEBAR,
-                    }}>
-                      <AutomationLaneControls
-                        laneIndex={i}
-                        color={color}
-                        panelHeight={autoH}
-                        playheadSec={playheadSec}
-                        showAutomation={mix.showAutomation}
-                        mix={mix}
-                      />
-                    </div>
-                  )}
-                </div>
-                <div style={{
-                  flex: 1,
-                  minWidth: 0,
-                  height: HEADER_H + waveH,
-                  flexShrink: 0,
-                  background: i % 2 === 1 ? "rgba(0,0,0,0.18)" : STUDIO_BG,
-                }} />
-              </div>
-            );
-          })}
-
-          <div
-            ref={nativeEmbedHostRef}
-            style={{
-              position: "absolute",
-              left: LANE_STRIP_W,
-              top: 0,
-              right: 0,
-              height: timelineH,
-              zIndex: 2,
-              pointerEvents: "auto",
-            }}
-          >
-            <div ref={scrollRef} style={{ position: "absolute", inset: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
-              <div ref={zoomCameraRef} style={{ width: layout.totalWidthPx + 200, height: embedAreaH, position: "relative" }}>
-                <div style={{ height: embedAreaH }}>
-                  <LaneSelectOverlays
-                    lanes={layout.lanes}
-                    laneYs={laneYs}
-                    laneHeights={laneHeights}
-                    laneCount={laneCount}
-                    extendedLaneH={embedAreaH}
-                    colors={laneClipColors}
-                    selectedCardId={timelineSelectedCardId}
-                    onSelectLane={selectLaneCard}
-                    onSeekAtClientX={seekFromClientX}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Automation above Metal — z-index inside rows cannot beat the embed sibling */}
-          <div style={{
-            position: "absolute",
-            left: LANE_STRIP_W,
-            top: 0,
-            right: 0,
-            height: timelineH,
-            zIndex: 10,
-            pointerEvents: "none",
-            overflow: "hidden",
-          }}>
-            {layout.lanes.map((lane, i) => {
-              const waveH = getWaveHeight(i);
-              const autoH = getAutomationPanelHeight(i);
-              const showAuto = (automationTracks[i]?.expanded ?? false) && autoH > 0;
-              if (!showAuto) return null;
-              const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
-              const mix = getMix(i);
-              return (
-                <div
-                  key={`native-auto-${lane.card.id}`}
-                  style={{
-                    position: "absolute",
-                    top: laneYs[i] + HEADER_H + waveH + 6,
-                    left: 0,
-                    right: 0,
-                    height: autoH,
-                    pointerEvents: "auto",
-                    overflow: "hidden",
-                    background: STUDIO_BG,
-                    borderTop: `1px solid ${STUDIO_GRID}`,
-                  }}
-                >
-                  <div style={{
-                    transform: `translateX(-${timelineScrollLeft}px)`,
-                    width: layout.totalWidthPx + 200,
-                    height: autoH,
-                    position: "relative",
-                  }}>
-                    <div
-                      data-auto-lane
-                      style={{
-                        position: "absolute",
-                        left: lane.leftPx,
-                        top: 0,
-                        width: Math.max(lane.widthPx, 24),
-                        height: autoH,
-                      }}
-                    >
-                      <TrackAutomationLane
-                        laneIndex={i}
-                        color={color}
-                        width={Math.max(lane.widthPx, 24)}
-                        panelHeight={autoH}
-                        startSec={lane.startSec}
-                        durationSec={lane.durationSec}
-                        playheadSec={playheadSec}
-                        showAutomation={mix.showAutomation}
-                        mix={mix}
-                        onMixChange={m => handleMixChange(i, m)}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", height: TIME_RULER_H, flexShrink: 0 }}>
-          <div style={{
-            width: LANE_STRIP_W,
-            flexShrink: 0,
-            borderTop: `1px solid ${STUDIO_GRID}`,
-            background: STUDIO_RULER,
-          }} />
-          <div style={{ flex: 1, position: "relative", zIndex: 15 }}>
-            <SetTimeRuler context={timelineContext} height={TIME_RULER_H} />
-          </div>
-        </div>
-      </div>
-      ) : (
+      {/* Timeline body — same sidebar + lane stack for DOM and native GPU */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
         {/* Deck strips — compact, positioned to match timeline lane tops */}
         <div style={{
@@ -1708,9 +1460,8 @@ export function TransitionArrangementView({
           <div
             ref={nativeEmbedHostRef}
             style={{
-              ...(nativeEmbedLive
-                ? { flex: "0 0 auto", height: waveAutoLayout.waveTotalH }
-                : { flex: 1, minHeight: 0 }),
+              flex: 1,
+              minHeight: 0,
               minWidth: 0,
               position: "relative",
               pointerEvents: nativeEmbedLive ? "auto" : "none",
@@ -1902,6 +1653,9 @@ export function TransitionArrangementView({
 
             </div>
 
+          </div>
+        </div>
+
             {!nativeEmbedLive && hoverTimeSec !== null && (
               <SetTimelineEditCursor
                 timeSec={hoverTimeSec}
@@ -1931,9 +1685,69 @@ export function TransitionArrangementView({
               }} />
             </div>
             )}
-          </div>
-        </div>
-          </div>
+            {nativeEmbedLive && (
+              <div style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 10,
+                pointerEvents: "none",
+                overflow: "hidden",
+              }}>
+                {layout.lanes.map((lane, i) => {
+                  const waveH = getWaveHeight(i);
+                  const autoH = getAutomationPanelHeight(i);
+                  const automationExpanded = automationTracks[i]?.expanded ?? false;
+                  if (!automationExpanded || autoH <= 0) return null;
+                  const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
+                  const mix = getMix(i);
+                  return (
+                    <div
+                      key={`native-auto-${lane.card.id}`}
+                      style={{
+                        position: "absolute",
+                        top: laneYs[i] + HEADER_H + waveH + 6,
+                        left: 0,
+                        right: 0,
+                        height: autoH,
+                        pointerEvents: "auto",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div style={{
+                        transform: `translateX(-${timelineScrollLeft}px)`,
+                        width: layout.totalWidthPx + 200,
+                        height: autoH,
+                        position: "relative",
+                      }}>
+                        <div
+                          data-auto-lane
+                          style={{
+                            position: "absolute",
+                            left: lane.leftPx,
+                            top: 0,
+                            width: Math.max(lane.widthPx, 24),
+                            height: autoH,
+                          }}
+                        >
+                          <TrackAutomationLane
+                            laneIndex={i}
+                            color={color}
+                            width={Math.max(lane.widthPx, 24)}
+                            panelHeight={autoH}
+                            startSec={lane.startSec}
+                            durationSec={lane.durationSec}
+                            playheadSec={playheadSec}
+                            showAutomation={mix.showAutomation}
+                            mix={mix}
+                            onMixChange={m => handleMixChange(i, m)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div style={{
@@ -1949,9 +1763,10 @@ export function TransitionArrangementView({
           </div>
         </div>
       </div>
-      )}
 
       </div>
+
+    </div>
 
       {clipColorMenu && (
         <ClipColorMenu

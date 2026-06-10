@@ -13,6 +13,7 @@ export interface EmbedFrame {
 export interface NativeTimelineLaneMetrics {
   y: number;
   height: number;
+  wave_height?: number;
 }
 
 export interface NativeTimelineClip {

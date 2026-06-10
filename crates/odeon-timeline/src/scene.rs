@@ -17,6 +17,9 @@ pub struct TimelineLocator {
 pub struct TimelineLaneMetrics {
     pub y: f32,
     pub height: f32,
+    /// Wave band height from lane top (header + waveform) — remainder is automation.
+    #[serde(default)]
+    pub wave_height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
