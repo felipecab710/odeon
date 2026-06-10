@@ -18,6 +18,7 @@ import type { OdeonProject } from "@odeon/shared";
 import { StudioView } from "./views/StudioView";
 import { SelectView } from "./views/SelectView";
 import { ResearchView } from "./views/ResearchView";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SettingsView } from "./views/SettingsView";
 
 function windowTitleForProject(project: OdeonProject | null): string {
@@ -133,15 +134,25 @@ export default function App() {
       <AppTitleBar />
       {view === "studio" && <TopBar />}
       <div className={view === "studio" ? "flex flex-1 flex-col min-h-0 overflow-hidden" : "hidden"}>
-        <StudioView />
+        <ErrorBoundary>
+          <StudioView />
+        </ErrorBoundary>
       </div>
       <div className={view === "select" ? "flex flex-1 flex-col min-h-0 overflow-hidden" : "hidden"}>
-        <SelectView />
+        <ErrorBoundary>
+          <SelectView />
+        </ErrorBoundary>
       </div>
       <div className={view === "research" ? "flex flex-1 flex-col min-h-0 overflow-hidden" : "hidden"}>
-        <ResearchView />
+        <ErrorBoundary>
+          <ResearchView />
+        </ErrorBoundary>
       </div>
-      {view === "settings" && <SettingsView />}
+      {view === "settings" && (
+        <ErrorBoundary>
+          <SettingsView />
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

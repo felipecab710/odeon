@@ -34,7 +34,13 @@ export function useDjEngineSync(lanes: LaneLayout[], enabled: boolean) {
     .join("|");
 
   useEffect(() => {
-    if (!enabled || deckLanes.length === 0) {
+    if (!enabled) {
+      setSyncing(false);
+      setSyncError(null);
+      return;
+    }
+
+    if (deckLanes.length === 0) {
       setSyncing(false);
       setSyncError(null);
       useTransportStore.getState().setEngineTracksReady(false);

@@ -34,7 +34,7 @@ export function resetSetEngineSession(): void {
   resetListeners.forEach(l => l());
 }
 
-export function useSetEngineSync(lanes: LaneLayout[]) {
+export function useSetEngineSync(lanes: LaneLayout[], enabled = true) {
   const synced = useRef<Map<string, SyncedLane>>(new Map());
   const syncGen = useRef(0);
   const [syncing, setSyncing] = useState(false);
@@ -51,6 +51,12 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
   const positionKey = lanes.map(l => `${l.card.entryId}:${Math.round(l.startSec * 10)}`).join("|");
 
   useEffect(() => {
+    if (!enabled) {
+      setSyncing(false);
+      setSyncError(null);
+      return;
+    }
+
     if (lanes.length === 0) {
       setSyncing(false);
       setSyncError(null);
@@ -77,7 +83,7 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
         if (gen !== syncGen.current) return;
 
         const laneIds = new Set(lanes.map(l => l.card.entryId));
-        for (const [entryId, meta] of synced.current) {
+        for (const [entryId] of synced.current) {
           if (!laneIds.has(entryId)) {
             const trackId = setTrackId(entryId);
             await engineClient.removeTrack(trackId).catch(() => {});
@@ -162,11 +168,11 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
 
     void sync();
     return () => { syncGen.current++; };
-  }, [sessionKey, resetEpoch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, sessionKey, resetEpoch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fast clip reposition when overlap layout shifts (no debounce — DAW responsiveness).
   useEffect(() => {
-    if (lanes.length === 0 || !setProjectReady) return;
+    if (!enabled || lanes.length === 0 || !setProjectReady) return;
 
     for (const lane of lanes) {
       const entryId = lane.card.entryId;
@@ -180,7 +186,7 @@ export function useSetEngineSync(lanes: LaneLayout[]) {
         .then(() => { existing.startSec = lane.startSec; })
         .catch((e: unknown) => console.warn(`[setEngineSync] moveClip failed ${entryId}:`, e));
     }
-  }, [positionKey, lanes.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, positionKey, lanes.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { syncing, syncError, trackCount: synced.current.size };
 }

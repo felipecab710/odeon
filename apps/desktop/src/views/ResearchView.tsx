@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { useSelectStore } from "../stores/selectStore";
+import { useNavigationStore } from "../stores/navigationStore";
 import { getActiveUserSet, useSetBuilderStore, type SetCard } from "../stores/setBuilderStore";
 import { StudioWithBoothPanel } from "../components/setbuilder/StudioWithBoothPanel";
 import { SetSequencePanel } from "../components/setbuilder/SetSequencePanel";
@@ -637,8 +638,8 @@ function SetTrackCard({
           <button
             onClick={e => {
               e.stopPropagation();
-              const { setViewMode, selectTransition, cards } = useSetBuilderStore.getState();
-              const sorted = [...cards].sort((a, b) => a.order - b.order);
+              const { setViewMode, selectTransition } = useSetBuilderStore.getState();
+              const sorted = [...getActiveUserSet(useSetBuilderStore.getState()).cards].sort((a, b) => a.order - b.order);
               const pos = sorted.findIndex(c => c.id === card.id);
               if (pos >= 0 && pos < sorted.length - 1) selectTransition(pos);
               else if (pos > 0) selectTransition(pos - 1);
@@ -1286,70 +1287,7 @@ function ExportButton({ sorted, entryMap }: { sorted: SetCard[]; entryMap: Map<s
   );
 }
 
-// ─── Transitions Tab ──────────────────────────────────────────────────────────
-
-function TransitionsTab({
-  sorted, entryMap, flowEdges,
-}: {
-  sorted: SetCard[];
-  entryMap: Map<string, CatalogEntry>;
-  flowEdges: FlowEdge[];
-}) {
-  const edgeMap = new Map(flowEdges.map(e => [`${e.from_id}→${e.to_id}`, e]));
-
-  if (sorted.length < 2) {
-    return <p style={{ color: "#3a3a3a", fontSize: 12, marginTop: 8 }}>Add at least 2 tracks to see transition analysis.</p>;
-  }
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {sorted.slice(0, -1).map((card, i) => {
-        const next = sorted[i + 1];
-        const a = entryMap.get(card.entryId);
-        const b = entryMap.get(next.entryId);
-        const edge = edgeMap.get(`${card.entryId}→${next.entryId}`);
-        return (
-          <div key={`${card.id}-${next.id}`} style={{
-            background: "#2a2a2a", borderRadius: 8, padding: "10px 12px",
-          }}>
-            {/* Track names */}
-            <div style={{ fontSize: 11, color: "#aaa", marginBottom: 6 }}>
-              <span style={{ color: "#e6e6e6", fontWeight: 600 }}>#{i + 1} {a ? displayTitle(a) : "?"}</span>
-              <span style={{ color: "#3a3a3a", margin: "0 6px" }}>→</span>
-              <span style={{ color: "#e6e6e6", fontWeight: 600 }}>#{i + 2} {b ? displayTitle(b) : "?"}</span>
-            </div>
-
-            {/* Scores row */}
-            {edge && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
-                {edge.overall != null && (
-                  <MetricChip label={compatLabel(edge.overall)} value={`${Math.round(edge.overall * 100)}%`} />
-                )}
-                {edge.bpm_delta != null && (
-                  <MetricChip label="BPM Δ" value={`±${edge.bpm_delta.toFixed(0)}`} />
-                )}
-                {edge.key_compat != null && (
-                  <MetricChip label="Harmonic" value={`${Math.round(edge.key_compat * 100)}%`} />
-                )}
-              </div>
-            )}
-
-            {/* Transition tip */}
-            {edge && (
-              <p style={{ color: "#fff", fontSize: 12, lineHeight: 1.5 }}>
-                {transitionTip(edge)}
-              </p>
-            )}
-
-            {!edge && (
-              <p style={{ color: "#3a3a3a", fontSize: 10 }}>Awaiting analysis…</p>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// ─── Selected Tab ─────────────────────────────────────────────────────────────
 
 function MetricChip({ label, value }: { label: string; value: string }) {
   return (
@@ -1362,8 +1300,6 @@ function MetricChip({ label, value }: { label: string; value: string }) {
     </span>
   );
 }
-
-// ─── Selected Tab ─────────────────────────────────────────────────────────────
 
 function SelectedTab({
   selectedEntry, selectedCard, sorted, entryMap, flowEdges, cards,
@@ -2193,7 +2129,7 @@ function SetBuilderCanvas({
     return null;
   }, []);
 
-  const onWireStart = useCallback((cardId: string, e: React.PointerEvent) => {
+  const onWireStart = useCallback((cardId: string, _e: React.PointerEvent) => {
     const out = outputPortRefs.current.get(cardId);
     const center = portCenter(out, worldRef.current);
     if (!center) return;
@@ -2410,8 +2346,12 @@ export function ResearchView() {
     prevViewModeRef.current = viewMode;
   }, [viewMode]);
 
+  const isResearchActive = useNavigationStore(s => s.view === "research");
+  const setSyncActive = isResearchActive && sorted.length >= 2 && viewMode === "arrangement";
+
   const { syncing: engineSyncing, syncError } = useSetEngineSync(
-    sorted.length >= 2 && viewMode === "arrangement" ? layout.lanes : [],
+    setSyncActive ? layout.lanes : [],
+    setSyncActive,
   );
   const selectedCard = cards.find(c => c.id === selectedCardId) ?? null;
   const timelineSelectedCard = cards.find(c => c.id === timelineSelectedCardId) ?? null;
@@ -2609,7 +2549,7 @@ export function ResearchView() {
           ))}
         </div>
 
-        {sorted.length >= 2 && (
+        {sorted.length >= 2 && viewMode === "arrangement" && (
           <SetBuilderTransportControls
             sorted={sorted}
             entryMap={entryMap}
