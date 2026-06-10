@@ -536,8 +536,8 @@ impl GpuRenderer {
                     push_vline(&mut lines, gx_r, inner_top + 5.0, inner_bottom - 5.0, w, h, grip);
                 }
 
-                let wave_top = body_top + 6.0;
-                let wave_bottom = inner_bottom - 4.0;
+                let wave_top = body_top + 2.0;
+                let wave_bottom = inner_bottom - 2.0;
                 let mut drew = false;
                 #[cfg(feature = "wavecache")]
                 if let (Some(caches), Some(ref path)) = (wavecaches, &clip.wavecache_path) {
@@ -918,7 +918,8 @@ fn push_waveform_column(
     push_rect_tris(tris, x0, y_lo, x1, y_hi, fill, w, h);
 }
 
-const WAVEFORM_GAIN: f32 = 1.45;
+const WAVEFORM_GAIN: f32 = 1.85;
+const STEREO_HALF_FRAC: f32 = 0.44;
 
 fn push_waveform(
     tris: &mut Vec<Vertex>,
@@ -981,7 +982,7 @@ fn push_waveform_cached(
 ) {
     let wave_h = bottom - top;
     let mid = top + wave_h * 0.5;
-    let half_h = (wave_h * 0.25) * 0.96;
+    let half_h = (wave_h * 0.25) * STEREO_HALF_FRAC;
     let left_center = top + wave_h * 0.25;
     let right_center = top + wave_h * 0.75;
     let clip_w_px = (clip_duration_sec * pixels_per_second).max(2.0) as f32;
