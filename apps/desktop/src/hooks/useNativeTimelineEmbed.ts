@@ -334,7 +334,12 @@ export function useNativeTimelineEmbed({
 
   useEffect(() => {
     if (!active || !embedReady) return;
-    void updateNativeTimelineScene(buildScene());
+    let raf = 0;
+    const pushScene = () => {
+      void updateNativeTimelineScene(buildSceneRef.current());
+    };
+    raf = requestAnimationFrame(pushScene);
+    return () => cancelAnimationFrame(raf);
   }, [active, embedReady, buildScene]);
 
   useEffect(() => {

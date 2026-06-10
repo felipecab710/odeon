@@ -33,6 +33,7 @@ import type { TransitionPlanData } from "./apiClient";
 import type { BoothMode } from "../stores/boothStore";
 import { useBoothStore } from "../stores/boothStore";
 import { djSyncCoordinator } from "./djSyncCoordinator";
+import { resetEngineMixPushThrottle } from "./enginePushThrottle";
 import { simulateChannelMeters } from "./boothMeterSim";
 import type { WaveformCache } from "./waveformEngine/types";
 import {
@@ -517,6 +518,7 @@ let lastCrossfaderPush = -1;
 export function clearSetEngineMixPushCache(): void {
   lastLanePushKey.clear();
   lastCrossfaderPush = -1;
+  resetEngineMixPushThrottle();
 }
 
 function lanePushFingerprint(mix: DeckMix): string {

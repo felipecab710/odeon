@@ -1,7 +1,7 @@
 /**
  * Runs booth simulation loop — syncs transport → boothStore → engine.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import type { CatalogEntry, CatalogMarker } from "@odeon/shared";
 import type { SetCard } from "../stores/setBuilderStore";
 import { useTransportStore } from "../stores/transportStore";
@@ -36,7 +36,10 @@ export function useBoothSimulation(
   const driveEngine = options?.driveEngine ?? true;
   const engineRoute = options?.engineRoute ?? "dj";
   const previewPlayheadSec = options?.previewPlayheadSec ?? null;
-  const layout = computeSetLayout(sorted, entryMap);
+  const layout = useMemo(
+    () => computeSetLayout(sorted, entryMap),
+    [sorted, entryMap],
+  );
   const { syncing, syncError } = useDjEngineSync(
     layout.lanes,
     enabled && driveEngine && engineRoute === "dj",

@@ -21,6 +21,9 @@ Last updated: after P0/P1 performance sprint.
 | P1-3 | `TrackHeaderMeter` re-renders all lanes on any meter event | Zustand subscribe + local state per track |
 | P1-4 | `computeBoothSnapshot` recomputes layout every frame | Precomputed layout passed from hook |
 | P1-5 | `setCrossfader` every lane push | Cached last crossfader position |
+| PP-1 | Fader drag unbounded engine RPC | `shouldPushEngineMixGesture` + force on mouseup |
+| PP-2 | Booth RAF restarted every parent render | Memoize `computeSetLayout` in `useBoothSimulation` |
+| PP-3 | Native scene IPC burst on scroll/cursor | RAF-coalesce `updateNativeTimelineScene` |
 
 ## Architecture (target)
 

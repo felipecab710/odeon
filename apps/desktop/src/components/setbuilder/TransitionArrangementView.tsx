@@ -16,6 +16,7 @@ import {
 } from "../../lib/deckMixEngine";
 import { useTransportStore } from "../../stores/transportStore";
 import { useBoothStore } from "../../stores/boothStore";
+import { shouldPushEngineMix, shouldPushEngineMixGesture, markEngineMixPushed } from "../../lib/enginePushThrottle";
 import { pushSetEngineMixes } from "../../lib/boothSimulation";
 import { useSetBuilderStore } from "../../stores/setBuilderStore";
 import { useNavigationStore } from "../../stores/navigationStore";
@@ -730,8 +731,15 @@ export function TransitionArrangementView({
     [layout.transitions, transitionIndex],
   );
 
-  const syncSetPreviewMixes = useCallback(() => {
+  const syncSetPreviewMixes = useCallback((force = false) => {
     if (!useTransportStore.getState().engineTracksReady) return;
+    const isPlaying = useTransportStore.getState().isPlaying;
+    if (isPlaying) {
+      if (!shouldPushEngineMix(true, force)) return;
+      markEngineMixPushed();
+    } else if (!shouldPushEngineMixGesture(force)) {
+      return;
+    }
     pushSetEngineMixes(
       layout.lanes,
       layout.transitions,
@@ -814,7 +822,7 @@ export function TransitionArrangementView({
             ...useStudioDeckStore.getState().mixes,
             [i]: { ...mix, solo: !mix.solo },
           });
-          syncSetPreviewMixes();
+          syncSetPreviewMixes(true);
           return;
         case "toggleCue": {
           captureUndoState();
@@ -827,7 +835,7 @@ export function TransitionArrangementView({
           }
           next[i] = { ...mix, cue: !mix.cue };
           useStudioDeckStore.getState().setMixes(next);
-          syncSetPreviewMixes();
+          syncSetPreviewMixes(true);
           return;
         }
         case "toggleMute":
@@ -836,7 +844,7 @@ export function TransitionArrangementView({
             ...useStudioDeckStore.getState().mixes,
             [i]: { ...mix, mute: !mix.mute },
           });
-          syncSetPreviewMixes();
+          syncSetPreviewMixes(true);
           return;
         case "toggleAutomation":
           captureUndoState();
@@ -857,7 +865,7 @@ export function TransitionArrangementView({
             ...useStudioDeckStore.getState().mixes,
             [i]: { ...mix, faderDb },
           });
-          syncSetPreviewMixes();
+          syncSetPreviewMixes(true);
           return;
         }
         case "select":
@@ -986,6 +994,7 @@ export function TransitionArrangementView({
         ...useStudioDeckStore.getState().mixes,
         [lane]: { ...mix, faderDb },
       });
+      if (!shouldPushEngineMixGesture()) return;
       pushSetEngineMixes(
         layout.lanes,
         layout.transitions,
@@ -997,6 +1006,7 @@ export function TransitionArrangementView({
     const onUp = () => {
       if (faderDragLaneRef.current == null) return;
       faderDragLaneRef.current = null;
+      syncSetPreviewMixes(true);
       endUndoGesture();
     };
     window.addEventListener("mousemove", onMove);
@@ -1005,7 +1015,7 @@ export function TransitionArrangementView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [layout.lanes, layout.transitions, embedLaneYs, embedLaneHeights]);
+  }, [layout.lanes, layout.transitions, embedLaneYs, embedLaneHeights, syncSetPreviewMixes]);
 
   useNativeTimelineEmbed({
     active: nativeEmbedLive,
