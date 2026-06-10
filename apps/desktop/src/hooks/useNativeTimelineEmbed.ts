@@ -67,6 +67,8 @@ interface Options {
   onPointerMove?: (clientX: number, clientY: number) => void;
   onContextMenu?: (clientX: number, clientY: number) => void;
   onDoubleClick?: () => void;
+  /** Bump to force embed teardown/restart while staying active (HMR, layout fixes). */
+  generation?: number;
 }
 
 export function useNativeTimelineEmbed({
@@ -91,6 +93,7 @@ export function useNativeTimelineEmbed({
   onPointerMove,
   onContextMenu,
   onDoubleClick,
+  generation = 0,
 }: Options) {
   const [embedReady, setEmbedReady] = useState(false);
   const frameRef = useRef<EmbedFrame | null>(null);
@@ -234,7 +237,7 @@ export function useNativeTimelineEmbed({
       unlistenResize?.();
       void stopNativeTimelineEmbed();
     };
-  }, [active, targetRef, laneLayoutKey]);
+  }, [active, targetRef, laneLayoutKey, generation]);
 
   useEffect(() => {
     if (!active || !embedReady) return;

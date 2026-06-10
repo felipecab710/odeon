@@ -1033,8 +1033,10 @@ fn push_waveform_cached(
         let r_bot = right_center - (rm * WAVEFORM_GAIN).clamp(-1.0, 1.0) * half_h;
         push_rect_tris(tris, x0, l_top.min(l_bot), x1, l_top.max(l_bot), fill, w, h);
         push_rect_tris(tris, x0, r_top.min(r_bot), x1, r_top.max(r_bot), fill, w, h);
-        let edge_y = l_top.min(r_top);
-        push_hline(out, x0, x1, edge_y, w, h, outline);
+        let edge_top = l_top.min(r_top);
+        let edge_bot = l_bot.max(r_bot);
+        push_hline(out, x0, x1, edge_top, w, h, outline);
+        push_hline(out, x0, x1, edge_bot, w, h, outline);
     }
 
     push_hline(

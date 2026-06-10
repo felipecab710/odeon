@@ -425,6 +425,7 @@ export function TransitionArrangementView({
   } | null>(null);
   const [dragDeltaPx, setDragDeltaPx] = useState(0);
   const [nativeGpuActive, setNativeGpuActive] = useState(NATIVE_GPU_DEFAULT);
+  const [nativeEmbedGeneration, setNativeEmbedGeneration] = useState(0);
   const navView = useNavigationStore(s => s.view);
   const setViewMode = useSetBuilderStore(s => s.viewMode);
 
@@ -524,9 +525,8 @@ export function TransitionArrangementView({
         durationSec: lane.durationSec,
         index,
         colorHex,
-        wavecachePath: lane.entry.file_path
-          ? wavecachePath(lane.entry.file_path)
-          : undefined,
+        wavecachePath: lane.entry.waveform_cache_path
+          ?? (lane.entry.file_path ? wavecachePath(lane.entry.file_path) : undefined),
         label: trackTitle(lane.entry).slice(0, 48),
         badge: camelot(lane.entry.key),
         labelColorHex: contrastingTextOn(colorHex),
@@ -834,6 +834,7 @@ export function TransitionArrangementView({
     onPointerMove: nativePointerMove,
     onContextMenu: nativeContextMenu,
     onDoubleClick: fitToViewport,
+    generation: nativeEmbedGeneration,
   });
 
   const toggleLaneCard = useCallback((lane: LaneLayout) => {
@@ -1163,9 +1164,10 @@ export function TransitionArrangementView({
             onClick={e => {
               e.stopPropagation();
               setNativeGpuActive(v => !v);
+              setNativeEmbedGeneration(g => g + 1);
             }}
             title={nativeGpuActive
-              ? "Switch back to web timeline"
+              ? "Native GPU timeline — toggle off/on to reload embed after updates"
               : "Embed native GPU timeline (Phase 1)"}
             style={{
               background: nativeGpuActive ? "rgba(120,80,255,0.35)" : "rgba(120,80,255,0.12)",
@@ -1396,58 +1398,10 @@ export function TransitionArrangementView({
                 <div style={{
                   flex: 1,
                   minWidth: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                }}>
-                  <div style={{
-                    height: HEADER_H + waveH,
-                    flexShrink: 0,
-                    background: i % 2 === 1 ? "rgba(0,0,0,0.18)" : STUDIO_BG,
-                  }} />
-                  {showAuto && (
-                    <div style={{
-                      flex: 1,
-                      minHeight: 0,
-                      overflow: "hidden",
-                      position: "relative",
-                      zIndex: 3,
-                      background: STUDIO_BG,
-                      borderTop: `1px solid ${STUDIO_GRID}`,
-                    }}>
-                      <div style={{
-                        transform: `translateX(-${timelineScrollLeft}px)`,
-                        width: layout.totalWidthPx + 200,
-                        height: autoH,
-                        position: "relative",
-                      }}>
-                        <div
-                          data-auto-lane
-                          style={{
-                            position: "absolute",
-                            left: lane.leftPx,
-                            top: 0,
-                            width: Math.max(lane.widthPx, 24),
-                            height: autoH,
-                          }}
-                        >
-                          <TrackAutomationLane
-                            laneIndex={i}
-                            color={color}
-                            width={Math.max(lane.widthPx, 24)}
-                            panelHeight={autoH}
-                            startSec={lane.startSec}
-                            durationSec={lane.durationSec}
-                            playheadSec={playheadSec}
-                            showAutomation={mix.showAutomation}
-                            mix={mix}
-                            onMixChange={m => handleMixChange(i, m)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  height: HEADER_H + waveH,
+                  flexShrink: 0,
+                  background: i % 2 === 1 ? "rgba(0,0,0,0.18)" : STUDIO_BG,
+                }} />
               </div>
             );
           })}
@@ -1481,6 +1435,74 @@ export function TransitionArrangementView({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Automation above Metal — z-index inside rows cannot beat the embed sibling */}
+          <div style={{
+            position: "absolute",
+            left: LANE_STRIP_W,
+            top: 0,
+            right: 0,
+            height: timelineH,
+            zIndex: 10,
+            pointerEvents: "none",
+            overflow: "hidden",
+          }}>
+            {layout.lanes.map((lane, i) => {
+              const waveH = getWaveHeight(i);
+              const autoH = getAutomationPanelHeight(i);
+              const showAuto = (automationTracks[i]?.expanded ?? false) && autoH > 0;
+              if (!showAuto) return null;
+              const color = laneClipColors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
+              const mix = getMix(i);
+              return (
+                <div
+                  key={`native-auto-${lane.card.id}`}
+                  style={{
+                    position: "absolute",
+                    top: laneYs[i] + HEADER_H + waveH + 6,
+                    left: 0,
+                    right: 0,
+                    height: autoH,
+                    pointerEvents: "auto",
+                    overflow: "hidden",
+                    background: STUDIO_BG,
+                    borderTop: `1px solid ${STUDIO_GRID}`,
+                  }}
+                >
+                  <div style={{
+                    transform: `translateX(-${timelineScrollLeft}px)`,
+                    width: layout.totalWidthPx + 200,
+                    height: autoH,
+                    position: "relative",
+                  }}>
+                    <div
+                      data-auto-lane
+                      style={{
+                        position: "absolute",
+                        left: lane.leftPx,
+                        top: 0,
+                        width: Math.max(lane.widthPx, 24),
+                        height: autoH,
+                      }}
+                    >
+                      <TrackAutomationLane
+                        laneIndex={i}
+                        color={color}
+                        width={Math.max(lane.widthPx, 24)}
+                        panelHeight={autoH}
+                        startSec={lane.startSec}
+                        durationSec={lane.durationSec}
+                        playheadSec={playheadSec}
+                        showAutomation={mix.showAutomation}
+                        mix={mix}
+                        onMixChange={m => handleMixChange(i, m)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
