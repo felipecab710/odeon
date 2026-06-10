@@ -1,10 +1,13 @@
 //! macOS embedded timeline — Metal NSView subview inside the Tauri WKWebView.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use block::ConcreteBlock;
+use cocoa::appkit::{NSEventModifierFlags, NSEventMask, NSEventType};
 use cocoa::base::{id, nil, YES};
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
 use objc::{class, msg_send, sel, sel_impl};
@@ -14,6 +17,10 @@ use odeon_timeline::wavecache::{load_wavecache, WaveformCache};
 use odeon_timeline::TimelineScene;
 
 use super::EmbedFrame;
+
+thread_local! {
+    static SCROLL_MONITOR: RefCell<Option<id>> = const { RefCell::new(None) };
+}
 
 #[link(name = "QuartzCore", kind = "framework")]
 extern "C" {}
@@ -92,6 +99,8 @@ impl MacTimelinePanel {
             ph,
             scale,
         );
+
+        install_scroll_monitor();
 
         let initial_viewport = (
             scene.viewport.pixels_per_second,
@@ -201,6 +210,44 @@ impl MacTimelinePanel {
         unsafe {
             let _: () = msg_send![self.metal_view, removeFromSuperview];
         }
+        remove_scroll_monitor();
+    }
+
+    fn handle_nsevent(&mut self, event: id) {
+        if !self.event_in_view(event) {
+            return;
+        }
+        unsafe {
+            let event_type: u64 = msg_send![event, type];
+            let loc: NSPoint = msg_send![event, locationInWindow];
+            let view_loc: NSPoint = msg_send![self.metal_view, convertPoint: loc fromView: nil];
+
+            if event_type == NSEventType::NSScrollWheel as u64 {
+                let delta_y: f64 = msg_send![event, scrollingDeltaY];
+                let flags: NSEventModifierFlags = msg_send![event, modifierFlags];
+                let ctrl = flags.contains(NSEventModifierFlags::NSControlKeyMask);
+                self.apply_wheel(delta_y, ctrl, view_loc.x);
+            } else if event_type == NSEventType::NSEventTypeMagnify as u64 {
+                let magnification: f64 = msg_send![event, magnification];
+                let factor = 1.0 + magnification;
+                if (factor - 1.0).abs() > 1e-6 {
+                    self.scene.viewport.apply_zoom(factor, view_loc.x);
+                    self.viewport_dirty = true;
+                }
+            }
+        }
+    }
+
+    fn event_in_view(&self, event: id) -> bool {
+        unsafe {
+            let loc: NSPoint = msg_send![event, locationInWindow];
+            let view_loc: NSPoint = msg_send![self.metal_view, convertPoint: loc fromView: nil];
+            let bounds: NSRect = msg_send![self.metal_view, bounds];
+            view_loc.x >= 0.0
+                && view_loc.y >= 0.0
+                && view_loc.x <= bounds.size.width
+                && view_loc.y <= bounds.size.height
+        }
     }
 
     fn apply_frame(&mut self, frame: EmbedFrame) {
@@ -295,4 +342,41 @@ fn frame_to_webview_rect(webview: id, frame: &EmbedFrame) -> NSRect {
         NSPoint::new(frame.x, web_height - frame.y - h),
         NSSize::new(w, h),
     )
+}
+
+fn install_scroll_monitor() {
+    SCROLL_MONITOR.with(|cell| {
+        if cell.borrow().is_some() {
+            return;
+        }
+        unsafe {
+            let mask = NSEventMask::NSScrollWheelMask
+                | NSEventMask::from_type(NSEventType::NSEventTypeMagnify);
+            let handler = ConcreteBlock::new(move |event: id| -> id {
+                crate::timeline_embed::with_embed_panel(|panel| panel.handle_nsevent(event));
+                event
+            });
+            let handler = handler.copy();
+            let monitor: id = msg_send![
+                class!(NSEvent),
+                addLocalMonitorForEventsMatchingMask: mask
+                handler: &*handler
+            ];
+            if !monitor.is_null() {
+                *cell.borrow_mut() = Some(monitor);
+                log::info!("[timeline embed] scroll/magnify monitor installed");
+            }
+        }
+    });
+}
+
+fn remove_scroll_monitor() {
+    SCROLL_MONITOR.with(|cell| {
+        if let Some(monitor) = cell.borrow_mut().take() {
+            unsafe {
+                let _: () = msg_send![class!(NSEvent), removeMonitor: monitor];
+            }
+            log::info!("[timeline embed] scroll/magnify monitor removed");
+        }
+    });
 }

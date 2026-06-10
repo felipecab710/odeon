@@ -314,6 +314,13 @@ export function useTimelineWheel({
       gestureEl.addEventListener("gestureend", onGestureEnd as EventListener, { passive: false });
     }
 
+    // Native Metal layer blocks DOM wheel/gesture on lanes — also listen at document level for rulers/minimap.
+    if (nativeActive) {
+      document.addEventListener("gesturestart", onGestureStart as EventListener, { capture: true, passive: false });
+      document.addEventListener("gesturechange", onGestureChange as EventListener, { capture: true, passive: false });
+      document.addEventListener("gestureend", onGestureEnd as EventListener, { capture: true, passive: false });
+    }
+
     return () => {
       registerWheelZoomCancel(null);
       document.removeEventListener("wheel", onWheelCapture, { capture: true });
@@ -326,6 +333,11 @@ export function useTimelineWheel({
         gestureEl.removeEventListener("gesturestart", onGestureStart as EventListener);
         gestureEl.removeEventListener("gesturechange", onGestureChange as EventListener);
         gestureEl.removeEventListener("gestureend", onGestureEnd as EventListener);
+      }
+      if (nativeActive) {
+        document.removeEventListener("gesturestart", onGestureStart as EventListener, { capture: true });
+        document.removeEventListener("gesturechange", onGestureChange as EventListener, { capture: true });
+        document.removeEventListener("gestureend", onGestureEnd as EventListener, { capture: true });
       }
       if (wheelRaf.current !== null) cancelAnimationFrame(wheelRaf.current);
       if (cursorRaf.current !== null) cancelAnimationFrame(cursorRaf.current);

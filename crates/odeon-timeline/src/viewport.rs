@@ -33,6 +33,15 @@ impl Default for TimelineViewport {
     }
 }
 
+pub fn max_px_per_sec_for_viewport(viewport_width: f64) -> f64 {
+    const ABLETON_CLIP_EDIT_MIN_SEC: f64 = 10.0;
+    let w = viewport_width.max(200.0);
+    let clip_edit_cap = w / ABLETON_CLIP_EDIT_MIN_SEC;
+    clip_edit_cap
+        .min(MAX_PX_PER_SEC)
+        .max(MIN_PX_PER_SEC + 0.01)
+}
+
 impl TimelineViewport {
     pub fn frame_start_time_sec(&self) -> f64 {
         self.scroll_left / self.safe_pps()
@@ -70,7 +79,8 @@ impl TimelineViewport {
         if !factor.is_finite() || factor <= 0.0 {
             return None;
         }
-        let new_pps = (self.pixels_per_second * factor).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+        let max_pps = max_px_per_sec_for_viewport(self.viewport_width);
+        let new_pps = (self.pixels_per_second * factor).clamp(MIN_PX_PER_SEC, max_pps);
         if (new_pps - self.pixels_per_second).abs() < 1e-9 {
             return None;
         }

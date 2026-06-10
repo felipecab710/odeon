@@ -34,6 +34,7 @@ import { beginUndoGesture, endUndoGesture } from "../../stores/undoStore";
 import { getZoomAnchorViewportX, subscribeTimelineCursor, getCursorTimeSec } from "../../lib/setTimelineViewport";
 import { SetTimelineContext } from "../../lib/setTimelineContext";
 import { useNativeTimelineEmbed } from "../../hooks/useNativeTimelineEmbed";
+import { listenNativeTimelineViewport } from "../../lib/nativeTimelineEmbed";
 import {
   nativeClipHitTest,
   nativeClipCursor,
@@ -477,6 +478,17 @@ export function TransitionArrangementView({
     && navView === "research"
     && setViewMode === "arrangement"
     && layout.lanes.length > 0;
+
+  // Sync store when native Metal panel handles scroll/pinch (events never reach DOM).
+  useEffect(() => {
+    if (!nativeEmbedLive) return;
+    let unlisten: (() => void) | undefined;
+    void listenNativeTimelineViewport(({ pixels_per_second, scroll_left }) => {
+      useSetTimelineStore.getState().setView(pixels_per_second, scroll_left);
+      setScrollLeft(scroll_left);
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [nativeEmbedLive, setScrollLeft]);
 
   useEffect(() => {
     visualPosRef.current.sync(playheadSec, isPlaying);

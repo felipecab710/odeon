@@ -139,6 +139,11 @@ pub fn embed_wheel(
 }
 
 #[cfg(target_os = "macos")]
+pub fn with_embed_panel<R>(f: impl FnOnce(&mut macos::MacTimelinePanel) -> R) -> Option<R> {
+    EMBED_PANEL.with(|cell| cell.borrow_mut().as_mut().map(f))
+}
+
+#[cfg(target_os = "macos")]
 pub fn embed_tick(state: &SharedTimelineEmbed, app: &tauri::AppHandle) {
     let tick_input = {
         let Ok(mut guard) = state.lock() else {
