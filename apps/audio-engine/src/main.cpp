@@ -424,8 +424,8 @@ static int runSelfTest() {
     session.disposeSession();
     {
         auto r = session.openSession("selftest", tmp.getFullPathName().toStdString());
-        bool ok = jsonOkOf(r) && r.find("\"routeCount\":8") != std::string::npos;
-        check("reopen session with 8 routes", ok, r);
+        bool ok = jsonOkOf(r) && r.find("\"routeCount\":10") != std::string::npos;
+        check("reopen session with 10 routes (8 tracks + buses)", ok, r);
     }
 
     // Missing file handled gracefully (must return ok:false, not crash).

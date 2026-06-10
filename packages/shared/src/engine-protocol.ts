@@ -108,7 +108,12 @@ export interface ExclusiveSoloStackParams {
 }
 export interface SetMasterVolumeParams { volumeDb: number }
 export interface MoveClipParams       { trackId: string; clipId: string; newStartTimeSeconds: number }
-export interface RenderMixParams      { outputFilePath: string }
+export interface RenderMixParams {
+  outputFilePath: string;
+  startSeconds?: number;
+  endSeconds?: number;
+  normalizePeak?: boolean;
+}
 export interface AnalyzeParams        { trackId: string }
 
 export interface CreateDjSessionParams { numDecks: number }

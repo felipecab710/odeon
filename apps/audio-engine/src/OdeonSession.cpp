@@ -1546,11 +1546,26 @@ std::string OdeonSession::renderMix(const std::string& outputFilePath,
     params.blockSizeForAudio = edit_->engine.getDeviceManager().getBlockSize();
     params.useMasterPlugins = true;
     params.shouldNormalise = normalizePeak;
+    params.audioFormat = edit_->engine.getAudioFileFormatManager().getDefaultFormat();
+
+    const auto allTracks = te::getAllTracks(*edit_);
+    for (int i = allTracks.size(); --i >= 0;)
+        params.tracksToDo.setBit(i);
 
     const auto editLength = edit_->getLength();
     const double editEndSec = editLength.inSeconds();
     const double startSec = startSeconds >= 0.0 ? std::max(0.0, startSeconds) : 0.0;
     const double endSec = endSeconds > startSec ? std::min(endSeconds, editEndSec) : editEndSec;
+    const bool rangeExport = startSeconds >= 0.0 || endSeconds > 0.0;
+
+    if (!rangeExport) {
+        const bool ok = te::Renderer::renderToFile(*edit_, outFile, false /*useThread*/);
+        if (!ok || !outFile.existsAsFile())
+            return jsonErr("Render failed for: " + outFile.getFullPathName().toStdString());
+        return jsonOk("{\"outputFilePath\":" + jsonQuote(outFile.getFullPathName().toStdString()) +
+                      ",\"startSeconds\":0,\"endSeconds\":" + std::to_string(editEndSec) + "}");
+    }
+
     if (startSeconds >= 0.0 || endSeconds > 0.0) {
         params.time = tracktion::TimeRange(
             tracktion::TimePosition::fromSeconds(startSec),
