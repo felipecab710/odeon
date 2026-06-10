@@ -91,7 +91,6 @@ import {
 import { resolveCardClipColor } from "../../lib/abletonClipPalette";
 import { ClipColorMenu } from "./ClipColorMenu";
 import { wavecachePath } from "../../lib/waveformEngine/cacheLoader";
-import { VisualPlayPosition } from "../../lib/visualPlayPosition";
 
 const NATIVE_GPU_DEFAULT =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform);
@@ -477,8 +476,6 @@ export function TransitionArrangementView({
   const setCursor = useTransportStore(s => s.setCursor);
   const hoverTimeSec = useSyncExternalStore(subscribeTimelineCursor, getCursorTimeSec, () => null);
   const isPlaying = useTransportStore(s => s.isPlaying);
-  const visualPosRef = useRef(new VisualPlayPosition());
-  const [nativePlayheadSec, setNativePlayheadSec] = useState(0);
   pxPerSecRef.current = pixelsPerSecond;
 
   const layout = useMemo(
@@ -502,22 +499,6 @@ export function TransitionArrangementView({
     }).then(fn => { unlisten = fn; });
     return () => { unlisten?.(); };
   }, [nativeEmbedLive, setScrollLeft]);
-
-  useEffect(() => {
-    visualPosRef.current.sync(playheadSec, isPlaying);
-    if (!isPlaying) setNativePlayheadSec(playheadSec);
-  }, [playheadSec, isPlaying]);
-
-  useEffect(() => {
-    if (!nativeEmbedLive || !isPlaying) return;
-    let raf = 0;
-    const tick = () => {
-      setNativePlayheadSec(visualPosRef.current.interpolate());
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [nativeEmbedLive, isPlaying]);
 
   const gridBpm = layout.lanes[0]?.entry.bpm ?? 128;
 
@@ -938,9 +919,6 @@ export function TransitionArrangementView({
     return { laneIndex, deltaPx: dragDeltaPx };
   }, [drag, dragDeltaPx, layout.lanes]);
 
-  const nativePlayheadForScene =
-    nativeEmbedLive && isPlaying ? nativePlayheadSec : playheadSec;
-
   const nativeContextMenu = useCallback((clientX: number, clientY: number) => {
     const el = nativeLanePanelRef.current;
     if (!el) return;
@@ -1028,7 +1006,7 @@ export function TransitionArrangementView({
     bpm: gridBpm,
     pixelsPerSecond,
     scrollLeft: timelineScrollLeft,
-    playheadSec: nativePlayheadForScene,
+    playheadSec: 0,
     cursorSec: hoverTimeSec,
     selectedLaneIndex,
     laneYs,
@@ -1127,7 +1105,7 @@ export function TransitionArrangementView({
     if (!isPlaying) return;
     const el = scrollRef.current;
     if (!el) return;
-    const headSec = nativeEmbedLive ? nativePlayheadSec : playheadSec;
+    const headSec = playheadSec;
     const playheadPx = headSec * pixelsPerSecond;
     const margin = 80;
     const viewLeft = nativeEmbedLive
@@ -1139,7 +1117,7 @@ export function TransitionArrangementView({
       setScrollLeft(next);
       if (!nativeEmbedLive) el.scrollLeft = next;
     }
-  }, [playheadSec, nativePlayheadSec, isPlaying, pixelsPerSecond, setScrollLeft, nativeEmbedLive, timelineScrollLeft]);
+  }, [playheadSec, isPlaying, pixelsPerSecond, setScrollLeft, nativeEmbedLive, timelineScrollLeft]);
 
   const getMix = useCallback((i: number) => mixes[i] ?? defaultDeckMix(), [mixes]);
 

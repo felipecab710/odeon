@@ -98,11 +98,11 @@ export function computeSetLayout(
     if (!entry) continue;
 
     const fullDur = entry.duration_seconds ?? 240;
+    const bpm = entry.bpm ?? 128;
     const minDur = barDurationSec(bpm) * 4;
     const dur = card.timelineDurationSec != null
       ? Math.min(fullDur, Math.max(minDur, card.timelineDurationSec))
       : fullDur;
-    const bpm = entry.bpm ?? 128;
     const overlapSec = i === 0 ? 0 : barDurationSec(bpm) * overlapBars;
 
     const autoStart = i === 0 ? 0 : Math.max(0, cursor - overlapSec);

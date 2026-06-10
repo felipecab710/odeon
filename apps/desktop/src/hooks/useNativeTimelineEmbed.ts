@@ -11,6 +11,8 @@ import {
   type NativeTimelineScene,
 } from "../lib/nativeTimelineEmbed";
 import { waveformColorsFromClip, contrastingTextOn } from "../lib/clipColorPresets";
+import { VisualPlayPosition } from "../lib/visualPlayPosition";
+import { useTransportStore } from "../stores/transportStore";
 
 function hexToRgba(hex: string): [number, number, number, number] {
   const h = hex.replace("#", "");
@@ -317,8 +319,18 @@ export function useNativeTimelineEmbed({
 
   useEffect(() => {
     if (!active || !embedReady) return;
-    void updateNativeTimelinePlayhead(playheadSec);
-  }, [active, embedReady, playheadSec]);
+    const visualPos = new VisualPlayPosition();
+    let raf = 0;
+    const tick = () => {
+      const { positionSeconds, isPlaying } = useTransportStore.getState();
+      visualPos.sync(positionSeconds, isPlaying);
+      const smooth = isPlaying ? visualPos.interpolate() : positionSeconds;
+      void updateNativeTimelinePlayhead(smooth);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [active, embedReady]);
 
   useEffect(() => {
     if (!active || !embedReady) return;

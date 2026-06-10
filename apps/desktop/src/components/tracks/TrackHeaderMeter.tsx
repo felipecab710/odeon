@@ -1,4 +1,4 @@
-import { memo, type MouseEvent } from "react";
+import { memo, useEffect, useState, type MouseEvent } from "react";
 import { useEngineStore } from "../../stores/engineStore";
 import { useTransportStore } from "../../stores/transportStore";
 
@@ -17,6 +17,28 @@ function barColor(db: number, clipping: boolean): string {
   if (db >= -3) return "#ffcc00";
   if (db >= -12) return "#66ee66";
   return "#33cc33";
+}
+
+interface MeterLevels {
+  leftDb: number;
+  rightDb: number;
+  peakL: number;
+  peakR: number;
+  clipping: boolean;
+}
+
+function readLevels(trackId: string, isPlaying: boolean): MeterLevels {
+  if (!isPlaying) {
+    return { leftDb: IDLE_DB, rightDb: IDLE_DB, peakL: IDLE_DB, peakR: IDLE_DB, clipping: false };
+  }
+  const state = useEngineStore.getState().trackStates[trackId];
+  return {
+    leftDb: state?.leftMeterDb ?? IDLE_DB,
+    rightDb: state?.rightMeterDb ?? IDLE_DB,
+    peakL: state?.peakLeftDb ?? IDLE_DB,
+    peakR: state?.peakRightDb ?? IDLE_DB,
+    clipping: state?.clipping ?? false,
+  };
 }
 
 const MeterBar = memo(function MeterBar({
@@ -43,7 +65,6 @@ const MeterBar = memo(function MeterBar({
         boxSizing: "border-box",
       }}
     >
-      {/* Clip indicator segment at top */}
       <div
         style={{
           position: "absolute",
@@ -55,7 +76,6 @@ const MeterBar = memo(function MeterBar({
           zIndex: 2,
         }}
       />
-      {/* Level fill */}
       <div
         style={{
           position: "absolute",
@@ -68,7 +88,6 @@ const MeterBar = memo(function MeterBar({
           transition: "height 0.04s linear",
         }}
       />
-      {/* Peak hold tick */}
       {peakDb > DB_FLOOR && (
         <div
           style={{
@@ -88,21 +107,42 @@ const MeterBar = memo(function MeterBar({
 
 const stopBubble = (e: MouseEvent) => e.stopPropagation();
 
-/** Compact stereo level meter — isolated from lane hover/click (Pro Tools style). */
+/** Compact stereo level meter — subscribe per track, no parent re-render cascade. */
 export const TrackHeaderMeter = memo(function TrackHeaderMeter({
   trackId,
 }: {
   trackId: string;
 }) {
   const isPlaying = useTransportStore((s) => s.isPlaying);
-  const state = useEngineStore((s) => s.trackStates[trackId]);
+  const [levels, setLevels] = useState<MeterLevels>(() => readLevels(trackId, isPlaying));
 
-  // Live playback signal only — idle when paused/stopped (not cursor hover).
-  const leftDb   = isPlaying ? (state?.leftMeterDb  ?? IDLE_DB) : IDLE_DB;
-  const rightDb  = isPlaying ? (state?.rightMeterDb ?? IDLE_DB) : IDLE_DB;
-  const peakL    = isPlaying ? (state?.peakLeftDb   ?? IDLE_DB) : IDLE_DB;
-  const peakR    = isPlaying ? (state?.peakRightDb  ?? IDLE_DB) : IDLE_DB;
-  const clipping = isPlaying ? (state?.clipping     ?? false) : false;
+  useEffect(() => {
+    setLevels(readLevels(trackId, isPlaying));
+  }, [trackId, isPlaying]);
+
+  useEffect(() => {
+    const unsub = useEngineStore.subscribe((state) => {
+      const t = state.trackStates[trackId];
+      if (!t) return;
+      const next: MeterLevels = isPlaying
+        ? {
+            leftDb: t.leftMeterDb,
+            rightDb: t.rightMeterDb,
+            peakL: t.peakLeftDb,
+            peakR: t.peakRightDb,
+            clipping: t.clipping,
+          }
+        : { leftDb: IDLE_DB, rightDb: IDLE_DB, peakL: IDLE_DB, peakR: IDLE_DB, clipping: false };
+      setLevels(prev => (
+        prev.leftDb === next.leftDb &&
+        prev.rightDb === next.rightDb &&
+        prev.peakL === next.peakL &&
+        prev.peakR === next.peakR &&
+        prev.clipping === next.clipping
+      ) ? prev : next);
+    });
+    return unsub;
+  }, [trackId, isPlaying]);
 
   return (
     <div
@@ -120,14 +160,14 @@ export const TrackHeaderMeter = memo(function TrackHeaderMeter({
         zIndex: 20,
         isolation: "isolate",
       }}
-      title={`L ${leftDb.toFixed(1)} dB · R ${rightDb.toFixed(1)} dB`}
+      title={`L ${levels.leftDb.toFixed(1)} dB · R ${levels.rightDb.toFixed(1)} dB`}
       onMouseDown={stopBubble}
       onMouseUp={stopBubble}
       onClick={stopBubble}
       onMouseMove={stopBubble}
     >
-      <MeterBar db={leftDb}  peakDb={peakL} clipping={clipping} />
-      <MeterBar db={rightDb} peakDb={peakR} clipping={clipping} />
+      <MeterBar db={levels.leftDb}  peakDb={levels.peakL} clipping={levels.clipping} />
+      <MeterBar db={levels.rightDb} peakDb={levels.peakR} clipping={levels.clipping} />
     </div>
   );
 });

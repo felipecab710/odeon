@@ -301,6 +301,8 @@ export interface SimulationInput {
   nowMs?: number;
   /** Per-deck playback rate from sync coordinator (1 = nominal pitch). */
   deckRates?: Record<number, number>;
+  /** Precomputed layout — avoids computeSetLayout every RAF tick. */
+  layout?: ReturnType<typeof computeSetLayout>;
 }
 
 export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
@@ -311,8 +313,9 @@ export function computeBoothSnapshot(input: SimulationInput): BoothSnapshot {
     laneMixes,
     nowMs = performance.now(),
     deckRates,
+    layout: layoutIn,
   } = input;
-  const layout = computeSetLayout(sorted, entryMap);
+  const layout = layoutIn ?? computeSetLayout(sorted, entryMap);
   const { lanes, transitions } = layout;
 
   const activeTrans = findActiveTransition(transitions, playheadSec);
@@ -509,9 +512,11 @@ export interface SetEnginePushContext {
 
 /** Volume for set-preview engine — clips gate playback; don't silence by lane-active UI. */
 const lastLanePushKey = new Map<string, string>();
+let lastCrossfaderPush = -1;
 
 export function clearSetEngineMixPushCache(): void {
   lastLanePushKey.clear();
+  lastCrossfaderPush = -1;
 }
 
 function lanePushFingerprint(mix: DeckMix): string {
@@ -546,7 +551,11 @@ function pushSetLaneMixes(
   ctx: SetEnginePushContext,
   crossfaderPos: number,
 ): void {
-  void engineClient.setCrossfader(crossfaderPos);
+  const cfRounded = Math.round(crossfaderPos * 1000) / 1000;
+  if (lastCrossfaderPush !== cfRounded) {
+    lastCrossfaderPush = cfRounded;
+    void engineClient.setCrossfader(crossfaderPos);
+  }
   for (const lane of ctx.lanes) {
     let mix = { ...(ctx.mixes[lane.index] ?? defaultDeckMix()) };
     let inTransition = false;
@@ -588,8 +597,10 @@ function pushSetLaneMixes(
     };
 
     const entryId = lane.card.entryId;
-    const fp = lanePushFingerprint(pushMix);
-    if (!inTransition && lastLanePushKey.get(entryId) === fp) {
+    const fp = inTransition
+      ? `${lanePushFingerprint(pushMix)}|t:${ctx.playheadSec.toFixed(2)}`
+      : lanePushFingerprint(pushMix);
+    if (lastLanePushKey.get(entryId) === fp) {
       continue;
     }
     lastLanePushKey.set(entryId, fp);

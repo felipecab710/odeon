@@ -1,6 +1,6 @@
 /**
- * Continuously push set lane mixes + automation to the engine during arrangement preview.
- * Complements one-shot pushes from strip toggles and play-start priming.
+ * One-shot set lane mix push when mixes/lanes change while paused.
+ * During playback, useBoothSimulation owns the throttled RAF engine push loop.
  */
 import { useEffect } from "react";
 import type { LaneLayout, TransitionRegion } from "../components/setbuilder/setTimelineLayout";
@@ -21,24 +21,7 @@ export function useSetMixEnginePush(
   const boothMode = useBoothStore(s => s.mode);
 
   useEffect(() => {
-    if (!enabled || !engineReady || lanes.length === 0) return;
+    if (!enabled || !engineReady || isPlaying || lanes.length === 0) return;
     pushSetEngineMixes(lanes, transitions, mixes, playheadSec, boothMode);
-  }, [enabled, engineReady, lanes, transitions, mixes, playheadSec, boothMode]);
-
-  useEffect(() => {
-    if (!enabled || !engineReady || !isPlaying || lanes.length === 0) return;
-    let raf = 0;
-    const tick = () => {
-      pushSetEngineMixes(
-        lanes,
-        transitions,
-        useStudioDeckStore.getState().mixes,
-        useTransportStore.getState().positionSeconds,
-        useBoothStore.getState().mode,
-      );
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [enabled, engineReady, isPlaying, lanes, transitions]);
+  }, [enabled, engineReady, isPlaying, lanes, transitions, mixes, playheadSec, boothMode]);
 }

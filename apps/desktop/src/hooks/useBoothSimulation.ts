@@ -18,6 +18,7 @@ import { apiClient, type TransitionPlanData } from "../lib/apiClient";
 import { loadWaveformCache } from "../lib/waveformEngine/cacheLoader";
 import type { WaveformCache } from "../lib/waveformEngine/types";
 import { resetMeterStates } from "../lib/boothMeterSim";
+import { shouldPushEngineMix, markEngineMixPushed } from "../lib/enginePushThrottle";
 import { useStudioDeckStore } from "../stores/studioDeckStore";
 import { useStudioAutomationStore } from "../stores/studioAutomationStore";
 import { useStudioLaneStore } from "../stores/studioLaneStore";
@@ -47,6 +48,7 @@ export function useBoothSimulation(
   const rafRef = useRef(0);
   const prevSnapRef = useRef<ReturnType<typeof computeBoothSnapshot> | null>(null);
   const prevSnapKeyRef = useRef("");
+  const prevEngineSnapKeyRef = useRef("");
   const visualPosRef = useRef(new VisualPlayPosition());
   const waveCachesRef = useRef<Record<string, WaveformCache | null>>({});
   const entryMarkersRef = useRef<Record<string, CatalogMarker[]>>({});
@@ -120,6 +122,7 @@ export function useBoothSimulation(
         entryMarkers: entryMarkersRef.current,
         laneMixes: useStudioDeckStore.getState().mixes,
         nowMs: performance.now(),
+        layout,
       });
 
       const snapKey = [
@@ -134,22 +137,29 @@ export function useBoothSimulation(
         useBoothStore.getState().setSnapshot(snapshot);
       }
       if (driveEngine && canDriveEngine) {
-        // Engine uses transport playhead; booth visuals use smoothed interpolation.
         const enginePlayhead = usePreview ? previewPlayheadSec! : positionSeconds;
-        pushBoothToEngine(
-          snapshot,
-          engineRoute,
-          engineRoute === "set"
-            ? {
-                lanes: layout.lanes,
-                mixes: useStudioDeckStore.getState().mixes,
-                playheadSec: enginePlayhead,
-                isPlaying,
-                mode: booth.mode,
-                activeTrans: findActiveTransition(layout.transitions, enginePlayhead),
-              }
-            : undefined,
-        );
+        const engineSnapKey = `${enginePlayhead.toFixed(2)}|${snapKey}`;
+        const needsEnginePush = isPlaying
+          ? shouldPushEngineMix(true)
+          : engineSnapKey !== prevEngineSnapKeyRef.current;
+        if (needsEnginePush) {
+          prevEngineSnapKeyRef.current = engineSnapKey;
+          if (isPlaying) markEngineMixPushed();
+          pushBoothToEngine(
+            snapshot,
+            engineRoute,
+            engineRoute === "set"
+              ? {
+                  lanes: layout.lanes,
+                  mixes: useStudioDeckStore.getState().mixes,
+                  playheadSec: enginePlayhead,
+                  isPlaying,
+                  mode: booth.mode,
+                  activeTrans: findActiveTransition(layout.transitions, enginePlayhead),
+                }
+              : undefined,
+          );
+        }
       }
       prevSnapRef.current = snapshot;
       rafRef.current = requestAnimationFrame(tick);
@@ -157,7 +167,7 @@ export function useBoothSimulation(
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [enabled, sorted, entryMap, transitionPlans, canDriveEngine, driveEngine, engineRoute, previewPlayheadSec]);
+  }, [enabled, sorted, entryMap, transitionPlans, canDriveEngine, driveEngine, engineRoute, previewPlayheadSec, layout]);
 
   return { syncing, syncError };
 }

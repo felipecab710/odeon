@@ -52,11 +52,18 @@ interface TransportState {
 }
 
 export const useTransportStore = create<TransportState>((set, get) => {
-  // Subscribe to native engine position + playing state
+  // Subscribe to native engine position + playing state (throttled while playing).
   engineClient.onTransportState((data) => {
-    set({
-      positionSeconds: data.positionSeconds,
-      isPlaying: data.isPlaying,
+    set((s) => {
+      const playing = data.isPlaying;
+      const posDelta = Math.abs(data.positionSeconds - s.positionSeconds);
+      if (playing && s.isPlaying === playing && posDelta < 0.008) {
+        return s;
+      }
+      return {
+        positionSeconds: data.positionSeconds,
+        isPlaying: playing,
+      };
     });
   });
 
