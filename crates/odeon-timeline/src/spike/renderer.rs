@@ -442,12 +442,32 @@ impl GpuRenderer {
                 let inner_bottom = lane_bottom - pad;
                 let header_bottom = (inner_top + CLIP_HEADER_H).min(inner_bottom);
                 let body_top = header_bottom;
-                let header_color = shade_color(clip.color, 0.88);
-                let body_color = [clip.color[0], clip.color[1], clip.color[2], 1.0];
+                let base = [clip.color[0], clip.color[1], clip.color[2], 1.0];
                 let wave_color = clip.wave_color;
 
-                push_rect_tris(&mut tris, x0, inner_top, x1, header_bottom, header_color, w, h);
-                push_rect_tris(&mut tris, x0, body_top, x1, inner_bottom, body_color, w, h);
+                // Ableton-style vertical clip gradient (matches DOM arrangementClipBackground).
+                push_arrangement_clip_gradient(
+                    &mut tris,
+                    x0,
+                    inner_top,
+                    x1,
+                    inner_bottom,
+                    base,
+                    w,
+                    h,
+                );
+                if header_bottom > inner_top + 0.5 {
+                    push_header_shimmer(
+                        &mut tris,
+                        x0,
+                        inner_top,
+                        x1,
+                        header_bottom,
+                        base,
+                        w,
+                        h,
+                    );
+                }
 
                 let border = [0.0, 0.0, 0.0, 0.45];
                 push_hline(&mut lines, x0, x1, inner_top, w, h, border);
@@ -784,6 +804,72 @@ fn shade_color(color: [f32; 4], factor: f32) -> [f32; 4] {
         (color[2] * factor).min(1.0),
         color[3],
     ]
+}
+
+/// JS shadeHex — multiply RGB by (1 + amount).
+fn shade_color_amount(color: [f32; 4], amount: f32) -> [f32; 4] {
+    shade_color(color, 1.0 + amount)
+}
+
+fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
+}
+
+fn sample_clip_gradient(base: [f32; 4], t: f32) -> [f32; 4] {
+    let top = shade_color_amount(base, 0.06);
+    let bot = shade_color_amount(base, -0.1);
+    if t <= 0.55 {
+        lerp_color(top, base, t / 0.55)
+    } else {
+        lerp_color(base, bot, (t - 0.55) / 0.45)
+    }
+}
+
+fn push_arrangement_clip_gradient(
+    tris: &mut Vec<Vertex>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    base: [f32; 4],
+    w: f32,
+    h: f32,
+) {
+    const BANDS: usize = 10;
+    let band_h = (y1 - y0) / BANDS as f32;
+    for band in 0..BANDS {
+        let t = (band as f32 + 0.5) / BANDS as f32;
+        let cy0 = y0 + band as f32 * band_h;
+        let cy1 = cy0 + band_h;
+        push_rect_tris(tris, x0, cy0, x1, cy1, sample_clip_gradient(base, t), w, h);
+    }
+}
+
+fn push_header_shimmer(
+    tris: &mut Vec<Vertex>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    base: [f32; 4],
+    w: f32,
+    h: f32,
+) {
+    const BANDS: usize = 4;
+    let top = shade_color_amount(base, -0.08);
+    let clip_top = shade_color_amount(base, 0.06);
+    let band_h = (y1 - y0) / BANDS as f32;
+    for band in 0..BANDS {
+        let t = band as f32 / (BANDS - 1).max(1) as f32;
+        let cy0 = y0 + band as f32 * band_h;
+        let cy1 = cy0 + band_h;
+        push_rect_tris(tris, x0, cy0, x1, cy1, lerp_color(top, clip_top, t), w, h);
+    }
 }
 
 fn push_time_ruler_ticks(out: &mut Vec<Vertex>, vp: &TimelineViewport, w: f32, h: f32) {

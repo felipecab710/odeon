@@ -172,3 +172,39 @@ export function computeLaneLayout(laneCount: number): {
   }
   return { ys, heights, totalH: y };
 }
+
+/** Wave-only stack for native GPU embed — automation stays in DOM below Metal. */
+export function computeWaveAutoStacks(laneCount: number): {
+  waveYs: number[];
+  waveHeights: number[];
+  waveTotalH: number;
+  autoStackYs: number[];
+  autoHeights: number[];
+  autoTotalH: number;
+} {
+  const store = useStudioLaneStore.getState();
+  const waveYs: number[] = [];
+  const waveHeights: number[] = [];
+  const autoStackYs: number[] = [];
+  const autoHeights: number[] = [];
+  let autoY = 0;
+  let waveY = 0;
+  for (let i = 0; i < laneCount; i++) {
+    waveYs.push(waveY);
+    const wh = HEADER_H + store.getWaveHeight(i);
+    waveHeights.push(wh);
+    waveY += wh;
+
+    const ah = store.getAutomationPanelHeight(i);
+    autoHeights.push(ah);
+    if (ah > 0) {
+      autoStackYs.push(autoY);
+      autoY += ah;
+    } else {
+      autoStackYs.push(0);
+    }
+  }
+  const waveTotalH = laneCount > 0 ? waveY : 0;
+  const autoTotalH = autoY;
+  return { waveYs, waveHeights, waveTotalH, autoStackYs, autoHeights, autoTotalH };
+}

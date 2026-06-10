@@ -69,6 +69,7 @@ import {
 import {
   useStudioLaneStore,
   computeLaneLayout,
+  computeWaveAutoStacks,
   MIN_LANE_TOTAL_H,
   MAX_LANE_TOTAL_H,
   MIN_WAVE_H,
@@ -282,6 +283,106 @@ function TrackBlock({ lane, laneIndex, laneY, laneHeight, automationHeight, wave
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** Automation lanes rendered in DOM below the native GPU wave embed (outside Metal). */
+function NativeAutomationStack({
+  lanes,
+  autoStackYs,
+  autoHeights,
+  autoTotalH,
+  automationExpanded,
+  colors,
+  timelineScrollLeft,
+  playheadSec,
+  getMix,
+  onMixChange,
+  onSeekAtClientX,
+  totalWidthPx,
+}: {
+  lanes: LaneLayout[];
+  autoStackYs: number[];
+  autoHeights: number[];
+  autoTotalH: number;
+  automationExpanded: boolean[];
+  colors: string[];
+  timelineScrollLeft: number;
+  playheadSec: number;
+  getMix: (i: number) => DeckMix;
+  onMixChange: (i: number, mix: DeckMix) => void;
+  onSeekAtClientX: (clientX: number) => void;
+  totalWidthPx: number;
+}) {
+  if (autoTotalH <= 0) return null;
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        height: autoTotalH,
+        overflow: "hidden",
+        position: "relative",
+        background: STUDIO_BG,
+        zIndex: 3,
+        borderTop: `1px solid ${STUDIO_GRID}`,
+      }}
+    >
+      <div
+        style={{ position: "absolute", inset: 0, overflow: "hidden" }}
+        onClick={e => {
+          if ((e.target as HTMLElement).closest("[data-auto-lane]")) return;
+          onSeekAtClientX(e.clientX);
+        }}
+      >
+        <div
+          style={{
+            transform: `translateX(-${timelineScrollLeft}px)`,
+            width: totalWidthPx + 200,
+            height: autoTotalH,
+            position: "relative",
+          }}
+        >
+          {lanes.map((lane, i) => {
+            const ah = autoHeights[i] ?? 0;
+            if (!automationExpanded[i] || ah <= 0) return null;
+            const mix = getMix(i);
+            const color = colors[i] ?? resolveCardClipColor(lane.card.clipColor, i);
+            const w = Math.max(lane.widthPx, 24);
+            return (
+              <div
+                key={`native-auto-${lane.card.id}`}
+                data-auto-lane
+                style={{
+                  position: "absolute",
+                  left: lane.leftPx,
+                  top: autoStackYs[i],
+                  width: w,
+                  height: ah,
+                  pointerEvents: "auto",
+                }}
+                onMouseDown={e => {
+                  e.stopPropagation();
+                  onSeekAtClientX(e.clientX);
+                }}
+              >
+                <TrackAutomationLane
+                  laneIndex={i}
+                  color={color}
+                  width={w}
+                  panelHeight={ah}
+                  startSec={lane.startSec}
+                  durationSec={lane.durationSec}
+                  playheadSec={playheadSec}
+                  showAutomation={mix.showAutomation}
+                  mix={mix}
+                  onMixChange={m => onMixChange(i, m)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -667,6 +768,15 @@ export function TransitionArrangementView({
   const laneCount = layout.lanes.length;
   const extendedLaneH = Math.max(timelineH, laneViewportH);
 
+  const waveAutoLayout = useMemo(
+    () => computeWaveAutoStacks(laneCount),
+    [laneCount, automationTracks, expandedFlags, laneSplits],
+  );
+
+  const embedLaneYs = nativeEmbedLive ? waveAutoLayout.waveYs : laneYs;
+  const embedLaneHeights = nativeEmbedLive ? waveAutoLayout.waveHeights : laneHeights;
+  const embedAreaH = nativeEmbedLive ? waveAutoLayout.waveTotalH : extendedLaneH;
+
   const selectLaneCard = useCallback((laneIndex: number) => {
     const lane = layout.lanes[laneIndex];
     if (!lane) return;
@@ -715,8 +825,8 @@ export function TransitionArrangementView({
       clientY,
       el,
       layout.lanes,
-      laneYs,
-      laneHeights,
+      embedLaneYs,
+      embedLaneHeights,
       timelineScrollLeft,
       pixelsPerSecond,
     );
@@ -735,12 +845,12 @@ export function TransitionArrangementView({
       });
       return;
     }
-    const laneIndex = nativeLaneIndexFromClientY(clientY, el, laneYs, laneHeights);
+    const laneIndex = nativeLaneIndexFromClientY(clientY, el, embedLaneYs, embedLaneHeights);
     if (laneIndex != null) selectLaneCard(laneIndex);
   }, [
     layout.lanes,
-    laneYs,
-    laneHeights,
+    embedLaneYs,
+    embedLaneHeights,
     timelineScrollLeft,
     pixelsPerSecond,
     timelineSelectedCardId,
@@ -765,8 +875,8 @@ export function TransitionArrangementView({
       clientY,
       el,
       layout.lanes,
-      laneYs,
-      laneHeights,
+      embedLaneYs,
+      embedLaneHeights,
       timelineScrollLeft,
       pixelsPerSecond,
     );
@@ -775,8 +885,8 @@ export function TransitionArrangementView({
     setClipColorMenu({ x: clientX, y: clientY, cardId: hit.lane.card.id });
   }, [
     layout.lanes,
-    laneYs,
-    laneHeights,
+    embedLaneYs,
+    embedLaneHeights,
     timelineScrollLeft,
     pixelsPerSecond,
     selectTimelineCard,
@@ -790,13 +900,13 @@ export function TransitionArrangementView({
       clientY,
       el,
       layout.lanes,
-      laneYs,
-      laneHeights,
+      embedLaneYs,
+      embedLaneHeights,
       timelineScrollLeft,
       pixelsPerSecond,
     );
     el.style.cursor = cursor ?? "default";
-  }, [layout.lanes, laneYs, laneHeights, timelineScrollLeft, pixelsPerSecond, drag]);
+  }, [layout.lanes, embedLaneYs, embedLaneHeights, timelineScrollLeft, pixelsPerSecond, drag]);
 
   useNativeTimelineEmbed({
     active: nativeEmbedLive,
@@ -808,8 +918,8 @@ export function TransitionArrangementView({
     playheadSec: nativePlayheadForScene,
     cursorSec: hoverTimeSec,
     selectedLaneIndex,
-    laneYs,
-    laneHeights,
+    laneYs: embedLaneYs,
+    laneHeights: embedLaneHeights,
     lanes: nativeLaneInputs,
     dragPreview: nativeDragPreview,
     locators,
@@ -1434,12 +1544,14 @@ export function TransitionArrangementView({
             </div>
           </div>
 
-          {/* Lane workspace — native Metal panel aligns to this rect only */}
+          {/* Lane workspace — wave bands in Metal; automation stays in DOM below */}
+          <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column" }}>
           <div
             ref={nativeEmbedHostRef}
             style={{
-              flex: 1,
-              minHeight: 0,
+              ...(nativeEmbedLive
+                ? { flex: "0 0 auto", height: waveAutoLayout.waveTotalH }
+                : { flex: 1, minHeight: 0 }),
               minWidth: 0,
               position: "relative",
               pointerEvents: nativeEmbedLive ? "auto" : "none",
@@ -1468,14 +1580,14 @@ export function TransitionArrangementView({
             ref={zoomCameraRef}
             style={{
               width: layout.totalWidthPx + 200,
-              minHeight: extendedLaneH,
+              minHeight: embedAreaH,
               position: "relative",
             }}
           >
             {/* Arrangement workspace — lanes, clips, grid */}
-            <div style={{ position: "relative", height: extendedLaneH, flexShrink: 0 }}>
-              {laneYs.map((y, i) => {
-                const rowH = i < laneCount - 1 ? laneHeights[i] : extendedLaneH - y;
+            <div style={{ position: "relative", height: embedAreaH, flexShrink: 0 }}>
+              {embedLaneYs.map((y, i) => {
+                const rowH = i < laneCount - 1 ? embedLaneHeights[i] : embedAreaH - y;
                 return (
                   <div
                     key={`lane-bg-${i}`}
@@ -1491,14 +1603,14 @@ export function TransitionArrangementView({
                   />
                 );
               })}
-              {laneYs.map((y, i) => (
+              {embedLaneYs.map((y, i) => (
                 <div
                   key={`lane-div-${i}`}
                   style={{
                     position: "absolute",
                     left: 0,
                     right: 0,
-                    top: y + laneHeights[i] - 1,
+                    top: y + embedLaneHeights[i] - 1,
                     height: 1,
                     background: STUDIO_GRID,
                     pointerEvents: "none",
@@ -1507,15 +1619,16 @@ export function TransitionArrangementView({
               ))}
               <LaneSelectOverlays
                 lanes={layout.lanes}
-                laneYs={laneYs}
-                laneHeights={laneHeights}
+                laneYs={embedLaneYs}
+                laneHeights={embedLaneHeights}
                 laneCount={laneCount}
-                extendedLaneH={extendedLaneH}
+                extendedLaneH={embedAreaH}
                 colors={laneClipColors}
                 selectedCardId={timelineSelectedCardId}
                 onSelectLane={selectLaneCard}
                 onSeekAtClientX={seekFromClientX}
               />
+              {!nativeEmbedLive && (
               <LaneResizeOverlays
                 laneYs={laneYs}
                 laneHeights={laneHeights}
@@ -1523,9 +1636,10 @@ export function TransitionArrangementView({
                 extendedLaneH={extendedLaneH}
                 onResizeStart={startLaneResize}
               />
+              )}
 
-            {/* Transition regions (blue boxes) */}
-            {layout.transitions.map(t => {
+            {/* Transition regions (blue boxes) — DOM mode only */}
+            {!nativeEmbedLive && layout.transitions.map(t => {
               const edge = flowEdges.find(
                 e => e.from_id === t.fromEntryId && e.to_id === t.toEntryId,
               );
@@ -1571,13 +1685,13 @@ export function TransitionArrangementView({
               top: 0,
               left: 0,
               right: 0,
-              height: extendedLaneH,
+              height: embedAreaH,
               pointerEvents: "none",
               zIndex: 4,
             }}>
               <SetBeatTimelineGrid
                 context={timelineContext}
-                height={extendedLaneH}
+                height={embedAreaH}
               />
             </div>
 
@@ -1630,7 +1744,7 @@ export function TransitionArrangementView({
               <SetTimelineEditCursor
                 timeSec={hoverTimeSec}
                 pixelsPerSecond={pixelsPerSecond}
-                height={extendedLaneH}
+                height={embedAreaH}
               />
             )}
 
@@ -1657,6 +1771,24 @@ export function TransitionArrangementView({
             )}
           </div>
         </div>
+          </div>
+
+          {nativeEmbedLive && (
+            <NativeAutomationStack
+              lanes={layout.lanes}
+              autoStackYs={waveAutoLayout.autoStackYs}
+              autoHeights={waveAutoLayout.autoHeights}
+              autoTotalH={waveAutoLayout.autoTotalH}
+              automationExpanded={layout.lanes.map((_, i) => automationTracks[i]?.expanded ?? false)}
+              colors={laneClipColors}
+              timelineScrollLeft={timelineScrollLeft}
+              playheadSec={playheadSec}
+              getMix={getMix}
+              onMixChange={handleMixChange}
+              onSeekAtClientX={seekFromClientX}
+              totalWidthPx={layout.totalWidthPx}
+            />
+          )}
           </div>
 
           <div style={{
