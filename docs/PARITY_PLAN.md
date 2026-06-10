@@ -14,7 +14,7 @@ See **`docs/DAW_COMPARISON.md`** for full Ableton / Audacity / Pro Tools matrix 
 | DJ Booth / decks | 55 | True deck players; PFL/solo separated |
 | Automation persistence | 55 | localStorage per set; not engine curves |
 | Routing / busses | 35 | Headphones/Booth buses + AuxSend/AuxReturn; `setRouteAuxSend` RPC |
-| Export / bounce | 40 | Export Audio UI → TE Renderer |
+| Export / bounce | 55 | Export Audio + selection range + Audacity labels |
 | Full DAW | 18 | Metronome + loop selection + clip trim |
 
 ## Shipped recently
@@ -23,7 +23,7 @@ See **`docs/DAW_COMPARISON.md`** for full Ableton / Audacity / Pro Tools matrix 
 - `setTrackChannelMix` for set lanes (EQ/filter/cf/PFL)
 - Automation persistence + GPU curve rendering
 - GPU transition regions + edit cursor
-- Strip → engine mix push on S/C/M + continuous RAF push (`useSetMixEnginePush`)
+- Strip → engine mix push on S/C/M; continuous RAF push via `useBoothSimulation` (not duplicate hooks)
 - `createBus` + Headphones/Booth aux infrastructure
 - True PFL: AuxSend to bus 0; solo independent of cue
 - Native GPU fader drag + live fader cap position
