@@ -12,7 +12,7 @@ Odeon ships as a **macOS desktop app** (.dmg). The release bundle includes:
 
 1. Download **Odeon_*_aarch64.dmg** from [GitHub Releases](https://github.com/felipecab710/odeon/releases) (Apple Silicon).
 2. Open the DMG and drag **Odeon** to **Applications**.
-3. Eject the disk image.
+3. **Eject the disk image** (right-click the volume → Eject). Do not run Odeon from inside the DMG.
 4. **Clear macOS quarantine** (required for unsigned builds):
 
    ```bash
@@ -21,7 +21,7 @@ Odeon ships as a **macOS desktop app** (.dmg). The release bundle includes:
 
 5. Launch Odeon from Applications. Wait for *"Starting Odeon services…"* (first launch may take ~30s).
 
-> **"Odeon is damaged and can't be opened"** — This is Gatekeeper blocking an unsigned download, not a corrupt file. Run the `xattr` command above, then open again. Do **not** eject and give up; the app is fine.
+> **"Odeon is damaged and can't be opened"** — Usually means you double-clicked Odeon **inside the DMG** instead of from Applications. Eject the disk image, run the `xattr` command below, then open **Applications → Odeon**.
 
 Alternative if macOS still blocks launch:
 - Right-click Odeon → **Open** → confirm, or
