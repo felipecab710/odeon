@@ -34,7 +34,7 @@ else
 fi
 
 echo ""
-echo "▶ [4/5] Tauri release build (.app)..."
+echo "▶ [4/6] Tauri release build (.app)..."
 cd "$REPO_ROOT/apps/desktop"
 pnpm exec tsc --noEmit
 pnpm tauri build --config src-tauri/tauri.release.conf.json
@@ -45,10 +45,18 @@ VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
 DMG_PATH="$DMG_DIR/Odeon_${VERSION}_aarch64.dmg"
 
 echo ""
-echo "▶ [5/5] Create DMG (hdiutil — Tauri bundle_dmg fails on macOS 26+)..."
+echo "▶ [5/6] Ad-hoc codesign .app..."
+bash "$SCRIPT_DIR/sign-macos-app.sh" "$APP_PATH"
+
+echo ""
+echo "▶ [6/6] Create DMG (hdiutil — Tauri bundle_dmg fails on macOS 26+)..."
 mkdir -p "$DMG_DIR"
 rm -f "$DMG_PATH"
-hdiutil create -volname "Odeon" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+cp -R "$APP_PATH" "$STAGE_DIR/"
+cp "$SCRIPT_DIR/DMG_README.txt" "$STAGE_DIR/"
+hdiutil create -volname "Odeon" -srcfolder "$STAGE_DIR" -ov -format UDZO "$DMG_PATH"
 
 echo ""
 echo "═══════════════════════════════════════════"

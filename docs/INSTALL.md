@@ -10,12 +10,22 @@ Odeon ships as a **macOS desktop app** (.dmg). The release bundle includes:
 
 ## Download (release build)
 
-1. Download **Odeon_0.1.0_aarch64.dmg** from [GitHub Releases](https://github.com/felipecab710/odeon/releases) (Apple Silicon).
-2. Open the DMG and drag **Odeon** to Applications.
-3. First launch: macOS may show *"Odeon can't be opened"* (unsigned build).
-   - Open **System Settings → Privacy & Security → Open Anyway**, or
-   - Right-click Odeon → **Open** → confirm.
-4. Launch Odeon. Wait for *"Starting Odeon services…"* (first launch may take ~30s while the API warms up).
+1. Download **Odeon_*_aarch64.dmg** from [GitHub Releases](https://github.com/felipecab710/odeon/releases) (Apple Silicon).
+2. Open the DMG and drag **Odeon** to **Applications**.
+3. Eject the disk image.
+4. **Clear macOS quarantine** (required for unsigned builds):
+
+   ```bash
+   xattr -cr /Applications/Odeon.app
+   ```
+
+5. Launch Odeon from Applications. Wait for *"Starting Odeon services…"* (first launch may take ~30s).
+
+> **"Odeon is damaged and can't be opened"** — This is Gatekeeper blocking an unsigned download, not a corrupt file. Run the `xattr` command above, then open again. Do **not** eject and give up; the app is fine.
+
+Alternative if macOS still blocks launch:
+- Right-click Odeon → **Open** → confirm, or
+- **System Settings → Privacy & Security → Open Anyway**
 
 ---
 
@@ -60,6 +70,16 @@ Output: `apps/desktop/src-tauri/target/release/bundle/dmg/Odeon_0.1.0_aarch64.dm
 ---
 
 ## Troubleshooting
+
+### "Odeon is damaged and can't be opened"
+
+macOS quarantine on unsigned downloads. After copying to Applications:
+
+```bash
+xattr -cr /Applications/Odeon.app
+```
+
+Then launch normally. You only need to do this once per install.
 
 ### Stuck on "Starting Odeon services…"
 
